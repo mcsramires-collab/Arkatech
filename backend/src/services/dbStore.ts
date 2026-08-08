@@ -95,7 +95,7 @@ class DBStore {
         id: uuidv4(),
         codigo: 'SUC-2000',
         tipo: 'sucesso',
-        categoria: 'SYSTEM',
+        categoria: 'SISTEMA',
         texto_padrao: 'Averbação realizada com sucesso. Número: [NUMERO_AVERBACAO], Timestamp: [TIMESTAMP].',
         texto_customizado: 'Averbação realizada com sucesso. Número: [NUMERO_AVERBACAO], Timestamp: [TIMESTAMP].',
         placeholders: ['[NUMERO_AVERBACAO]', '[TIMESTAMP]'],
@@ -171,7 +171,7 @@ class DBStore {
         id: uuidv4(),
         codigo: 'ERR-4006',
         tipo: 'erro',
-        categoria: 'SYSTEM',
+        categoria: 'SISTEMA',
         texto_padrao:
           'ERRO 4006: Variável informada via link de recuperação é inválida ou expirou o tempo limite de preenchimento.',
         texto_customizado:
