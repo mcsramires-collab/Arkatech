@@ -1,7 +1,7 @@
 export type TenantEnvironment = 'teste' | 'producao';
 export type TenantStatus = 'ATIVO' | 'INATIVO';
 export type RamoApolice = 'RCTRC' | 'RCDC' | 'RCV';
-export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE';
+export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE' | 'MDFE';
 
 export interface Tenant {
   id: string;
@@ -48,7 +48,19 @@ export interface PolicyRule {
   tag_path: string;
   nome_variavel: string;
   obrigatoria: boolean;
+  exemplo_preenchimento?: string;
   instrucao_recuperacao?: string;
+}
+
+export interface DocumentRule {
+  id: string;
+  tipo_documento: TipoDocumento;
+  tag_path: string;
+  nome_variavel: string;
+  obrigatoria: boolean;
+  origem: 'SEFAZ_PADRAO' | 'CUSTOM';
+  observacao?: string;
+  created_at: string;
 }
 
 export interface ResponseTemplate {

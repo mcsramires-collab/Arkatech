@@ -77,6 +77,15 @@ export class ApiClient {
     });
   }
 
+  // Admin - Seguradoras & Corretoras
+  static getInsurers() {
+    return this.request('/api/v1/admin/insurers');
+  }
+
+  static getBrokers() {
+    return this.request('/api/v1/admin/brokers');
+  }
+
   // Admin - Apólices & Regras
   static getPolicies() {
     return this.request('/api/v1/admin/policies');
@@ -107,8 +116,47 @@ export class ApiClient {
     });
   }
 
+  static updatePolicyRule(id: string, updates: any) {
+    return this.request(`/api/v1/admin/policy-rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    });
+  }
+
   static deletePolicyRule(id: string) {
     return this.request(`/api/v1/admin/policy-rules/${id}`, {
+      method: 'DELETE'
+    });
+  }
+
+  static deletePolicy(id: string) {
+    return this.request(`/api/v1/admin/policies/${id}`, {
+      method: 'DELETE'
+    });
+  }
+
+  // Admin - Regras de Obrigatoriedade por Tipo de Documento (padrão Sefaz)
+  static getDocumentRules(tipoDocumento?: string) {
+    const qs = tipoDocumento ? `?tipo_documento=${tipoDocumento}` : '';
+    return this.request(`/api/v1/admin/document-rules${qs}`);
+  }
+
+  static createDocumentRule(ruleData: any) {
+    return this.request('/api/v1/admin/document-rules', {
+      method: 'POST',
+      body: JSON.stringify(ruleData)
+    });
+  }
+
+  static updateDocumentRule(id: string, updates: any) {
+    return this.request(`/api/v1/admin/document-rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    });
+  }
+
+  static deleteDocumentRule(id: string) {
+    return this.request(`/api/v1/admin/document-rules/${id}`, {
       method: 'DELETE'
     });
   }
@@ -126,11 +174,46 @@ export class ApiClient {
   }
 
   // MOCK Generator
-  static generateMock(tenantId: string, tipoDoc: string = 'CTE') {
+  static generateMock(payload: {
+    tenant_id: string;
+    tipo_doc?: string;
+    policy_id?: string;
+    incluir_variaveis_apolice?: boolean;
+    omitir_obrigatorias?: string[];
+  }) {
     return this.request('/api/v1/admin/mock/generate', {
       method: 'POST',
-      body: JSON.stringify({ tenant_id: tenantId, tipo_doc: tipoDoc })
+      body: JSON.stringify(payload)
     });
+  }
+
+  // Importação em lote de XMLs para validar averbação/recusa
+  static async importarLote(tenantId: string, ramo: string, arquivos: FileList | File[]) {
+    const formData = new FormData();
+    formData.append('tenant_id', tenantId);
+    formData.append('ramo', ramo);
+    Array.from(arquivos).forEach((f) => formData.append('arquivos', f));
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/importar-lote`, {
+        method: 'POST',
+        body: formData
+      });
+      return await response.json();
+    } catch (err: any) {
+      return { status: 'erro', mensagem: 'Falha de conexão ao importar o lote.' };
+    }
+  }
+
+  // Relatório por cliente ou conjunto de clientes
+  static getRelatorio(tenantIds: string[] = []) {
+    const qs = tenantIds.length > 0 ? `?tenant_ids=${tenantIds.join(',')}` : '';
+    return this.request(`/api/v1/admin/relatorio${qs}`);
+  }
+
+  // Documentação da API
+  static getApiDocs() {
+    return this.request('/api/v1/admin/docs');
   }
 
   // Batch Simulator Multi-Cliente

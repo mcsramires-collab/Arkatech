@@ -1,12 +1,35 @@
 import { dbStore } from './dbStore';
 import { TipoDocumento } from '../types';
 
+export interface MockGenerationOptions {
+  tenantId: string;
+  tipoDoc: TipoDocumento;
+  policyId?: string;
+  incluirVariaveisApolice?: boolean;
+  omitirObrigatorias?: string[]; // nomes de variáveis a propositalmente OMITIR (para testar recusa)
+}
+
 export class MockGeneratorService {
   /**
-   * Gera um documento XML Sefaz fictício porém perfeitamente válido para testes.
+   * Monta a string do campo de observação (xObs/infCpl) embutindo as variáveis
+   * de apólice no formato "NOME=valor; NOME2=valor2", que o xmlParser sabe ler de volta.
+   */
+  private static buildObsField(policyId: string | undefined, omitir: string[] = []): string {
+    if (!policyId) return '';
+    const rules = dbStore.policyRules.filter((r) => r.policy_id === policyId);
+    const pairs = rules
+      .filter((r) => !omitir.includes(r.nome_variavel))
+      .map((r) => `${r.nome_variavel}=${r.exemplo_preenchimento || 'VALOR_EXEMPLO'}`);
+    return pairs.join('; ');
+  }
+
+  /**
+   * Gera um documento XML Sefaz fictício porém estruturalmente válido para testes,
+   * com base no cadastro do transportador (tenant) e, opcionalmente, da apólice usada.
    * TRAVA DE SEGURANÇA: Funciona exclusivamente se o cliente pertencer ao ambiente = 'teste'.
    */
-  public static generateMockXML(tenantId: string, tipoDoc: TipoDocumento = 'CTE'): string {
+  public static generateMockXML(options: MockGenerationOptions): string {
+    const { tenantId, tipoDoc, policyId, incluirVariaveisApolice, omitirObrigatorias } = options;
     const tenant = dbStore.tenants.find((t) => t.id === tenantId);
 
     if (!tenant) {
@@ -23,6 +46,10 @@ export class MockGeneratorService {
     const chave = `352608${tenant.cnpj.replace(/\D/g, '')}57001000${docNum}10012345678`;
     const valorCarga = (Math.random() * 50000 + 1000).toFixed(2);
     const dateISO = new Date().toISOString();
+
+    const obsField = incluirVariaveisApolice
+      ? this.buildObsField(policyId, omitirObrigatorias || [])
+      : `Averbação de Teste ARCKATECH - Doc Nº ${docNum}`;
 
     if (tipoDoc === 'CTE') {
       return `<?xml version="1.0" encoding="UTF-8"?>
@@ -56,7 +83,7 @@ export class MockGeneratorService {
         </infCarga>
       </infCTeNorm>
       <compl>
-        <xObs>Averbação de Teste ARCKATECH - CTe Nº ${docNum}</xObs>
+        <xObs>${obsField}</xObs>
       </compl>
     </infCte>
   </CTe>
@@ -84,11 +111,38 @@ export class MockGeneratorService {
         </ICMSTot>
       </total>
       <infAdic>
-        <infCpl>Averbação de Teste NFe Nº ${docNum}</infCpl>
+        <infCpl>${obsField}</infCpl>
       </infAdic>
     </infNFe>
   </NFe>
 </nfeProc>`;
+    }
+
+    if (tipoDoc === 'MDFE') {
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<mdfeProc xmlns="http://www.portalfiscal.inf.br/mdfe" versao="3.00">
+  <MDFe>
+    <infMDFe Id="MDFe${chave}" versao="3.00">
+      <ide>
+        <cUF>35</cUF>
+        <nMDF>${docNum}</nMDF>
+        <dhEmi>${dateISO}</dhEmi>
+        <UFIni>SP</UFIni>
+        <UFFim>MG</UFFim>
+      </ide>
+      <emit>
+        <CNPJ>${tenant.cnpj.replace(/\D/g, '')}</CNPJ>
+        <xNome>${tenant.razao_social}</xNome>
+      </emit>
+      <tot>
+        <vCarga>${valorCarga}</vCarga>
+      </tot>
+      <infAdic>
+        <infCpl>${obsField}</infCpl>
+      </infAdic>
+    </infMDFe>
+  </MDFe>
+</mdfeProc>`;
     }
 
     // NFSe Fallback
@@ -100,6 +154,7 @@ export class MockGeneratorService {
       <valores>
         <vServicos>${valorCarga}</vServicos>
       </valores>
+      <outrasInformacoes>${obsField}</outrasInformacoes>
     </infNfse>
   </Nfse>
 </CompNfse>`;

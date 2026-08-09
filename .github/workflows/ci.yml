@@ -1,37 +1,50 @@
-name: CI
+name: CI - Integracao Continua
 
 on:
-  pull_request:
   push:
-    branches: [develop, main]
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
 
 jobs:
-  backend:
+  backend-test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: '18.x'
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
-      - run: npm install
-      - run: npm run lint --if-present
+      - name: Install dependencies
+        run: |
+          cd backend
+          npm ci || npm install
+      - name: Type check
+        run: |
+          cd backend
+          npm run typecheck --if-present
+      - name: Run Tests
+        run: |
+          cd backend
+          npm test --if-present
 
-  frontend:
+  frontend-test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: '18.x'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
-      - run: npm install
-      - run: npm run build
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci || npm install
+      - name: Build Check
+        run: |
+          cd frontend
+          npm run build

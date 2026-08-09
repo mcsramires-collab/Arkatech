@@ -7,6 +7,7 @@ import {
   Broker,
   Policy,
   PolicyRule,
+  DocumentRule,
   ResponseTemplate,
   Averbacao,
   RawXMLStore,
@@ -20,6 +21,7 @@ class DBStore {
   public brokers: Broker[] = [];
   public policies: Policy[] = [];
   public policyRules: PolicyRule[] = [];
+  public documentRules: DocumentRule[] = [];
   public responseTemplates: ResponseTemplate[] = [];
   public averbacoes: Averbacao[] = [];
   public rawXmlStore: RawXMLStore[] = [];
@@ -42,6 +44,7 @@ class DBStore {
         this.brokers = parsed.brokers || [];
         this.policies = parsed.policies || [];
         this.policyRules = parsed.policyRules || [];
+        this.documentRules = parsed.documentRules || [];
         this.responseTemplates = parsed.responseTemplates || [];
         this.averbacoes = parsed.averbacoes || [];
         this.rawXmlStore = parsed.rawXmlStore || [];
@@ -72,6 +75,7 @@ class DBStore {
             brokers: this.brokers,
             policies: this.policies,
             policyRules: this.policyRules,
+            documentRules: this.documentRules,
             responseTemplates: this.responseTemplates,
             averbacoes: this.averbacoes,
             rawXmlStore: this.rawXmlStore,
@@ -180,6 +184,37 @@ class DBStore {
         updated_at: new Date().toISOString()
       }
     ];
+
+    // 1.1 Regras de Obrigatoriedade de Tag POR TIPO DE DOCUMENTO (padrão Sefaz)
+    // Estas regras valem para TODOS os documentos daquele tipo, independente da apólice/seguradora.
+    const sefazDefaults: Omit<DocumentRule, 'id' | 'created_at'>[] = [
+      // CT-e
+      { tipo_documento: 'CTE', tag_path: 'nCT', nome_variavel: 'Número do CT-e', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'CTE', tag_path: 'dhEmi', nome_variavel: 'Data/Hora de Emissão', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'CTE', tag_path: 'vCarga', nome_variavel: 'Valor da Carga', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'CTE', tag_path: 'CFOP', nome_variavel: 'CFOP', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'CTE', tag_path: 'cUF', nome_variavel: 'Código da UF', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      // NF-e
+      { tipo_documento: 'NFE', tag_path: 'nNF', nome_variavel: 'Número da NF-e', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'NFE', tag_path: 'dhEmi', nome_variavel: 'Data/Hora de Emissão', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'NFE', tag_path: 'vProd', nome_variavel: 'Valor dos Produtos', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'NFE', tag_path: 'vNF', nome_variavel: 'Valor Total da NF-e', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      // NFS-e
+      { tipo_documento: 'NFSE', tag_path: 'numero', nome_variavel: 'Número da NFS-e', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'NFSE', tag_path: 'vServicos', nome_variavel: 'Valor dos Serviços', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      // MDF-e
+      { tipo_documento: 'MDFE', tag_path: 'nMDF', nome_variavel: 'Número do MDF-e', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'MDFE', tag_path: 'dhEmi', nome_variavel: 'Data/Hora de Emissão', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'MDFE', tag_path: 'vCarga', nome_variavel: 'Valor Total da Carga', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'MDFE', tag_path: 'UFIni', nome_variavel: 'UF de Início da Viagem', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' },
+      { tipo_documento: 'MDFE', tag_path: 'UFFim', nome_variavel: 'UF de Fim da Viagem', obrigatoria: true, origem: 'SEFAZ_PADRAO', observacao: 'Obrigatória Sefaz' }
+    ];
+
+    this.documentRules = sefazDefaults.map((r) => ({
+      ...r,
+      id: uuidv4(),
+      created_at: new Date().toISOString()
+    }));
 
     // 2. Seguradoras e Corretoras Padrão
     const insurerPorto: Insurer = {
@@ -320,28 +355,31 @@ class DBStore {
         id: uuidv4(),
         policy_id: policy1.id,
         tipo_doc: 'CTE',
-        tag_path: 'vCarga',
-        nome_variavel: 'Valor da Carga',
+        tag_path: 'TIPO_EMBALAGEM',
+        nome_variavel: 'Tipo de Embalagem',
         obrigatoria: true,
-        instrucao_recuperacao: 'Informe o valor total da carga em Reais'
+        exemplo_preenchimento: 'Container',
+        instrucao_recuperacao: 'Informe se a carga está em Caixas, Paletes ou Container'
       },
       {
         id: uuidv4(),
         policy_id: policy1.id,
         tipo_doc: 'CTE',
-        tag_path: 'TIPO_EMBALAGEM',
-        nome_variavel: 'Tipo de Embalagem',
-        obrigatoria: true,
-        instrucao_recuperacao: 'Informe se a carga está em Caixas, Paletes ou Container'
+        tag_path: 'VALOR_DECLARADO_CONTAINER',
+        nome_variavel: 'Valor Declarado do Container',
+        obrigatoria: false,
+        exemplo_preenchimento: 'R$ 25.000,00',
+        instrucao_recuperacao: 'Informe o valor declarado do container em Reais'
       },
       {
         id: uuidv4(),
         policy_id: policy2.id,
         tipo_doc: 'NFE',
-        tag_path: 'vProd',
-        nome_variavel: 'Valor Total dos Produtos',
+        tag_path: 'LOCAL_ARMAZENAGEM',
+        nome_variavel: 'Local de Armazenagem',
         obrigatoria: true,
-        instrucao_recuperacao: 'Informe o valor da NFe'
+        exemplo_preenchimento: 'CD Guarulhos - SP',
+        instrucao_recuperacao: 'Informe o centro de distribuição de origem da carga'
       }
     ];
   }

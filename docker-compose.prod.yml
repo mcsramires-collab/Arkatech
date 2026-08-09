@@ -1,9 +1,10 @@
+version: '3.8'
+
 services:
   postgres:
     image: postgres:15-alpine
     container_name: arckatech-postgres-prod
     restart: unless-stopped
-    env_file: .env.production
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -27,7 +28,6 @@ services:
     image: redis:7-alpine
     container_name: arckatech-redis-prod
     restart: unless-stopped
-    env_file: .env.production
     command: redis-server --save 60 1 --loglevel warning --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data_prod:/data
@@ -50,7 +50,6 @@ services:
       dockerfile: Dockerfile
     container_name: arckatech-api-prod
     restart: unless-stopped
-    env_file: .env.production
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -86,7 +85,6 @@ services:
     container_name: arckatech-worker-prod
     command: npm run start:worker
     restart: unless-stopped
-    env_file: .env.production
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
@@ -110,8 +108,6 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      args:
-        VITE_API_URL: ${PUBLIC_API_URL}
     container_name: arckatech-web-prod
     restart: unless-stopped
     logging:

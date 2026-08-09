@@ -1,5 +1,5 @@
 import { dbStore } from './dbStore';
-import { Policy, TipoDocumento } from '../types';
+import { Policy } from '../types';
 import { ParsedDocumentData } from './xmlParser';
 
 export interface RuleValidationResult {
@@ -9,14 +9,21 @@ export interface RuleValidationResult {
 
 export class RuleEngineService {
   /**
-   * Avalia se o documento atende a todas as regras e variáveis obrigatórias cadastradas para a apólice.
+   * Avalia se o documento atende:
+   *  1) as tags obrigatórias do PADRÃO SEFAZ para aquele TIPO DE DOCUMENTO
+   *     (DocumentRule — vale para todos os documentos daquele tipo, independente da apólice)
+   *  2) as variáveis de negócio obrigatórias definidas na APÓLICE usada (PolicyRule)
    */
   public static validate(
     policy: Policy,
     docData: ParsedDocumentData,
     supplementedVars: Record<string, any> = {}
   ): RuleValidationResult {
-    const rules = dbStore.policyRules.filter(
+    const documentRules = dbStore.documentRules.filter(
+      (r) => r.tipo_documento === docData.tipoDocumento
+    );
+
+    const policyRules = dbStore.policyRules.filter(
       (r) => r.policy_id === policy.id && (r.tipo_doc === 'TODOS' || r.tipo_doc === docData.tipoDocumento)
     );
 
@@ -25,21 +32,25 @@ export class RuleEngineService {
     // Mesclar tags do XML com variáveis suplementadas (via API ou Link de Recuperação)
     const combinedTags = { ...docData.tagsMap, ...supplementedVars };
 
-    for (const rule of rules) {
-      if (!rule.obrigatoria) continue;
-
-      const tagPath = rule.tag_path;
-      const varName = rule.nome_variavel;
-
-      // Verificar se a tag ou o nome da variável possui valor preenchido
+    const hasValue = (tagPath: string, varName: string) => {
       const value1 = combinedTags[tagPath];
       const value2 = combinedTags[varName];
-
-      const hasValue =
+      return (
         (value1 !== undefined && value1 !== null && value1 !== '') ||
-        (value2 !== undefined && value2 !== null && value2 !== '');
+        (value2 !== undefined && value2 !== null && value2 !== '')
+      );
+    };
 
-      if (!hasValue) {
+    for (const rule of documentRules) {
+      if (!rule.obrigatoria) continue;
+      if (!hasValue(rule.tag_path, rule.nome_variavel)) {
+        missingVariables.push(rule.nome_variavel);
+      }
+    }
+
+    for (const rule of policyRules) {
+      if (!rule.obrigatoria) continue;
+      if (!hasValue(rule.tag_path, rule.nome_variavel)) {
         missingVariables.push(rule.nome_variavel);
       }
     }
