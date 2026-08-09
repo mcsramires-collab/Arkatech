@@ -17,13 +17,30 @@ import {
   Trash2,
   ExternalLink,
   Lock,
-  Globe
+  Globe,
+  Download,
+  Upload,
+  BarChart3,
+  BookOpen,
+  ListChecks
 } from 'lucide-react';
 import { ApiClient } from './services/api';
-import { Tenant, Policy, PolicyRule, ResponseTemplate, BatchTestRun } from './types';
+import { Tenant, Policy, PolicyRule, DocumentRule, ResponseTemplate, BatchTestRun, Insurer, Broker, TipoDocumento } from './types';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'tenants' | 'policies' | 'templates' | 'emitter' | 'simulator' | 'recovery'>('dashboard');
+  const [activeTab, setActiveTab] = useState<
+    | 'dashboard'
+    | 'tenants'
+    | 'policies'
+    | 'documentrules'
+    | 'templates'
+    | 'emitter'
+    | 'import'
+    | 'simulator'
+    | 'report'
+    | 'apidocs'
+    | 'recovery'
+  >('dashboard');
 
   // Recovery link token state check (url query or hash)
   const [recoveryTokenInput, setRecoveryTokenInput] = useState('');
@@ -37,6 +54,9 @@ export function App() {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [rules, setRules] = useState<PolicyRule[]>([]);
   const [templates, setTemplates] = useState<ResponseTemplate[]>([]);
+  const [documentRules, setDocumentRules] = useState<DocumentRule[]>([]);
+  const [insurers, setInsurers] = useState<Insurer[]>([]);
+  const [brokers, setBrokers] = useState<Broker[]>([]);
 
   // Selected State Filters
   const [selectedTenantId, setSelectedTenantId] = useState<string>('');
@@ -56,12 +76,52 @@ export function App() {
     tag_path: '',
     nome_variavel: '',
     obrigatoria: true,
+    exemplo_preenchimento: '',
     instrucao_recuperacao: ''
   });
+
+  // Nova Apólice
+  const [newPolicy, setNewPolicy] = useState({
+    numero_apolice: '',
+    ramo: 'RCTRC',
+    tenant_id: '',
+    insurer_id: '',
+    broker_id: '',
+    permitir_inativo_vencido: false
+  });
+
+  // Nova Regra de Documento (Sefaz)
+  const [newDocRule, setNewDocRule] = useState({
+    tipo_documento: 'CTE' as TipoDocumento,
+    tag_path: '',
+    nome_variavel: '',
+    obrigatoria: true,
+    observacao: ''
+  });
+  const [docRuleFilter, setDocRuleFilter] = useState<TipoDocumento>('CTE');
+
+  // Importação em Lote
+  const [importTenantId, setImportTenantId] = useState('');
+  const [importRamo, setImportRamo] = useState('RCTRC');
+  const [importFiles, setImportFiles] = useState<FileList | null>(null);
+  const [importResult, setImportResult] = useState<any>(null);
+  const [importLoading, setImportLoading] = useState(false);
+
+  // Relatório
+  const [selectedReportTenants, setSelectedReportTenants] = useState<Record<string, boolean>>({});
+  const [reportData, setReportData] = useState<any>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+
+  // Documentação da API
+  const [apiDocsContent, setApiDocsContent] = useState<string>('');
+  const [apiDocsLoading, setApiDocsLoading] = useState(false);
 
   // Emitter State
   const [emitterTenantId, setEmitterTenantId] = useState('');
   const [emitterRamo, setEmitterRamo] = useState('RCTRC');
+  const [emitterTipoDoc, setEmitterTipoDoc] = useState<TipoDocumento>('CTE');
+  const [emitterPolicyId, setEmitterPolicyId] = useState('');
+  const [emitterIncluirVars, setEmitterIncluirVars] = useState(false);
   const [emitterXml, setEmitterXml] = useState('');
   const [emitterResult, setEmitterResult] = useState<any>(null);
   const [generatedToken, setGeneratedToken] = useState<string>('');
@@ -115,6 +175,15 @@ export function App() {
 
     const tmpl = await ApiClient.getTemplates();
     if (tmpl.status === 'sucesso') setTemplates(tmpl.templates);
+
+    const docRules = await ApiClient.getDocumentRules();
+    if (docRules.status === 'sucesso') setDocumentRules(docRules.rules);
+
+    const ins = await ApiClient.getInsurers();
+    if (ins.status === 'sucesso') setInsurers(ins.insurers);
+
+    const brk = await ApiClient.getBrokers();
+    if (brk.status === 'sucesso') setBrokers(brk.brokers);
   };
 
   // Create Tenant
@@ -149,7 +218,58 @@ export function App() {
     }
   };
 
-  // Create Policy Rule
+  // Create Policy
+  const handleCreatePolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPolicy.numero_apolice || !newPolicy.tenant_id || !newPolicy.insurer_id || !newPolicy.broker_id) {
+      alert('Preencha número da apólice, cliente, seguradora e corretora.');
+      return;
+    }
+    const res = await ApiClient.createPolicy(newPolicy);
+    if (res.status === 'sucesso') {
+      setNewPolicy({ numero_apolice: '', ramo: 'RCTRC', tenant_id: '', insurer_id: '', broker_id: '', permitir_inativo_vencido: false });
+      loadData();
+    } else {
+      alert(res.mensagem);
+    }
+  };
+
+  const handleDeletePolicy = async (id: string) => {
+    if (confirm('Deseja realmente excluir esta apólice? As variáveis vinculadas a ela também serão removidas.')) {
+      await ApiClient.deletePolicy(id);
+      loadData();
+    }
+  };
+
+  // Document Rules (Sefaz)
+  const handleCreateDocRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDocRule.tag_path || !newDocRule.nome_variavel) {
+      alert('Informe a tag/caminho e o nome da variável.');
+      return;
+    }
+    const res = await ApiClient.createDocumentRule(newDocRule);
+    if (res.status === 'sucesso') {
+      setNewDocRule({ tipo_documento: docRuleFilter, tag_path: '', nome_variavel: '', obrigatoria: true, observacao: '' });
+      loadData();
+    } else {
+      alert(res.mensagem);
+    }
+  };
+
+  const handleToggleDocRuleObrigatoria = async (rule: DocumentRule) => {
+    await ApiClient.updateDocumentRule(rule.id, { obrigatoria: !rule.obrigatoria });
+    loadData();
+  };
+
+  const handleDeleteDocRule = async (id: string) => {
+    if (confirm('Deseja remover esta regra de documento? Ela deixará de ser exigida em todos os documentos desse tipo.')) {
+      await ApiClient.deleteDocumentRule(id);
+      loadData();
+    }
+  };
+
+
   const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRule.policy_id || !newRule.nome_variavel) {
@@ -158,7 +278,7 @@ export function App() {
     }
     const res = await ApiClient.createPolicyRule(newRule);
     if (res.status === 'sucesso') {
-      setNewRule({ policy_id: '', tipo_doc: 'CTE', tag_path: '', nome_variavel: '', obrigatoria: true, instrucao_recuperacao: '' });
+      setNewRule({ policy_id: '', tipo_doc: 'CTE', tag_path: '', nome_variavel: '', obrigatoria: true, exemplo_preenchimento: '', instrucao_recuperacao: '' });
       loadData();
     }
   };
@@ -184,12 +304,71 @@ export function App() {
   // Generate Mock & Token in Emitter
   const handleGenerateMockInEmitter = async () => {
     if (!emitterTenantId) return;
-    const res = await ApiClient.generateMock(emitterTenantId, 'CTE');
+    const res = await ApiClient.generateMock({
+      tenant_id: emitterTenantId,
+      tipo_doc: emitterTipoDoc,
+      policy_id: emitterPolicyId || undefined,
+      incluir_variaveis_apolice: emitterIncluirVars
+    });
     if (res.status === 'sucesso') {
       setEmitterXml(res.xml_content);
     } else {
       alert(res.mensagem);
     }
+  };
+
+  // Download do XML gerado/carregado no Emissor
+  const handleDownloadXml = () => {
+    if (!emitterXml) {
+      alert('Gere ou cole um XML antes de baixar.');
+      return;
+    }
+    const blob = new Blob([emitterXml], { type: 'application/xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `arckatech_${emitterTipoDoc.toLowerCase()}_${Date.now()}.xml`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Importação em Lote de XMLs
+  const handleImportLote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importTenantId || !importFiles || importFiles.length === 0) {
+      alert('Selecione um cliente e ao menos um arquivo XML.');
+      return;
+    }
+    setImportLoading(true);
+    setImportResult(null);
+    const res = await ApiClient.importarLote(importTenantId, importRamo, importFiles);
+    setImportResult(res);
+    setImportLoading(false);
+    loadData();
+  };
+
+  // Relatório por Cliente
+  const handleGerarRelatorio = async () => {
+    setReportLoading(true);
+    const ids = Object.keys(selectedReportTenants).filter((id) => selectedReportTenants[id]);
+    const res = await ApiClient.getRelatorio(ids);
+    if (res.status === 'sucesso') {
+      setReportData(res);
+    } else {
+      alert(res.mensagem);
+    }
+    setReportLoading(false);
+  };
+
+  // Documentação da API
+  const handleLoadApiDocs = async () => {
+    if (apiDocsContent) return;
+    setApiDocsLoading(true);
+    const res = await ApiClient.getApiDocs();
+    if (res.status === 'sucesso') setApiDocsContent(res.content);
+    setApiDocsLoading(false);
   };
 
   const handleGenerateTokenInEmitter = async () => {
@@ -307,6 +486,14 @@ export function App() {
             </li>
             <li>
               <button
+                className={`nav-item ${activeTab === 'documentrules' ? 'active' : ''}`}
+                onClick={() => setActiveTab('documentrules')}
+              >
+                <ListChecks size={18} /> Regras por Documento
+              </button>
+            </li>
+            <li>
+              <button
                 className={`nav-item ${activeTab === 'templates' ? 'active' : ''}`}
                 onClick={() => setActiveTab('templates')}
               >
@@ -323,10 +510,37 @@ export function App() {
             </li>
             <li>
               <button
+                className={`nav-item ${activeTab === 'import' ? 'active' : ''}`}
+                onClick={() => setActiveTab('import')}
+              >
+                <Upload size={18} /> Importação em Lote
+              </button>
+            </li>
+            <li>
+              <button
                 className={`nav-item ${activeTab === 'simulator' ? 'active' : ''}`}
                 onClick={() => setActiveTab('simulator')}
               >
                 <Play size={18} /> Simulador Multi-Cliente
+              </button>
+            </li>
+            <li>
+              <button
+                className={`nav-item ${activeTab === 'report' ? 'active' : ''}`}
+                onClick={() => setActiveTab('report')}
+              >
+                <BarChart3 size={18} /> Relatórios
+              </button>
+            </li>
+            <li>
+              <button
+                className={`nav-item ${activeTab === 'apidocs' ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab('apidocs');
+                  handleLoadApiDocs();
+                }}
+              >
+                <BookOpen size={18} /> Documentação API
               </button>
             </li>
             <li>
@@ -551,6 +765,92 @@ export function App() {
         {/* TAB 3: APÓLICES & REGRAS */}
         {activeTab === 'policies' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* Criar Nova Apólice */}
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Cadastrar Nova Apólice
+              </h2>
+              <form onSubmit={handleCreatePolicy} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                <div className="form-group">
+                  <label className="form-label">Número da Apólice</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="ex: POL-RCTRC-2026-010"
+                    value={newPolicy.numero_apolice}
+                    onChange={(e) => setNewPolicy({ ...newPolicy, numero_apolice: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Ramo</label>
+                  <select
+                    className="form-select"
+                    value={newPolicy.ramo}
+                    onChange={(e) => setNewPolicy({ ...newPolicy, ramo: e.target.value })}
+                  >
+                    <option value="RCTRC">RCTRC</option>
+                    <option value="RCDC">RCDC</option>
+                    <option value="RCV">RCV</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Transportador / Embarcador</label>
+                  <select
+                    className="form-select"
+                    value={newPolicy.tenant_id}
+                    onChange={(e) => setNewPolicy({ ...newPolicy, tenant_id: e.target.value })}
+                  >
+                    <option value="">-- Selecione o Cliente --</option>
+                    {tenants.map((t) => (
+                      <option key={t.id} value={t.id}>{t.razao_social}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Seguradora</label>
+                  <select
+                    className="form-select"
+                    value={newPolicy.insurer_id}
+                    onChange={(e) => setNewPolicy({ ...newPolicy, insurer_id: e.target.value })}
+                  >
+                    <option value="">-- Selecione a Seguradora --</option>
+                    {insurers.map((i) => (
+                      <option key={i.id} value={i.id}>{i.nome}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Corretora</label>
+                  <select
+                    className="form-select"
+                    value={newPolicy.broker_id}
+                    onChange={(e) => setNewPolicy({ ...newPolicy, broker_id: e.target.value })}
+                  >
+                    <option value="">-- Selecione a Corretora --</option>
+                    {brokers.map((b) => (
+                      <option key={b.id} value={b.id}>{b.nome}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={newPolicy.permitir_inativo_vencido}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, permitir_inativo_vencido: e.target.checked })}
+                    />
+                    Permitir averbação com apólice vencida/cliente inativo (SUC-2001)
+                  </label>
+                </div>
+                <div style={{ gridColumn: 'span 3', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button type="submit" className="btn btn-primary">
+                    <Plus size={16} /> Cadastrar Apólice
+                  </button>
+                </div>
+              </form>
+            </div>
+
             <div className="table-container" style={{ padding: '24px' }}>
               <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
                 Apólices e Exceções de Cadastro
@@ -562,6 +862,7 @@ export function App() {
                     <th>Cliente Vinculado</th>
                     <th>Status Apólice</th>
                     <th>Flag Exceção (Inativo/Vencido)</th>
+                    <th>Ações</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -588,6 +889,15 @@ export function App() {
                             {p.permitir_inativo_vencido ? 'Permitir (Warning SUC-2001)' : 'Bloquear (Erro)'}
                           </button>
                         </td>
+                        <td>
+                          <button
+                            className="btn btn-danger"
+                            style={{ padding: '6px 10px', fontSize: '0.75rem' }}
+                            onClick={() => handleDeletePolicy(p.id)}
+                          >
+                            <Trash2 size={12} /> Excluir
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -595,12 +905,15 @@ export function App() {
               </table>
             </div>
 
-            {/* Builder de Regras Dinâmicas */}
+            {/* Builder de Variáveis de Negócio da Apólice */}
             <div className="table-container" style={{ padding: '24px' }}>
-              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
-                Criar Nova Regra Dinâmica por Apólice (Obrigatoriedade de Tags)
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
+                Criar Variável de Negócio da Apólice
               </h2>
-              <form onSubmit={handleCreateRule} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px' }}>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                Variáveis específicas exigidas pela seguradora/corretora para aquela cobertura (ex: "Container"). São diferentes das tags padrão Sefaz — veja a aba "Regras por Documento" para essas.
+              </p>
+              <form onSubmit={handleCreateRule} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: '16px' }}>
                 <div className="form-group">
                   <label className="form-label">Selecione a Apólice</label>
                   <select
@@ -627,36 +940,48 @@ export function App() {
                     <option value="CTE">CTe (Conhecimento de Transporte)</option>
                     <option value="NFE">NFe (Nota Fiscal Eletrônica)</option>
                     <option value="NFSE">NFSe (Nota Fiscal de Serviços)</option>
+                    <option value="MDFE">MDFe (Manifesto de Documentos Fiscais)</option>
                     <option value="TODOS">Todos os Documentos</option>
                   </select>
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Tag XML / Caminho</label>
+                  <label className="form-label">Nome da Variável</label>
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="ex: TIPO_EMBALAGEM ou vCarga"
-                    value={newRule.tag_path}
-                    onChange={(e) => setNewRule({ ...newRule, tag_path: e.target.value })}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Nome Amigável da Variável</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="ex: Tipo de Embalagem"
+                    placeholder="ex: Container"
                     value={newRule.nome_variavel}
                     onChange={(e) => setNewRule({ ...newRule, nome_variavel: e.target.value })}
                     required
                   />
                 </div>
 
-                <div style={{ gridColumn: 'span 4', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <div className="form-group">
+                  <label className="form-label">Exemplo de Preenchimento</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="ex: R$ 25.000,00"
+                    value={newRule.exemplo_preenchimento}
+                    onChange={(e) => setNewRule({ ...newRule, exemplo_preenchimento: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={newRule.obrigatoria}
+                      onChange={(e) => setNewRule({ ...newRule, obrigatoria: e.target.checked })}
+                    />
+                    Obrigatória
+                  </label>
+                </div>
+
+                <div style={{ gridColumn: 'span 5', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
                   <button type="submit" className="btn btn-primary">
-                    <Plus size={16} /> Adicionar Regra à Apólice
+                    <Plus size={16} /> Adicionar Variável à Apólice
                   </button>
                 </div>
               </form>
@@ -669,8 +994,8 @@ export function App() {
                   <tr>
                     <th>Apólice</th>
                     <th>Documento</th>
-                    <th>Tag XML / XPath</th>
                     <th>Nome Variável</th>
+                    <th>Exemplo de Preenchimento</th>
                     <th>Obrigatoriedade</th>
                     <th>Ações</th>
                   </tr>
@@ -684,8 +1009,8 @@ export function App() {
                         <td>
                           <span className="badge badge-info">{r.tipo_doc}</span>
                         </td>
-                        <td><code>{r.tag_path}</code></td>
                         <td><strong>{r.nome_variavel}</strong></td>
+                        <td><code>{r.exemplo_preenchimento || '-'}</code></td>
                         <td>
                           {r.obrigatoria ? (
                             <span className="badge badge-error">OBRIGATÓRIA</span>
@@ -705,6 +1030,134 @@ export function App() {
                       </tr>
                     );
                   })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: REGRAS DE OBRIGATORIEDADE POR TIPO DE DOCUMENTO (PADRÃO SEFAZ) */}
+        {activeTab === 'documentrules' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
+                Regras de Obrigatoriedade de Tag por Tipo de Documento
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                Estas regras valem para <strong>todos os documentos daquele tipo</strong>, independente da apólice ou seguradora usada.
+                As tags nativas do padrão Sefaz já nascem cadastradas como obrigatórias (marcadas "Obrigatória Sefaz"); você pode alternar a obrigatoriedade, incluir novas tags, ou remover alguma.
+              </p>
+
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                {(['CTE', 'NFE', 'NFSE', 'MDFE'] as TipoDocumento[]).map((tipo) => (
+                  <button
+                    key={tipo}
+                    className={`btn ${docRuleFilter === tipo ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '8px 16px', fontSize: '0.8rem' }}
+                    onClick={() => {
+                      setDocRuleFilter(tipo);
+                      setNewDocRule({ ...newDocRule, tipo_documento: tipo });
+                    }}
+                  >
+                    {tipo}
+                  </button>
+                ))}
+              </div>
+
+              <form onSubmit={handleCreateDocRule} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                <div className="form-group">
+                  <label className="form-label">Tag XML / Caminho</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="ex: infCarga.qCarga"
+                    value={newDocRule.tag_path}
+                    onChange={(e) => setNewDocRule({ ...newDocRule, tag_path: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Nome Amigável</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="ex: Peso da Carga"
+                    value={newDocRule.nome_variavel}
+                    onChange={(e) => setNewDocRule({ ...newDocRule, nome_variavel: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Observação</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="ex: Exigida a partir de 2026"
+                    value={newDocRule.observacao}
+                    onChange={(e) => setNewDocRule({ ...newDocRule, observacao: e.target.value })}
+                  />
+                </div>
+                <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: '12px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={newDocRule.obrigatoria}
+                      onChange={(e) => setNewDocRule({ ...newDocRule, obrigatoria: e.target.checked })}
+                    />
+                    Obrigatória
+                  </label>
+                  <button type="submit" className="btn btn-primary" style={{ marginLeft: 'auto' }}>
+                    <Plus size={16} /> Incluir Tag em {docRuleFilter}
+                  </button>
+                </div>
+              </form>
+
+              <table className="custom-table">
+                <thead>
+                  <tr>
+                    <th>Tag XML / Caminho</th>
+                    <th>Nome da Variável</th>
+                    <th>Origem</th>
+                    <th>Observação</th>
+                    <th>Obrigatoriedade</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {documentRules
+                    .filter((r) => r.tipo_documento === docRuleFilter)
+                    .map((r) => (
+                      <tr key={r.id}>
+                        <td><code>{r.tag_path}</code></td>
+                        <td><strong>{r.nome_variavel}</strong></td>
+                        <td>
+                          {r.origem === 'SEFAZ_PADRAO' ? (
+                            <span className="badge badge-info">SEFAZ PADRÃO</span>
+                          ) : (
+                            <span className="badge badge-warning">CUSTOM</span>
+                          )}
+                        </td>
+                        <td style={{ fontSize: '0.8rem' }}>{r.observacao || '-'}</td>
+                        <td>
+                          <button
+                            className={`btn ${r.obrigatoria ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                            onClick={() => handleToggleDocRuleObrigatoria(r)}
+                          >
+                            {r.obrigatoria ? 'OBRIGATÓRIA' : 'OPCIONAL'}
+                          </button>
+                        </td>
+                        <td>
+                          <button
+                            className="btn btn-danger"
+                            style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                            onClick={() => handleDeleteDocRule(r.id)}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                 </tbody>
               </table>
             </div>
@@ -800,13 +1253,13 @@ export function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <div className="table-container" style={{ padding: '24px' }}>
               <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
-                Testador de Averbação & Gerador de MOCK Sefaz
+                Testador de Averbação & Gerador de XML de Teste Sefaz
               </h2>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div className="form-group">
-                    <label className="form-label">Cliente / Tenant</label>
+                    <label className="form-label">Cliente / Tenant (Transportador)</label>
                     <select
                       className="form-select"
                       value={emitterTenantId}
@@ -821,7 +1274,21 @@ export function App() {
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Ramo da Apólice</label>
+                    <label className="form-label">Tipo de Documento a Gerar</label>
+                    <select
+                      className="form-select"
+                      value={emitterTipoDoc}
+                      onChange={(e) => setEmitterTipoDoc(e.target.value as TipoDocumento)}
+                    >
+                      <option value="CTE">CT-e</option>
+                      <option value="NFE">NF-e</option>
+                      <option value="NFSE">NFS-e</option>
+                      <option value="MDFE">MDF-e</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Ramo da Apólice (para averbar)</label>
                     <select
                       className="form-select"
                       value={emitterRamo}
@@ -833,9 +1300,37 @@ export function App() {
                     </select>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '12px' }}>
+                  <div className="form-group">
+                    <label className="form-label">Apólice a Usar (para embutir variáveis no XML)</label>
+                    <select
+                      className="form-select"
+                      value={emitterPolicyId}
+                      onChange={(e) => setEmitterPolicyId(e.target.value)}
+                    >
+                      <option value="">-- Nenhuma (não embutir variáveis) --</option>
+                      {policies
+                        .filter((p) => p.tenant_id === emitterTenantId)
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>{p.numero_apolice} ({p.ramo})</option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={emitterIncluirVars}
+                      onChange={(e) => setEmitterIncluirVars(e.target.checked)}
+                    />
+                    Incluir as variáveis da apólice preenchidas no campo de OBS do XML
+                  </label>
+
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     <button className="btn btn-secondary" onClick={handleGenerateMockInEmitter}>
-                      <RefreshCw size={16} /> Gerar MOCK CTe Sefaz
+                      <RefreshCw size={16} /> Gerar XML de Teste
+                    </button>
+                    <button className="btn btn-secondary" onClick={handleDownloadXml}>
+                      <Download size={16} /> Baixar XML
                     </button>
                     <button className="btn btn-secondary" onClick={handleGenerateTokenInEmitter}>
                       <Lock size={16} /> Gerar JWT Token
@@ -857,10 +1352,10 @@ export function App() {
                   <label className="form-label">Conteúdo XML / JSON</label>
                   <textarea
                     className="form-textarea"
-                    style={{ height: '220px' }}
+                    style={{ height: '260px' }}
                     value={emitterXml}
                     onChange={(e) => setEmitterXml(e.target.value)}
-                    placeholder="Cole ou gere um XML Sefaz CTe/NFe/NFSe"
+                    placeholder="Cole ou gere um XML Sefaz CTe/NFe/NFSe/MDFe"
                   />
                 </div>
               </div>
@@ -871,6 +1366,115 @@ export function App() {
                   <div className="code-block">
                     {JSON.stringify(emitterResult, null, 2)}
                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: IMPORTAÇÃO EM LOTE DE XMLs */}
+        {activeTab === 'import' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
+                Importação em Lote de XMLs para um Transportador
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                Envie vários arquivos XML de uma vez para um cliente e veja, documento a documento, se ele averba ou é recusado — e o código de recusa de cada um.
+              </p>
+
+              <form onSubmit={handleImportLote} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '16px', alignItems: 'flex-end' }}>
+                <div className="form-group">
+                  <label className="form-label">Cliente / Transportador</label>
+                  <select
+                    className="form-select"
+                    value={importTenantId}
+                    onChange={(e) => setImportTenantId(e.target.value)}
+                  >
+                    <option value="">-- Selecione o Cliente --</option>
+                    {tenants.map((t) => (
+                      <option key={t.id} value={t.id}>{t.razao_social}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Ramo da Apólice</label>
+                  <select
+                    className="form-select"
+                    value={importRamo}
+                    onChange={(e) => setImportRamo(e.target.value)}
+                  >
+                    <option value="RCTRC">RCTRC</option>
+                    <option value="RCDC">RCDC</option>
+                    <option value="RCV">RCV</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Arquivos XML (múltiplos)</label>
+                  <input
+                    type="file"
+                    className="form-input"
+                    multiple
+                    accept=".xml"
+                    onChange={(e) => setImportFiles(e.target.files)}
+                  />
+                </div>
+                <button type="submit" className="btn btn-primary" disabled={importLoading}>
+                  {importLoading ? <RefreshCw size={16} className="spin" /> : <Upload size={16} />}
+                  {importLoading ? 'Importando...' : 'Importar Lote'}
+                </button>
+              </form>
+
+              {importResult && (
+                <div style={{ marginTop: '28px' }}>
+                  {importResult.status !== 'sucesso' ? (
+                    <p style={{ color: 'var(--accent-red, #e05252)' }}>{importResult.mensagem}</p>
+                  ) : (
+                    <>
+                      <div className="grid-stats" style={{ marginBottom: '20px' }}>
+                        <div className="card-stat">
+                          <span className="stat-label">Total de Arquivos</span>
+                          <span className="stat-value">{importResult.total}</span>
+                        </div>
+                        <div className="card-stat">
+                          <span className="stat-label">Averbados / Avisos</span>
+                          <span className="stat-value" style={{ color: 'var(--accent-emerald)' }}>{importResult.total_sucesso}</span>
+                        </div>
+                        <div className="card-stat">
+                          <span className="stat-label">Recusados</span>
+                          <span className="stat-value" style={{ color: 'var(--accent-red, #e05252)' }}>{importResult.total_erro}</span>
+                        </div>
+                      </div>
+                      <table className="custom-table">
+                        <thead>
+                          <tr>
+                            <th>Arquivo</th>
+                            <th>Status</th>
+                            <th>Código</th>
+                            <th>Mensagem</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importResult.resultados.map((r: any, idx: number) => (
+                            <tr key={idx}>
+                              <td>{r.arquivo}</td>
+                              <td>
+                                {r.status === 'erro' ? (
+                                  <span className="badge badge-error">RECUSADO</span>
+                                ) : r.status === 'aviso' ? (
+                                  <span className="badge badge-warning">AVISO</span>
+                                ) : (
+                                  <span className="badge badge-success">AVERBADO</span>
+                                )}
+                              </td>
+                              <td><code>{r.codigo}</code></td>
+                              <td style={{ fontSize: '0.8rem' }}>{r.mensagem}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -1020,6 +1624,117 @@ export function App() {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: RELATÓRIO POR CLIENTE OU CONJUNTO DE CLIENTES */}
+        {activeTab === 'report' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
+                Relatório por Cliente ou Conjunto de Clientes
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                Selecione um ou mais clientes (nenhum selecionado = todos) e gere o relatório consolidado de averbações.
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', maxWidth: '480px' }}>
+                {tenants.map((t) => (
+                  <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--bg-card-hover)', padding: '10px 14px', borderRadius: 'var(--radius-sm)' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!selectedReportTenants[t.id]}
+                      onChange={(e) => setSelectedReportTenants({ ...selectedReportTenants, [t.id]: e.target.checked })}
+                    />
+                    <div>
+                      <strong>{t.razao_social}</strong>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t.cnpj}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <button className="btn btn-primary" onClick={handleGerarRelatorio} disabled={reportLoading}>
+                {reportLoading ? <RefreshCw size={16} className="spin" /> : <BarChart3 size={16} />}
+                {reportLoading ? 'Gerando...' : 'Gerar Relatório'}
+              </button>
+
+              {reportData && (
+                <div style={{ marginTop: '28px' }}>
+                  <div className="grid-stats" style={{ marginBottom: '24px' }}>
+                    <div className="card-stat">
+                      <span className="stat-label">Total de Averbações</span>
+                      <span className="stat-value">{reportData.consolidado.total_averbacoes}</span>
+                    </div>
+                    <div className="card-stat">
+                      <span className="stat-label">Sucesso / Aviso</span>
+                      <span className="stat-value" style={{ color: 'var(--accent-emerald)' }}>{reportData.consolidado.total_sucesso}</span>
+                    </div>
+                    <div className="card-stat">
+                      <span className="stat-label">Recusas</span>
+                      <span className="stat-value" style={{ color: 'var(--accent-red, #e05252)' }}>{reportData.consolidado.total_erro}</span>
+                    </div>
+                    <div className="card-stat">
+                      <span className="stat-label">Valor Total Averbado</span>
+                      <span className="stat-value">
+                        {reportData.consolidado.valor_total_averbado.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </span>
+                    </div>
+                  </div>
+
+                  <table className="custom-table">
+                    <thead>
+                      <tr>
+                        <th>Cliente</th>
+                        <th>Total</th>
+                        <th>Sucesso</th>
+                        <th>Erro</th>
+                        <th>Valor Averbado</th>
+                        <th>CTe / NFe / NFSe / MDFe</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportData.por_cliente.map((c: any) => (
+                        <tr key={c.tenant_id}>
+                          <td>
+                            <strong>{c.razao_social}</strong>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{c.cnpj}</div>
+                          </td>
+                          <td>{c.total_averbacoes}</td>
+                          <td><span className="badge badge-success">{c.total_sucesso}</span></td>
+                          <td><span className="badge badge-error">{c.total_erro}</span></td>
+                          <td>{c.valor_total_averbado.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                          <td style={{ fontSize: '0.8rem' }}>
+                            {c.por_tipo_documento.CTE} / {c.por_tipo_documento.NFE} / {c.por_tipo_documento.NFSE} / {c.por_tipo_documento.MDFE}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: DOCUMENTAÇÃO DA API */}
+        {activeTab === 'apidocs' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Documentação da API — Cada Endpoint e Como Usá-lo
+              </h2>
+              {apiDocsLoading ? (
+                <p>Carregando documentação...</p>
+              ) : (
+                <pre
+                  className="code-block"
+                  style={{ whiteSpace: 'pre-wrap', maxHeight: '70vh', overflowY: 'auto', fontSize: '0.8rem', lineHeight: 1.6 }}
+                >
+                  {apiDocsContent || 'Documentação indisponível no momento.'}
+                </pre>
               )}
             </div>
           </div>

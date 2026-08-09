@@ -105,3 +105,77 @@ A API utiliza a especificação **OAuth2 Client Credentials**. Cada cliente poss
 | **ERR-4004** | Erro | ERRO 4004: Não foi possível seguir com a sua averbação por não ser localizada a condição `[NOME_VARIAVEL]` da sua averbação. |
 | **ERR-4005** | Erro | ERRO 4005: XML malformado ou fora dos padrões mínimos exigidos pelo Sefaz. |
 | **ERR-4006** | Erro | ERRO 4006: Variável informada via link de recuperação é inválida ou expirou o tempo limite de preenchimento. |
+
+---
+
+## 4. Recuperação de Variável Faltante
+
+- **Consultar sessão**: `GET /api/v1/averbar/recuperar/:token`
+- **Reenviar com a variável preenchida**: `POST /api/v1/averbar/recuperar`
+  ```json
+  { "recovery_token": "rec_9f8b7a6c5d4e...", "supplemented_vars": { "Tipo de Embalagem": "Container" } }
+  ```
+
+---
+
+## 5. Endpoints Administrativos (Painel de Gestão)
+
+Todos abaixo estão sob o prefixo `/api/v1/admin`.
+
+### 5.1. Clientes / Transportadores (`/tenants`)
+- `GET /tenants` — lista todos os clientes.
+- `POST /tenants` — cria um cliente `{ cnpj, razao_social, ambiente, role, token_duration_hours }`.
+- `PUT /tenants/:id` — edita status, ambiente, razão social ou duração do token.
+
+### 5.2. Apólices (`/policies`)
+- `GET /policies` — lista apólices.
+- `POST /policies` — cria `{ numero_apolice, ramo, tenant_id, insurer_id, broker_id, permitir_inativo_vencido }`.
+- `PUT /policies/:id` — edita qualquer campo da apólice.
+- `DELETE /policies/:id` — remove a apólice e suas variáveis associadas.
+
+### 5.3. Variáveis de Negócio da Apólice (`/policy-rules`)
+Variáveis específicas definidas pela seguradora/corretora para aquela cobertura (ex: "Container", "Valor Declarado").
+- `GET /policy-rules`
+- `POST /policy-rules` — `{ policy_id, tipo_doc, tag_path, nome_variavel, obrigatoria, exemplo_preenchimento, instrucao_recuperacao }`.
+- `PUT /policy-rules/:id` — edita a variável.
+- `DELETE /policy-rules/:id`
+
+### 5.4. Regras de Obrigatoriedade por Tipo de Documento (`/document-rules`)
+Tags do **padrão Sefaz** exigidas para CT-e, NF-e, NFS-e e MDF-e — valem para todos os documentos daquele tipo, independente da apólice usada. Já nascem cadastradas com `origem: "SEFAZ_PADRAO"` e `observacao: "Obrigatória Sefaz"`; podem ser editadas, ter a obrigatoriedade alternada, ou removidas.
+- `GET /document-rules?tipo_documento=CTE`
+- `POST /document-rules` — `{ tipo_documento, tag_path, nome_variavel, obrigatoria, observacao }` (nasce com `origem: "CUSTOM"`).
+- `PUT /document-rules/:id`
+- `DELETE /document-rules/:id`
+
+### 5.5. Textos de Retorno (`/templates`)
+- `GET /templates`
+- `PUT /templates/:id` — `{ texto_customizado }`.
+
+### 5.6. Gerador de Documentos Fictícios (`/mock/generate`)
+Gera um XML de teste completo, no padrão Sefaz, com base no cadastro do transportador.
+```json
+{
+  "tenant_id": "tenant_expressa_teste",
+  "tipo_doc": "CTE",
+  "policy_id": "pol_rctrc_expressa",
+  "incluir_variaveis_apolice": true,
+  "omitir_obrigatorias": []
+}
+```
+Quando `incluir_variaveis_apolice` é `true`, as variáveis cadastradas em `/policy-rules` para aquela apólice são escritas no campo de observação (`xObs`/`infCpl`) do XML gerado, no formato `NOME=valor; NOME2=valor2`, e o motor de averbação sabe ler esse campo de volta. Use `omitir_obrigatorias` (lista de nomes de variável) para gerar propositalmente um XML com uma variável obrigatória faltando, e testar o fluxo de recusa/recuperação.
+
+### 5.7. Importação em Lote de XMLs (`/importar-lote`)
+`multipart/form-data` com `tenant_id`, `ramo` e um ou mais arquivos no campo `arquivos`. Roda cada XML pelo motor de averbação e retorna o código de sucesso ou recusa de cada um individualmente — útil para validar rapidamente se um lote de documentos averba ou não, e por qual motivo.
+
+### 5.8. Simulador de Carga em Lote Multi-Cliente (`/simulador/executar`, `/simulador/historico`)
+
+### 5.9. Relatório por Cliente ou Conjunto de Clientes (`/relatorio`)
+`GET /relatorio?tenant_ids=id1,id2,id3` (omitido = todos os clientes). Retorna total de averbações, sucesso, erro, valor total averbado e quebra por tipo de documento — tanto por cliente quanto consolidado.
+
+### 5.10. Expurgo de Dados de Teste (`/expurgo`)
+`POST /expurgo` — `{ dias: 30 }`.
+
+### 5.11. Dashboard (`/dashboard-stats`)
+
+### 5.12. Documentação (`/docs`)
+Retorna este mesmo guia em Markdown, para ser renderizado dentro do próprio Portal de Gestão.

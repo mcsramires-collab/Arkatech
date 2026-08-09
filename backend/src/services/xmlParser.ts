@@ -17,6 +17,27 @@ export class XMLParserService {
   });
 
   /**
+   * Extrai variáveis embutidas em um campo de observação livre (xObs / infCpl / xObsMDFe)
+   * no formato "NOME_VARIAVEL=valor; OUTRA_VARIAVEL=valor". É assim que o sistema lê,
+   * dentro de um campo texto do documento fiscal, o preenchimento de variáveis de apólice
+   * que não têm uma tag XML própria no padrão Sefaz.
+   */
+  private static extractObsVariables(obsText: string | undefined | null): Record<string, string> {
+    const result: Record<string, string> = {};
+    if (!obsText) return result;
+
+    const parts = String(obsText).split(';');
+    for (const part of parts) {
+      const idx = part.indexOf('=');
+      if (idx === -1) continue;
+      const key = part.slice(0, idx).trim();
+      const value = part.slice(idx + 1).trim();
+      if (key) result[key] = value;
+    }
+    return result;
+  }
+
+  /**
    * Realiza a leitura e extração de dados do XML ou JSON do documento Fiscal.
    */
   public static parse(content: string): ParsedDocumentData {
@@ -47,6 +68,7 @@ export class XMLParserService {
       let numeroDocumento = '0';
       let valorCarga = 0;
       const tagsMap: Record<string, any> = {};
+      let obsText = '';
 
       // CTe Parser
       if (parsedObj.CTe || parsedObj.cteProc) {
@@ -56,13 +78,14 @@ export class XMLParserService {
         numeroDocumento = String(cteNode.ide?.nCT || '0');
         valorCarga = Number(cteNode.vPrest?.vRec || cteNode.infCTeNorm?.infCarga?.vCarga || 0);
 
-        // Achatar tags relevantes
         tagsMap['vCarga'] = valorCarga;
         tagsMap['nCT'] = numeroDocumento;
         tagsMap['dhEmi'] = cteNode.ide?.dhEmi;
-        tagsMap['xObs'] = cteNode.compl?.xObs || '';
+        tagsMap['CFOP'] = cteNode.ide?.CFOP;
+        tagsMap['cUF'] = cteNode.ide?.cUF;
+        obsText = cteNode.compl?.xObs || cteNode.compl?.ObsCont?.xTexto || '';
+        tagsMap['xObs'] = obsText;
         tagsMap['infCpl'] = cteNode.compl?.ObsCont?.xTexto || '';
-        tagsMap['TIPO_EMBALAGEM'] = cteNode.infCTeNorm?.infCarga?.proPred || tagsMap['xObs'];
       }
       // NFe Parser
       else if (parsedObj.NFe || parsedObj.nfeProc) {
@@ -73,9 +96,11 @@ export class XMLParserService {
         valorCarga = Number(nfeNode.total?.ICMSTot?.vProd || nfeNode.total?.ICMSTot?.vNF || 0);
 
         tagsMap['vProd'] = valorCarga;
+        tagsMap['vNF'] = Number(nfeNode.total?.ICMSTot?.vNF || valorCarga);
         tagsMap['nNF'] = numeroDocumento;
         tagsMap['dhEmi'] = nfeNode.ide?.dhEmi;
-        tagsMap['infCpl'] = nfeNode.infAdic?.infCpl || '';
+        obsText = nfeNode.infAdic?.infCpl || '';
+        tagsMap['infCpl'] = obsText;
       }
       // NFSe Parser
       else if (parsedObj.CompNfse || parsedObj.Nfse) {
@@ -86,7 +111,28 @@ export class XMLParserService {
 
         tagsMap['vServicos'] = valorCarga;
         tagsMap['numero'] = numeroDocumento;
+        obsText = nfseNode.outrasInformacoes || '';
       }
+      // MDFe Parser
+      else if (parsedObj.MDFe || parsedObj.mdfeProc) {
+        tipoDocumento = 'MDFE';
+        const mdfeNode = parsedObj.MDFe?.infMDFe || parsedObj.mdfeProc?.MDFe?.infMDFe || {};
+        chaveDocumento = mdfeNode['@_Id']?.replace('MDFe', '') || chaveDocumento;
+        numeroDocumento = String(mdfeNode.ide?.nMDF || '0');
+        valorCarga = Number(mdfeNode.tot?.vCarga || 0);
+
+        tagsMap['nMDF'] = numeroDocumento;
+        tagsMap['dhEmi'] = mdfeNode.ide?.dhEmi;
+        tagsMap['vCarga'] = valorCarga;
+        tagsMap['UFIni'] = mdfeNode.ide?.UFIni;
+        tagsMap['UFFim'] = mdfeNode.ide?.UFFim;
+        obsText = mdfeNode.infAdic?.infCpl || '';
+        tagsMap['infCpl'] = obsText;
+      }
+
+      // Extrai variáveis de apólice embutidas no campo de observação (OBS)
+      const obsVars = this.extractObsVariables(obsText);
+      Object.assign(tagsMap, obsVars);
 
       return {
         tipoDocumento,

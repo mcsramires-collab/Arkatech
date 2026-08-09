@@ -2,7 +2,7 @@ export type TenantEnvironment = 'teste' | 'producao';
 export type TenantStatus = 'ATIVO' | 'INATIVO';
 export type UserRole = 'ADMIN' | 'SEGURADORA' | 'CORRETORA' | 'TRANSPORTADOR';
 export type RamoApolice = 'RCTRC' | 'RCDC' | 'RCV';
-export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE';
+export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE' | 'MDFE';
 
 export interface Tenant {
   id: string;
@@ -44,6 +44,11 @@ export interface Policy {
   vigencia_fim: string;
 }
 
+/**
+ * Variável de negócio específica de uma APÓLICE (definida pela seguradora/corretora
+ * para aquela cobertura, ex: "Container", "Valor Declarado"). NÃO confundir com
+ * DocumentRule, que é a obrigatoriedade de tags do PADRÃO SEFAZ por tipo de documento.
+ */
 export interface PolicyRule {
   id: string;
   policy_id: string;
@@ -51,7 +56,26 @@ export interface PolicyRule {
   tag_path: string; // Ex: "infCte.vPrest.vRec" ou "infCpl" ou "xObs"
   nome_variavel: string;
   obrigatoria: boolean;
+  exemplo_preenchimento?: string; // Valor de exemplo usado ao gerar XML MOCK com esta variável
   instrucao_recuperacao?: string;
+}
+
+/**
+ * Regra de obrigatoriedade de TAG por TIPO DE DOCUMENTO (CTE, NFE, NFSE, MDFE),
+ * independente de qual apólice/seguradora está sendo usada. As tags nativas do
+ * padrão Sefaz já nascem cadastradas (origem = 'SEFAZ_PADRAO'), mas podem ser
+ * editadas, ter a obrigatoriedade alternada, ou removidas pelo administrador.
+ * Novas tags customizadas podem ser incluídas (origem = 'CUSTOM').
+ */
+export interface DocumentRule {
+  id: string;
+  tipo_documento: TipoDocumento;
+  tag_path: string;
+  nome_variavel: string;
+  obrigatoria: boolean;
+  origem: 'SEFAZ_PADRAO' | 'CUSTOM';
+  observacao?: string;
+  created_at: string;
 }
 
 export interface ResponseTemplate {
