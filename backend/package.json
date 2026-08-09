@@ -7,7 +7,7 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "start:worker": "node src/worker.js",
-    "lint": "eslint . --ext .js"
+    "lint": "tsc --noEmit --skipLibCheck"
   },
   "dependencies": {
     "cors": "^2.8.5",
