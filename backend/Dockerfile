@@ -1,15 +1,15 @@
-FROM node:18-alpine AS builder
+# ---- Stage 1: dependências e build ----
+FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
-COPY . .
-RUN npm run build
+RUN npm ci --omit=dev
 
-FROM node:18-alpine AS runner
+# ---- Stage 2: imagem final enxuta ----
+FROM node:20-alpine
+RUN apk add --no-cache wget && addgroup -S app && adduser -S app -G app
 WORKDIR /app
-ENV NODE_ENV=production
-COPY package*.json ./
-RUN npm install --only=production
-COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY . .
+USER app
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+CMD ["node", "src/server.js"]

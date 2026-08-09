@@ -1,23 +1,18 @@
-# Node modules & builds
-node_modules/
-dist/
-build/
-.vite/
-
-# Env & Local secrets
+# Segredos - NUNCA versionar
 .env
 .env.production
-.env.local
+.env.*.local
 
-# Storage local data
-data_store.json
+# Dependências
+node_modules/
+frontend/dist/
 
-# Excluir pastas duplicadas e zips
-ARCKATECH/
-ARCKATECH.zip
+# Certificados
+nginx/certbot/conf/*
+!nginx/certbot/conf/.gitkeep
+nginx/certbot/www/*
+!nginx/certbot/www/.gitkeep
 
-# OS & IDE
-.DS_Store
-.vscode/
-.idea/
+# Logs e sistema
 *.log
+.DS_Store
