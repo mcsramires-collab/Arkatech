@@ -509,7 +509,7 @@ class DBStore {
       status: 'INATIVA',
       permitir_inativo_vencido: true, // Flag de bypass habilitada
       vigencia_inicio: '2025-01-01T00:00:00Z',
-      vigencia_fim: '2025-12-31T23:59:59Z' // Apólice Vencida,
+      vigencia_fim: '2025-12-31T23:59:59Z', // Apólice Vencida
       lmi: 150000,
       aceita_averbacao_como_destinatario: false
     };
