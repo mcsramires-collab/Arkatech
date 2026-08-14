@@ -25,7 +25,7 @@ import {
   ListChecks
 } from 'lucide-react';
 import { ApiClient } from './services/api';
-import { Tenant, Policy, PolicyRule, DocumentRule, ResponseTemplate, BatchTestRun, Insurer, Broker, TipoDocumento } from './types';
+import { Tenant, Policy, PolicyRule, DocumentRule, ResponseTemplate, BatchTestRun, Insurer, Broker, TipoDocumento, InsurerCoverage } from './types';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<
@@ -33,6 +33,12 @@ export function App() {
     | 'tenants'
     | 'policies'
     | 'documentrules'
+    | 'insurerclients'
+    | 'insurercoverages'
+    | 'brokerview'
+    | 'approvals'
+    | 'transporterportal'
+    | 'companyview'
     | 'templates'
     | 'emitter'
     | 'import'
@@ -57,6 +63,86 @@ export function App() {
   const [documentRules, setDocumentRules] = useState<DocumentRule[]>([]);
   const [insurers, setInsurers] = useState<Insurer[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
+  const [insurerCoverages, setInsurerCoverages] = useState<InsurerCoverage[]>([]);
+
+  // Cadastro de Cliente pela Seguradora (Fase 2)
+  const [insurerClientForm, setInsurerClientForm] = useState({
+    insurer_id: '',
+    broker_id: '',
+    cnpj: '',
+    razao_social: '',
+    nome_fantasia: '',
+    ramo: 'RCTRC',
+    numero_apolice: '',
+    lmi: '',
+    permitir_inativo_vencido: false,
+    aceita_averbacao_como_destinatario: false,
+    contato_nome: '',
+    contato_email: '',
+    contato_telefone_fixo: '',
+    contato_celular: ''
+  });
+  const [lookupCnpj, setLookupCnpj] = useState('');
+  const [lookupResult, setLookupResult] = useState<any>(null);
+  const [insurerClientResult, setInsurerClientResult] = useState<any>(null);
+  const [conflitoAtivo, setConflitoAtivo] = useState<any>(null);
+
+  // Coberturas Adicionais (Fase 2)
+  const [newCoverage, setNewCoverage] = useState({
+    insurer_id: '',
+    ramo: '',
+    titulo: '',
+    exemplo_preenchimento: '',
+    obrigatoria: false,
+    aplicar_todos_clientes: true,
+    tenant_id: '',
+    tipo_valor: 'informativo' as 'monetario' | 'informativo'
+  });
+
+  // Visão Corretora (Fase 4)
+  const [brokerViewBrokerId, setBrokerViewBrokerId] = useState('');
+  const [brokerClients, setBrokerClients] = useState<any[]>([]);
+  const [brokerAverbacoes, setBrokerAverbacoes] = useState<any[]>([]);
+  const [brokerApenasRecusadas, setBrokerApenasRecusadas] = useState(false);
+  const [brokerNewClientForm, setBrokerNewClientForm] = useState({
+    insurer_id: '',
+    broker_id: '',
+    cnpj: '',
+    razao_social: '',
+    nome_fantasia: '',
+    ramo: 'RCTRC',
+    numero_apolice: '',
+    lmi: '',
+    permitir_inativo_vencido: false,
+    aceita_averbacao_como_destinatario: false,
+    contato_nome: '',
+    contato_email: ''
+  });
+  const [brokerClientResult, setBrokerClientResult] = useState<any>(null);
+
+  // Aprovações Pendentes (Fase 4)
+  const [approvalInsurerId, setApprovalInsurerId] = useState('');
+  const [approvalRequests, setApprovalRequests] = useState<any[]>([]);
+
+  // Portal do Transportador (Fase 5)
+  const [portalTenantId, setPortalTenantId] = useState('');
+  const [portalActivation, setPortalActivation] = useState<any>(null);
+  const [portalPolicies, setPortalPolicies] = useState<any[]>([]);
+  const [portalAverbacoes, setPortalAverbacoes] = useState<any[]>([]);
+  const [portalPendencias, setPortalPendencias] = useState<any[]>([]);
+  const [portalCorrecaoVars, setPortalCorrecaoVars] = useState<Record<string, Record<string, string>>>({});
+  const [portalCorrecaoResult, setPortalCorrecaoResult] = useState<any>(null);
+
+  // Visão Empresa - ADM (Fase 6)
+  const [companyTenants, setCompanyTenants] = useState<any[]>([]);
+  const [companyInternalUsers, setCompanyInternalUsers] = useState<any[]>([]);
+  const [companyGlobalReport, setCompanyGlobalReport] = useState<any>(null);
+  const [newInsurerForm, setNewInsurerForm] = useState({ cnpj: '', razao_social: '', nome_fantasia: '' });
+  const [newInternalUserForm, setNewInternalUserForm] = useState<{ nome: string; email: string; role: 'ADM' | 'AGENTE' }>({
+    nome: '',
+    email: '',
+    role: 'AGENTE'
+  });
 
   // Selected State Filters
   const [selectedTenantId, setSelectedTenantId] = useState<string>('');
@@ -184,6 +270,207 @@ export function App() {
 
     const brk = await ApiClient.getBrokers();
     if (brk.status === 'sucesso') setBrokers(brk.brokers);
+
+    const cov = await ApiClient.getInsurerCoverages();
+    if (cov.status === 'sucesso') setInsurerCoverages(cov.coverages);
+  };
+
+  // --- Fase 2: Cadastro de Cliente pela Seguradora ---
+  const handleLookupCnpj = async () => {
+    if (!lookupCnpj) return;
+    const res = await ApiClient.lookupTenantByCnpj(lookupCnpj);
+    setLookupResult(res);
+  };
+
+  const handleCreateInsurerClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setInsurerClientResult(null);
+    setConflitoAtivo(null);
+
+    if (!insurerClientForm.insurer_id || !insurerClientForm.broker_id || !insurerClientForm.cnpj || !insurerClientForm.razao_social || !insurerClientForm.numero_apolice) {
+      alert('Preencha seguradora, corretora, CNPJ, razão social e número da apólice.');
+      return;
+    }
+
+    const res = await ApiClient.createInsurerClient(insurerClientForm);
+
+    if (res.status === 'conflito') {
+      setConflitoAtivo(res);
+      return;
+    }
+
+    setInsurerClientResult(res);
+    if (res.status === 'sucesso') {
+      loadData();
+    }
+  };
+
+  const handleAssumePolicy = async () => {
+    if (!conflitoAtivo) return;
+    const res = await ApiClient.assumePolicy(conflitoAtivo.tenant_id, {
+      insurer_id: insurerClientForm.insurer_id,
+      broker_id: insurerClientForm.broker_id,
+      ramo: conflitoAtivo.ramo,
+      numero_apolice: insurerClientForm.numero_apolice,
+      lmi: insurerClientForm.lmi || undefined,
+      permitir_inativo_vencido: insurerClientForm.permitir_inativo_vencido,
+      aceita_averbacao_como_destinatario: insurerClientForm.aceita_averbacao_como_destinatario
+    });
+    setInsurerClientResult(res);
+    setConflitoAtivo(null);
+    if (res.status === 'sucesso') loadData();
+  };
+
+  // --- Fase 2: Coberturas Adicionais ---
+  const handleCreateCoverage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCoverage.insurer_id || !newCoverage.titulo) {
+      alert('Selecione a seguradora e informe o título da cobertura.');
+      return;
+    }
+    const res = await ApiClient.createInsurerCoverage({
+      ...newCoverage,
+      ramo: newCoverage.ramo || undefined,
+      tenant_id: newCoverage.aplicar_todos_clientes ? undefined : newCoverage.tenant_id
+    });
+    if (res.status === 'sucesso') {
+      setNewCoverage({
+        insurer_id: newCoverage.insurer_id,
+        ramo: '',
+        titulo: '',
+        exemplo_preenchimento: '',
+        obrigatoria: false,
+        aplicar_todos_clientes: true,
+        tenant_id: '',
+        tipo_valor: 'informativo'
+      });
+      loadData();
+    } else {
+      alert(res.mensagem);
+    }
+  };
+
+  const handleDeleteCoverage = async (id: string) => {
+    if (confirm('Remover esta cobertura adicional?')) {
+      await ApiClient.deleteInsurerCoverage(id);
+      loadData();
+    }
+  };
+
+  // --- Fase 4: Visão Corretora ---
+  const handleLoadBrokerView = async () => {
+    if (!brokerViewBrokerId) return;
+    const clientsRes = await ApiClient.getBrokerClients(brokerViewBrokerId);
+    if (clientsRes.status === 'sucesso') setBrokerClients(clientsRes.clients);
+
+    const avbRes = await ApiClient.getBrokerAverbacoes(brokerViewBrokerId, brokerApenasRecusadas);
+    if (avbRes.status === 'sucesso') setBrokerAverbacoes(avbRes.averbacoes);
+  };
+
+  const handleCreateBrokerClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBrokerClientResult(null);
+    const payload = { ...brokerNewClientForm, broker_id: brokerViewBrokerId };
+    if (!payload.insurer_id || !payload.broker_id || !payload.cnpj || !payload.razao_social || !payload.numero_apolice) {
+      alert('Preencha seguradora, CNPJ, razão social e número da apólice (selecione a corretora acima primeiro).');
+      return;
+    }
+    const res = await ApiClient.createBrokerClient(payload);
+    setBrokerClientResult(res);
+    if (res.status === 'sucesso') {
+      handleLoadBrokerView();
+    }
+  };
+
+  // --- Fase 4: Aprovações Pendentes ---
+  const handleLoadApprovals = async () => {
+    const res = await ApiClient.getApprovalRequests(approvalInsurerId || undefined, 'PENDENTE');
+    if (res.status === 'sucesso') setApprovalRequests(res.requests);
+  };
+
+  const handleResolveApproval = async (id: string, status: 'APROVADO' | 'REJEITADO') => {
+    await ApiClient.resolveApprovalRequest(id, status, 'admin_teste');
+    handleLoadApprovals();
+  };
+
+  // --- Fase 5: Portal do Transportador ---
+  const handleLoadPortal = async () => {
+    if (!portalTenantId) return;
+    const activationRes = await ApiClient.getActivationStatus(portalTenantId);
+    setPortalActivation(activationRes);
+
+    if (activationRes.conta_ativada) {
+      const policiesRes = await ApiClient.getTenantPolicies(portalTenantId);
+      if (policiesRes.status === 'sucesso') setPortalPolicies(policiesRes.policies);
+
+      const avbRes = await ApiClient.getTenantAverbacoes(portalTenantId);
+      if (avbRes.status === 'sucesso') setPortalAverbacoes(avbRes.averbacoes);
+
+      const pendRes = await ApiClient.getRecoveryPendentes(portalTenantId);
+      if (pendRes.status === 'sucesso') setPortalPendencias(pendRes.pendencias);
+    } else {
+      setPortalPolicies([]);
+      setPortalAverbacoes([]);
+      setPortalPendencias([]);
+    }
+  };
+
+  const handleAcceptActivation = async () => {
+    if (!portalActivation?.token_pendente) return;
+    await ApiClient.acceptActivation(portalActivation.token_pendente);
+    handleLoadPortal();
+  };
+
+  const handleCorrigirPendencia = async (token: string, variaveisFaltantes: string[]) => {
+    const vars = portalCorrecaoVars[token] || {};
+    const res = await ApiClient.corrigirRecoveryNoPortal(token, vars);
+    setPortalCorrecaoResult(res);
+    if (res.status !== 'erro') {
+      handleLoadPortal();
+    }
+  };
+
+  // --- Fase 6: Visão Empresa (ADM) ---
+  const handleLoadCompanyView = async () => {
+    const tenantsRes = await ApiClient.getInternalTenants();
+    if (tenantsRes.status === 'sucesso') setCompanyTenants(tenantsRes.tenants);
+
+    const usersRes = await ApiClient.getInternalUsers();
+    if (usersRes.status === 'sucesso') setCompanyInternalUsers(usersRes.users);
+
+    const reportRes = await ApiClient.getGlobalRelatorio();
+    if (reportRes.status === 'sucesso') setCompanyGlobalReport(reportRes);
+  };
+
+  const handleProvisionInsurer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newInsurerForm.cnpj || !newInsurerForm.razao_social) {
+      alert('Informe CNPJ e razão social da seguradora.');
+      return;
+    }
+    const res = await ApiClient.provisionInsurer(newInsurerForm);
+    if (res.status === 'sucesso') {
+      setNewInsurerForm({ cnpj: '', razao_social: '', nome_fantasia: '' });
+      handleLoadCompanyView();
+      loadData();
+    } else {
+      alert(res.mensagem);
+    }
+  };
+
+  const handleCreateInternalUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newInternalUserForm.nome || !newInternalUserForm.email) {
+      alert('Informe nome e e-mail.');
+      return;
+    }
+    const res = await ApiClient.createInternalUser(newInternalUserForm);
+    if (res.status === 'sucesso') {
+      setNewInternalUserForm({ nome: '', email: '', role: 'AGENTE' });
+      handleLoadCompanyView();
+    } else {
+      alert(res.mensagem);
+    }
   };
 
   // Create Tenant
@@ -490,6 +777,54 @@ export function App() {
                 onClick={() => setActiveTab('documentrules')}
               >
                 <ListChecks size={18} /> Regras por Documento
+              </button>
+            </li>
+            <li>
+              <button
+                className={`nav-item ${activeTab === 'insurerclients' ? 'active' : ''}`}
+                onClick={() => setActiveTab('insurerclients')}
+              >
+                <Users size={18} /> Cadastro de Cliente (Seguradora)
+              </button>
+            </li>
+            <li>
+              <button
+                className={`nav-item ${activeTab === 'insurercoverages' ? 'active' : ''}`}
+                onClick={() => setActiveTab('insurercoverages')}
+              >
+                <Layers size={18} /> Coberturas Adicionais
+              </button>
+            </li>
+            <li>
+              <button
+                className={`nav-item ${activeTab === 'brokerview' ? 'active' : ''}`}
+                onClick={() => setActiveTab('brokerview')}
+              >
+                <Users size={18} /> Visão Corretora
+              </button>
+            </li>
+            <li>
+              <button
+                className={`nav-item ${activeTab === 'approvals' ? 'active' : ''}`}
+                onClick={() => setActiveTab('approvals')}
+              >
+                <CheckCircle2 size={18} /> Aprovações Pendentes
+              </button>
+            </li>
+            <li>
+              <button
+                className={`nav-item ${activeTab === 'transporterportal' ? 'active' : ''}`}
+                onClick={() => setActiveTab('transporterportal')}
+              >
+                <Globe size={18} /> Portal do Transportador
+              </button>
+            </li>
+            <li>
+              <button
+                className={`nav-item ${activeTab === 'companyview' ? 'active' : ''}`}
+                onClick={() => setActiveTab('companyview')}
+              >
+                <ShieldCheck size={18} /> Visão Empresa (ADM)
               </button>
             </li>
             <li>
@@ -1240,6 +1575,616 @@ export function App() {
                           <Edit3 size={12} /> Editar
                         </button>
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: CADASTRO DE CLIENTE PELA SEGURADORA (com resolução de conflito) */}
+        {activeTab === 'insurerclients' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
+                Consultar CNPJ Antes de Cadastrar
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                Mostra apenas os números de ramo já vigentes para este CNPJ — nunca seguradora, corretora ou valores de terceiros.
+              </p>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="CNPJ do transportador"
+                  value={lookupCnpj}
+                  onChange={(e) => setLookupCnpj(e.target.value)}
+                  style={{ maxWidth: '280px' }}
+                />
+                <button className="btn btn-secondary" onClick={handleLookupCnpj}>Consultar</button>
+              </div>
+              {lookupResult && (
+                <div style={{ marginTop: '16px', fontSize: '0.875rem' }}>
+                  {lookupResult.encontrado ? (
+                    <p>
+                      CNPJ já cadastrado. Ramos vigentes:{' '}
+                      {lookupResult.ramos_vigentes.length > 0 ? (
+                        lookupResult.ramos_vigentes.map((r: string) => (
+                          <span key={r} className="badge badge-info" style={{ marginRight: '6px' }}>{r}</span>
+                        ))
+                      ) : (
+                        <em>nenhum ramo vigente</em>
+                      )}
+                    </p>
+                  ) : (
+                    <p>CNPJ ainda não cadastrado na plataforma.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Cadastrar Cliente (Transportador/Embarcador)
+              </h2>
+              <form onSubmit={handleCreateInsurerClient} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                <div className="form-group">
+                  <label className="form-label">Seguradora</label>
+                  <select className="form-select" value={insurerClientForm.insurer_id} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, insurer_id: e.target.value })}>
+                    <option value="">-- Selecione --</option>
+                    {insurers.map((i) => <option key={i.id} value={i.id}>{i.nome_fantasia || i.nome}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Corretora</label>
+                  <select className="form-select" value={insurerClientForm.broker_id} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, broker_id: e.target.value })}>
+                    <option value="">-- Selecione --</option>
+                    {brokers.map((b) => <option key={b.id} value={b.id}>{b.nome_fantasia || b.nome}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Ramo</label>
+                  <select className="form-select" value={insurerClientForm.ramo} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, ramo: e.target.value })}>
+                    <option value="RCTRC">RCTRC</option>
+                    <option value="RCDC">RCDC</option>
+                    <option value="RCV">RCV</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">CNPJ do Cliente</label>
+                  <input type="text" className="form-input" value={insurerClientForm.cnpj} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, cnpj: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Razão Social</label>
+                  <input type="text" className="form-input" value={insurerClientForm.razao_social} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, razao_social: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Nome Fantasia</label>
+                  <input type="text" className="form-input" value={insurerClientForm.nome_fantasia} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, nome_fantasia: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Número da Apólice</label>
+                  <input type="text" className="form-input" value={insurerClientForm.numero_apolice} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, numero_apolice: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">LMI (R$)</label>
+                  <input type="text" className="form-input" value={insurerClientForm.lmi} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, lmi: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">E-mail de Contato</label>
+                  <input type="text" className="form-input" value={insurerClientForm.contato_email} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, contato_email: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Nome do Contato</label>
+                  <input type="text" className="form-input" value={insurerClientForm.contato_nome} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, contato_nome: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Telefone Fixo</label>
+                  <input type="text" className="form-input" value={insurerClientForm.contato_telefone_fixo} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, contato_telefone_fixo: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Celular</label>
+                  <input type="text" className="form-input" value={insurerClientForm.contato_celular} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, contato_celular: e.target.value })} />
+                </div>
+                <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '8px', justifyContent: 'flex-end' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem' }}>
+                    <input type="checkbox" checked={insurerClientForm.permitir_inativo_vencido} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, permitir_inativo_vencido: e.target.checked })} />
+                    Permitir averbação com apólice vencida/inativa
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem' }}>
+                    <input type="checkbox" checked={insurerClientForm.aceita_averbacao_como_destinatario} onChange={(e) => setInsurerClientForm({ ...insurerClientForm, aceita_averbacao_como_destinatario: e.target.checked })} />
+                    Aceita averbação como destinatário
+                  </label>
+                </div>
+                <div style={{ gridColumn: 'span 3', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button type="submit" className="btn btn-primary"><Plus size={16} /> Cadastrar Cliente</button>
+                </div>
+              </form>
+
+              {conflitoAtivo && (
+                <div style={{ marginTop: '20px', padding: '16px', border: '1px solid var(--accent-red, #e05252)', borderRadius: 'var(--radius-sm)' }}>
+                  <p style={{ marginBottom: '12px' }}>
+                    <AlertTriangle size={16} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+                    {conflitoAtivo.mensagem}
+                  </p>
+                  <button className="btn btn-primary" onClick={handleAssumePolicy}>
+                    Assumir Responsabilidade desta Apólice
+                  </button>
+                </div>
+              )}
+
+              {insurerClientResult && (
+                <div className="code-block" style={{ marginTop: '20px' }}>
+                  {JSON.stringify(insurerClientResult, null, 2)}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: COBERTURAS ADICIONAIS DA SEGURADORA */}
+        {activeTab === 'insurercoverages' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
+                Criar Cobertura Adicional
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                Coberturas do tipo <strong>monetário</strong> são somadas ao valor final da averbação quando preenchidas; <strong>informativas</strong> não somam.
+              </p>
+              <form onSubmit={handleCreateCoverage} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px' }}>
+                <div className="form-group">
+                  <label className="form-label">Seguradora</label>
+                  <select className="form-select" value={newCoverage.insurer_id} onChange={(e) => setNewCoverage({ ...newCoverage, insurer_id: e.target.value })}>
+                    <option value="">-- Selecione --</option>
+                    {insurers.map((i) => <option key={i.id} value={i.id}>{i.nome_fantasia || i.nome}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Ramo (opcional)</label>
+                  <select className="form-select" value={newCoverage.ramo} onChange={(e) => setNewCoverage({ ...newCoverage, ramo: e.target.value })}>
+                    <option value="">Todos os ramos</option>
+                    <option value="RCTRC">RCTRC</option>
+                    <option value="RCDC">RCDC</option>
+                    <option value="RCV">RCV</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Título da Cobertura</label>
+                  <input type="text" className="form-input" placeholder="ex: Container" value={newCoverage.titulo} onChange={(e) => setNewCoverage({ ...newCoverage, titulo: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Exemplo de Preenchimento</label>
+                  <input type="text" className="form-input" placeholder="ex: R$ 25.000,00" value={newCoverage.exemplo_preenchimento} onChange={(e) => setNewCoverage({ ...newCoverage, exemplo_preenchimento: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Tipo de Valor</label>
+                  <select className="form-select" value={newCoverage.tipo_valor} onChange={(e) => setNewCoverage({ ...newCoverage, tipo_valor: e.target.value as any })}>
+                    <option value="informativo">Informativo (não soma)</option>
+                    <option value="monetario">Monetário (soma ao valor final)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
+                    <input type="checkbox" checked={newCoverage.obrigatoria} onChange={(e) => setNewCoverage({ ...newCoverage, obrigatoria: e.target.checked })} />
+                    Obrigatória
+                  </label>
+                  {newCoverage.obrigatoria && (
+                    <p style={{ fontSize: '0.75rem', color: 'var(--accent-red, #e05252)', marginTop: '4px' }}>
+                      Se marcado e o cliente enviar o documento sem essa informação, seu documento será recusado.
+                    </p>
+                  )}
+                </div>
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
+                    <input type="checkbox" checked={newCoverage.aplicar_todos_clientes} onChange={(e) => setNewCoverage({ ...newCoverage, aplicar_todos_clientes: e.target.checked })} />
+                    Aplicar para todos os clientes
+                  </label>
+                </div>
+                {!newCoverage.aplicar_todos_clientes && (
+                  <div className="form-group">
+                    <label className="form-label">Cliente Específico</label>
+                    <select className="form-select" value={newCoverage.tenant_id} onChange={(e) => setNewCoverage({ ...newCoverage, tenant_id: e.target.value })}>
+                      <option value="">-- Selecione --</option>
+                      {tenants.map((t) => <option key={t.id} value={t.id}>{t.razao_social}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div style={{ gridColumn: 'span 4', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button type="submit" className="btn btn-primary"><Plus size={16} /> Criar Cobertura</button>
+                </div>
+              </form>
+            </div>
+
+            <div className="table-container">
+              <table className="custom-table">
+                <thead>
+                  <tr>
+                    <th>Seguradora</th>
+                    <th>Ramo</th>
+                    <th>Título</th>
+                    <th>Tipo</th>
+                    <th>Escopo</th>
+                    <th>Obrigatória</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {insurerCoverages.map((c) => {
+                    const insurer = insurers.find((i) => i.id === c.insurer_id);
+                    const tenant = tenants.find((t) => t.id === c.tenant_id);
+                    return (
+                      <tr key={c.id}>
+                        <td>{insurer?.nome_fantasia || insurer?.nome || c.insurer_id}</td>
+                        <td>{c.ramo || <em>Todos</em>}</td>
+                        <td><strong>{c.titulo}</strong></td>
+                        <td><span className="badge badge-info">{c.tipo_valor}</span></td>
+                        <td>{c.aplicar_todos_clientes ? 'Todos os clientes' : tenant?.razao_social || c.tenant_id}</td>
+                        <td>{c.obrigatoria ? <span className="badge badge-error">SIM</span> : <span className="badge badge-success">NÃO</span>}</td>
+                        <td>
+                          <button className="btn btn-danger" style={{ padding: '4px 8px', fontSize: '0.75rem' }} onClick={() => handleDeleteCoverage(c.id)}>
+                            <Trash2 size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: VISÃO CORRETORA (carteira, averbações da carteira, criação de cliente com delegação) */}
+        {activeTab === 'brokerview' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Visão Corretora — Carteira de Clientes
+              </h2>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', marginBottom: '20px' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Corretora</label>
+                  <select className="form-select" value={brokerViewBrokerId} onChange={(e) => setBrokerViewBrokerId(e.target.value)}>
+                    <option value="">-- Selecione --</option>
+                    {brokers.map((b) => <option key={b.id} value={b.id}>{b.nome_fantasia || b.nome}</option>)}
+                  </select>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', paddingBottom: '10px' }}>
+                  <input type="checkbox" checked={brokerApenasRecusadas} onChange={(e) => setBrokerApenasRecusadas(e.target.checked)} />
+                  Só recusadas
+                </label>
+                <button className="btn btn-secondary" onClick={handleLoadBrokerView}>Carregar Carteira</button>
+              </div>
+
+              <h3 style={{ fontSize: '0.95rem', marginBottom: '10px' }}>Clientes vinculados</h3>
+              <table className="custom-table" style={{ marginBottom: '24px' }}>
+                <thead><tr><th>Cliente</th><th>CNPJ</th><th>Apólices</th></tr></thead>
+                <tbody>
+                  {brokerClients.map((c) => (
+                    <tr key={c.tenant?.id}>
+                      <td>{c.tenant?.razao_social}</td>
+                      <td>{c.tenant?.cnpj}</td>
+                      <td>{c.policies.map((p: any) => `${p.numero_apolice} (${p.ramo})`).join(', ')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <h3 style={{ fontSize: '0.95rem', marginBottom: '10px' }}>Averbações da carteira {brokerApenasRecusadas && '(apenas recusadas)'}</h3>
+              <table className="custom-table">
+                <thead><tr><th>Documento</th><th>Status</th><th>Código</th><th>Mensagem</th></tr></thead>
+                <tbody>
+                  {brokerAverbacoes.map((a: any) => (
+                    <tr key={a.id}>
+                      <td>{a.tipo_documento} — {a.chave_documento?.slice(0, 12)}...</td>
+                      <td>{a.status === 'ERRO' ? <span className="badge badge-error">RECUSADA</span> : <span className="badge badge-success">{a.status}</span>}</td>
+                      <td><code>{a.codigo_resposta}</code></td>
+                      <td style={{ fontSize: '0.8rem' }}>{a.mensagem_resposta}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
+                Cadastrar Cliente em Nome da Seguradora
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                Selecione a corretora acima. Se a matriz de delegação exigir aprovação para "Criar Cliente", a solicitação fica pendente em vez de aplicar direto.
+              </p>
+              <form onSubmit={handleCreateBrokerClient} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                <div className="form-group">
+                  <label className="form-label">Seguradora</label>
+                  <select className="form-select" value={brokerNewClientForm.insurer_id} onChange={(e) => setBrokerNewClientForm({ ...brokerNewClientForm, insurer_id: e.target.value })}>
+                    <option value="">-- Selecione --</option>
+                    {insurers.map((i) => <option key={i.id} value={i.id}>{i.nome_fantasia || i.nome}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Ramo</label>
+                  <select className="form-select" value={brokerNewClientForm.ramo} onChange={(e) => setBrokerNewClientForm({ ...brokerNewClientForm, ramo: e.target.value })}>
+                    <option value="RCTRC">RCTRC</option>
+                    <option value="RCDC">RCDC</option>
+                    <option value="RCV">RCV</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Número da Apólice</label>
+                  <input type="text" className="form-input" value={brokerNewClientForm.numero_apolice} onChange={(e) => setBrokerNewClientForm({ ...brokerNewClientForm, numero_apolice: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">CNPJ do Cliente</label>
+                  <input type="text" className="form-input" value={brokerNewClientForm.cnpj} onChange={(e) => setBrokerNewClientForm({ ...brokerNewClientForm, cnpj: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Razão Social</label>
+                  <input type="text" className="form-input" value={brokerNewClientForm.razao_social} onChange={(e) => setBrokerNewClientForm({ ...brokerNewClientForm, razao_social: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Nome Fantasia</label>
+                  <input type="text" className="form-input" value={brokerNewClientForm.nome_fantasia} onChange={(e) => setBrokerNewClientForm({ ...brokerNewClientForm, nome_fantasia: e.target.value })} />
+                </div>
+                <div style={{ gridColumn: 'span 3', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button type="submit" className="btn btn-primary"><Plus size={16} /> Cadastrar Cliente</button>
+                </div>
+              </form>
+
+              {brokerClientResult && (
+                <div style={{ marginTop: '16px' }}>
+                  {brokerClientResult.status === 'pendente_aprovacao' ? (
+                    <div style={{ padding: '12px', border: '1px solid var(--accent-amber, #d9a441)', borderRadius: 'var(--radius-sm)' }}>
+                      <AlertTriangle size={16} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+                      {brokerClientResult.mensagem}
+                    </div>
+                  ) : (
+                    <div className="code-block">{JSON.stringify(brokerClientResult, null, 2)}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: APROVAÇÕES PENDENTES (seguradora resolve o que a corretora propôs) */}
+        {activeTab === 'approvals' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Aprovações Pendentes
+              </h2>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', marginBottom: '20px' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Filtrar por Seguradora (opcional)</label>
+                  <select className="form-select" value={approvalInsurerId} onChange={(e) => setApprovalInsurerId(e.target.value)}>
+                    <option value="">Todas</option>
+                    {insurers.map((i) => <option key={i.id} value={i.id}>{i.nome_fantasia || i.nome}</option>)}
+                  </select>
+                </div>
+                <button className="btn btn-secondary" onClick={handleLoadApprovals}>Carregar</button>
+              </div>
+
+              <table className="custom-table">
+                <thead><tr><th>Ação</th><th>Corretora</th><th>Dados Propostos</th><th>Ações</th></tr></thead>
+                <tbody>
+                  {approvalRequests.map((a) => {
+                    const broker = brokers.find((b) => b.id === a.broker_id);
+                    return (
+                      <tr key={a.id}>
+                        <td><span className="badge badge-info">{a.action}</span></td>
+                        <td>{broker?.nome_fantasia || broker?.nome || a.broker_id}</td>
+                        <td style={{ fontSize: '0.75rem' }}><code>{JSON.stringify(a.payload)}</code></td>
+                        <td style={{ display: 'flex', gap: '8px' }}>
+                          <button className="btn btn-primary" style={{ padding: '6px 10px', fontSize: '0.75rem' }} onClick={() => handleResolveApproval(a.id, 'APROVADO')}>Aprovar</button>
+                          <button className="btn btn-danger" style={{ padding: '6px 10px', fontSize: '0.75rem' }} onClick={() => handleResolveApproval(a.id, 'REJEITADO')}>Rejeitar</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: PORTAL DO TRANSPORTADOR (ativação, apólices vinculadas, histórico simplificado, correção sem sair da tela) */}
+        {activeTab === 'transporterportal' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Portal do Transportador / Embarcador
+              </h2>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', marginBottom: '20px' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label className="form-label">Cliente</label>
+                  <select className="form-select" value={portalTenantId} onChange={(e) => setPortalTenantId(e.target.value)}>
+                    <option value="">-- Selecione --</option>
+                    {tenants.filter((t) => t.role === 'TRANSPORTADOR').map((t) => (
+                      <option key={t.id} value={t.id}>{t.razao_social}</option>
+                    ))}
+                  </select>
+                </div>
+                <button className="btn btn-secondary" onClick={handleLoadPortal}>Entrar no Portal</button>
+              </div>
+
+              {portalActivation && !portalActivation.conta_ativada && (
+                <div style={{ padding: '16px', border: '1px solid var(--accent-amber, #d9a441)', borderRadius: 'var(--radius-sm)', marginBottom: '20px' }}>
+                  <p style={{ marginBottom: '12px' }}>
+                    <AlertTriangle size={16} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+                    Sua conta ainda não foi ativada. Para acessar suas apólices e averbações, aceite o Termo de Uso (versão {portalActivation.termo_versao}).
+                  </p>
+                  <button className="btn btn-primary" onClick={handleAcceptActivation}>Li e aceito o Termo de Uso — Ativar Conta</button>
+                </div>
+              )}
+
+              {portalActivation?.conta_ativada && (
+                <>
+                  <h3 style={{ fontSize: '0.95rem', marginBottom: '10px' }}>Suas apólices</h3>
+                  <table className="custom-table" style={{ marginBottom: '24px' }}>
+                    <thead><tr><th>Ramo</th><th>Apólice</th><th>Seguradora</th><th>Corretora</th><th>Vigência</th></tr></thead>
+                    <tbody>
+                      {portalPolicies.map((p) => (
+                        <tr key={p.id}>
+                          <td><span className="badge badge-info">{p.ramo}</span></td>
+                          <td>{p.numero_apolice}</td>
+                          <td>{p.seguradora}</td>
+                          <td>{p.corretora}</td>
+                          <td style={{ fontSize: '0.75rem' }}>{new Date(p.vigencia_inicio).toLocaleDateString('pt-BR')} — {new Date(p.vigencia_fim).toLocaleDateString('pt-BR')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {portalPendencias.length > 0 && (
+                    <>
+                      <h3 style={{ fontSize: '0.95rem', marginBottom: '10px' }}>Pendências para corrigir</h3>
+                      {portalPendencias.map((pend: any) => (
+                        <div key={pend.token} style={{ padding: '14px', border: '1px solid var(--border-color, #333)', borderRadius: 'var(--radius-sm)', marginBottom: '12px' }}>
+                          <p style={{ fontSize: '0.85rem', marginBottom: '10px' }}>
+                            Documento {pend.tipo_documento} com pendência — faltou informar: <strong>{pend.variaveis_faltantes.join(', ')}</strong>
+                          </p>
+                          {pend.variaveis_faltantes.map((v: string) => (
+                            <input
+                              key={v}
+                              type="text"
+                              className="form-input"
+                              placeholder={v}
+                              style={{ marginBottom: '8px' }}
+                              value={portalCorrecaoVars[pend.token]?.[v] || ''}
+                              onChange={(e) =>
+                                setPortalCorrecaoVars({
+                                  ...portalCorrecaoVars,
+                                  [pend.token]: { ...(portalCorrecaoVars[pend.token] || {}), [v]: e.target.value }
+                                })
+                              }
+                            />
+                          ))}
+                          <button className="btn btn-primary" onClick={() => handleCorrigirPendencia(pend.token, pend.variaveis_faltantes)}>
+                            Corrigir e Reenviar (sem sair do portal)
+                          </button>
+                        </div>
+                      ))}
+                      {portalCorrecaoResult && (
+                        <div className="code-block" style={{ marginBottom: '20px' }}>{JSON.stringify(portalCorrecaoResult, null, 2)}</div>
+                      )}
+                    </>
+                  )}
+
+                  <h3 style={{ fontSize: '0.95rem', marginBottom: '10px' }}>Histórico de averbações</h3>
+                  <table className="custom-table">
+                    <thead><tr><th>Documento</th><th>Status</th><th>O que aconteceu</th></tr></thead>
+                    <tbody>
+                      {portalAverbacoes.map((a: any) => (
+                        <tr key={a.id}>
+                          <td>{a.tipo_documento}</td>
+                          <td>
+                            {a.status === 'ERRO' ? <span className="badge badge-error">RECUSADA</span> : <span className="badge badge-success">{a.status}</span>}
+                          </td>
+                          <td style={{ fontSize: '0.8rem' }}>{a.explicacao_nao_tecnica || a.mensagem_resposta}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB EXTRA: VISÃO EMPRESA (ADM) — provisionamento de seguradoras, usuários internos, relatório global */}
+        {activeTab === 'companyview' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Visão Empresa ARCKATECH — Acesso Irrestrito
+              </h2>
+              <button className="btn btn-secondary" onClick={handleLoadCompanyView} style={{ marginBottom: '20px' }}>
+                <RefreshCw size={16} /> Carregar Visão Global
+              </button>
+
+              {companyGlobalReport && (
+                <div className="grid-stats" style={{ marginBottom: '24px' }}>
+                  <div className="card-stat"><span className="stat-label">Seguradoras</span><span className="stat-value">{companyGlobalReport.consolidado.total_seguradoras}</span></div>
+                  <div className="card-stat"><span className="stat-label">Corretoras</span><span className="stat-value">{companyGlobalReport.consolidado.total_corretoras}</span></div>
+                  <div className="card-stat"><span className="stat-label">Transportadores</span><span className="stat-value">{companyGlobalReport.consolidado.total_transportadores}</span></div>
+                  <div className="card-stat"><span className="stat-label">Averbações (total)</span><span className="stat-value">{companyGlobalReport.consolidado.total_averbacoes}</span></div>
+                  <div className="card-stat"><span className="stat-label">Aprovações Pendentes</span><span className="stat-value">{companyGlobalReport.consolidado.total_aprovacoes_pendentes}</span></div>
+                  <div className="card-stat"><span className="stat-label">Contas Pend. Ativação</span><span className="stat-value">{companyGlobalReport.consolidado.total_contas_pendentes_ativacao}</span></div>
+                </div>
+              )}
+
+              <h3 style={{ fontSize: '0.95rem', marginBottom: '10px' }}>Todos os tenants (irrestrito)</h3>
+              <table className="custom-table">
+                <thead><tr><th>Razão Social</th><th>CNPJ</th><th>Papel</th><th>Ambiente</th><th>Status</th></tr></thead>
+                <tbody>
+                  {companyTenants.map((t) => (
+                    <tr key={t.id}>
+                      <td>{t.razao_social}</td>
+                      <td>{t.cnpj}</td>
+                      <td><span className="badge badge-info">{t.role}</span></td>
+                      <td>{t.ambiente}</td>
+                      <td>{t.status === 'ATIVO' ? <span className="badge badge-success">ATIVO</span> : <span className="badge badge-error">INATIVO</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Provisionar Nova Seguradora (Onboarding)
+              </h2>
+              <form onSubmit={handleProvisionInsurer} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '16px', alignItems: 'flex-end' }}>
+                <div className="form-group">
+                  <label className="form-label">CNPJ</label>
+                  <input type="text" className="form-input" value={newInsurerForm.cnpj} onChange={(e) => setNewInsurerForm({ ...newInsurerForm, cnpj: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Razão Social</label>
+                  <input type="text" className="form-input" value={newInsurerForm.razao_social} onChange={(e) => setNewInsurerForm({ ...newInsurerForm, razao_social: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Nome Fantasia</label>
+                  <input type="text" className="form-input" value={newInsurerForm.nome_fantasia} onChange={(e) => setNewInsurerForm({ ...newInsurerForm, nome_fantasia: e.target.value })} />
+                </div>
+                <button type="submit" className="btn btn-primary"><Plus size={16} /> Provisionar</button>
+              </form>
+            </div>
+
+            <div className="table-container" style={{ padding: '24px' }}>
+              <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '16px' }}>
+                Usuários Internos ARCKATECH (ADM / Agente)
+              </h2>
+              <form onSubmit={handleCreateInternalUser} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '16px', alignItems: 'flex-end', marginBottom: '20px' }}>
+                <div className="form-group">
+                  <label className="form-label">Nome</label>
+                  <input type="text" className="form-input" value={newInternalUserForm.nome} onChange={(e) => setNewInternalUserForm({ ...newInternalUserForm, nome: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">E-mail</label>
+                  <input type="text" className="form-input" value={newInternalUserForm.email} onChange={(e) => setNewInternalUserForm({ ...newInternalUserForm, email: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Papel</label>
+                  <select className="form-select" value={newInternalUserForm.role} onChange={(e) => setNewInternalUserForm({ ...newInternalUserForm, role: e.target.value as any })}>
+                    <option value="AGENTE">Agente de Suporte</option>
+                    <option value="ADM">ADM (acesso irrestrito)</option>
+                  </select>
+                </div>
+                <button type="submit" className="btn btn-primary"><Plus size={16} /> Criar Usuário</button>
+              </form>
+
+              <table className="custom-table">
+                <thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Status</th></tr></thead>
+                <tbody>
+                  {companyInternalUsers.map((u) => (
+                    <tr key={u.id}>
+                      <td>{u.nome}</td>
+                      <td>{u.email}</td>
+                      <td><span className="badge badge-info">{u.role}</span></td>
+                      <td>{u.status === 'ATIVO' ? <span className="badge badge-success">ATIVO</span> : <span className="badge badge-error">INATIVO</span>}</td>
                     </tr>
                   ))}
                 </tbody>

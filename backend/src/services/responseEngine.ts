@@ -7,7 +7,7 @@ export class ResponseEngine {
   public static formatResponse(
     codigo: string,
     replacements: Record<string, string> = {}
-  ): { codigo: string; tipo: string; mensagem: string } {
+  ): { codigo: string; tipo: string; mensagem: string; explicacao_nao_tecnica?: string; orientacao_correcao?: string } {
     const template = dbStore.responseTemplates.find((t) => t.codigo === codigo);
 
     if (!template) {
@@ -18,18 +18,22 @@ export class ResponseEngine {
       };
     }
 
-    let textoFinal = template.texto_customizado || template.texto_padrao;
-
-    // Interpolação de placeholders (ex: [NUMERO_AVERBACAO], [TIMESTAMP], [NOME_VARIAVEL])
-    for (const [key, value] of Object.entries(replacements)) {
-      const placeholder = key.startsWith('[') && key.endsWith(']') ? key : `[${key}]`;
-      textoFinal = textoFinal.split(placeholder).join(value);
-    }
+    const interpolate = (text: string | undefined) => {
+      if (!text) return text;
+      let result = text;
+      for (const [key, value] of Object.entries(replacements)) {
+        const placeholder = key.startsWith('[') && key.endsWith(']') ? key : `[${key}]`;
+        result = result.split(placeholder).join(value);
+      }
+      return result;
+    };
 
     return {
       codigo: template.codigo,
       tipo: template.tipo,
-      mensagem: textoFinal
+      mensagem: interpolate(template.texto_customizado || template.texto_padrao) as string,
+      explicacao_nao_tecnica: interpolate(template.explicacao_nao_tecnica),
+      orientacao_correcao: interpolate(template.orientacao_correcao)
     };
   }
 }

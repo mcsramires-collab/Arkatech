@@ -86,6 +86,169 @@ export class ApiClient {
     return this.request('/api/v1/admin/brokers');
   }
 
+  // Admin - Fase 2 (Seguradora): cadastro de cliente com resolução de conflito
+  static lookupTenantByCnpj(cnpj: string) {
+    return this.request(`/api/v1/admin/tenants/lookup?cnpj=${encodeURIComponent(cnpj)}`);
+  }
+
+  static createInsurerClient(payload: any) {
+    return this.request('/api/v1/admin/insurer-clients', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  static assumePolicy(tenantId: string, payload: any) {
+    return this.request(`/api/v1/admin/insurer-clients/${tenantId}/assume-policy`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  // Admin - Fase 2: Coberturas Adicionais da Seguradora
+  static getInsurerCoverages(insurerId?: string) {
+    const qs = insurerId ? `?insurer_id=${insurerId}` : '';
+    return this.request(`/api/v1/admin/insurer-coverages${qs}`);
+  }
+
+  static createInsurerCoverage(payload: any) {
+    return this.request('/api/v1/admin/insurer-coverages', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  static updateInsurerCoverage(id: string, updates: any) {
+    return this.request(`/api/v1/admin/insurer-coverages/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    });
+  }
+
+  static deleteInsurerCoverage(id: string) {
+    return this.request(`/api/v1/admin/insurer-coverages/${id}`, {
+      method: 'DELETE'
+    });
+  }
+
+  // Admin - Fase 2: Aprovações e Delegação
+  static getApprovalRequests(insurerId?: string, status?: string) {
+    const params = new URLSearchParams();
+    if (insurerId) params.set('insurer_id', insurerId);
+    if (status) params.set('status', status);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/api/v1/admin/approval-requests${qs}`);
+  }
+
+  static resolveApprovalRequest(id: string, status: 'APROVADO' | 'REJEITADO', resolvedBy: string) {
+    return this.request(`/api/v1/admin/approval-requests/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ status, resolved_by: resolvedBy })
+    });
+  }
+
+  static getDelegationPermissions(insurerId?: string, brokerId?: string) {
+    const params = new URLSearchParams();
+    if (insurerId) params.set('insurer_id', insurerId);
+    if (brokerId) params.set('broker_id', brokerId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/api/v1/admin/delegation-permissions${qs}`);
+  }
+
+  static setDelegationPermissions(insurerId: string, brokerId: string, actions: { action: string; requires_approval: boolean }[]) {
+    return this.request('/api/v1/admin/delegation-permissions', {
+      method: 'PUT',
+      body: JSON.stringify({ insurer_id: insurerId, broker_id: brokerId, actions })
+    });
+  }
+
+  // Fase 4 - Visão Corretora
+  static getBrokerClients(brokerId: string, insurerId?: string) {
+    const qs = insurerId ? `&insurer_id=${insurerId}` : '';
+    return this.request(`/api/v1/broker/clients?broker_id=${brokerId}${qs}`);
+  }
+
+  static getBrokerAverbacoes(brokerId: string, apenasRecusadas = false) {
+    return this.request(`/api/v1/broker/averbacoes?broker_id=${brokerId}${apenasRecusadas ? '&apenas_recusadas=true' : ''}`);
+  }
+
+  static createBrokerClient(payload: any) {
+    return this.request('/api/v1/broker/clients', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  static getBrokerRelatorio(brokerId: string) {
+    return this.request(`/api/v1/broker/relatorio?broker_id=${brokerId}`);
+  }
+
+  // Fase 5 - Portal do Transportador
+  static getActivationStatus(tenantId: string) {
+    return this.request(`/api/v1/tenant/activation-status?tenant_id=${tenantId}`);
+  }
+
+  static acceptActivation(token: string) {
+    return this.request(`/api/v1/tenant/activation/${token}/aceitar`, { method: 'POST' });
+  }
+
+  static getTenantPolicies(tenantId: string) {
+    return this.request(`/api/v1/tenant/policies?tenant_id=${tenantId}`);
+  }
+
+  static getTenantAverbacoes(tenantId: string) {
+    return this.request(`/api/v1/tenant/averbacoes?tenant_id=${tenantId}`);
+  }
+
+  static getRecoveryPendentes(tenantId: string) {
+    return this.request(`/api/v1/tenant/recovery-pendentes?tenant_id=${tenantId}`);
+  }
+
+  static corrigirRecoveryNoPortal(token: string, supplementedVars: Record<string, string>) {
+    return this.request(`/api/v1/tenant/recovery/${token}/corrigir`, {
+      method: 'POST',
+      body: JSON.stringify({ supplemented_vars: supplementedVars })
+    });
+  }
+
+  static getTenantNotificationPreferences(tenantUserId: string) {
+    return this.request(`/api/v1/tenant/notification-preferences?tenant_user_id=${tenantUserId}`);
+  }
+
+  static setTenantNotificationPreference(tenantUserId: string, canal: string, ativo: boolean) {
+    return this.request('/api/v1/tenant/notification-preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ tenant_user_id: tenantUserId, canal, ativo })
+    });
+  }
+
+  // Fase 6 - Visão Empresa (ADM/Agente)
+  static getInternalTenants() {
+    return this.request('/api/v1/internal/tenants');
+  }
+
+  static provisionInsurer(payload: { cnpj: string; razao_social: string; nome_fantasia?: string }) {
+    return this.request('/api/v1/internal/insurers', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  static getInternalUsers() {
+    return this.request('/api/v1/internal/users');
+  }
+
+  static createInternalUser(payload: { nome: string; email: string; role: 'ADM' | 'AGENTE'; rbac_profile_id?: string }) {
+    return this.request('/api/v1/internal/users', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  static getGlobalRelatorio() {
+    return this.request('/api/v1/internal/relatorio');
+  }
+
   // Admin - Apólices & Regras
   static getPolicies() {
     return this.request('/api/v1/admin/policies');
