@@ -20,12 +20,26 @@ export interface Insurer {
   id: string;
   cnpj: string;
   nome: string;
+  nome_fantasia?: string;
 }
 
 export interface Broker {
   id: string;
   cnpj: string;
   nome: string;
+  nome_fantasia?: string;
+}
+
+export interface InsurerCoverage {
+  id: string;
+  insurer_id: string;
+  ramo?: RamoApolice;
+  titulo: string;
+  exemplo_preenchimento?: string;
+  obrigatoria: boolean;
+  aplicar_todos_clientes: boolean;
+  tenant_id?: string;
+  tipo_valor: 'monetario' | 'informativo';
 }
 
 export interface Policy {
@@ -39,6 +53,8 @@ export interface Policy {
   permitir_inativo_vencido: boolean;
   vigencia_inicio: string;
   vigencia_fim: string;
+  lmi?: number;
+  aceita_averbacao_como_destinatario?: boolean;
 }
 
 export interface PolicyRule {

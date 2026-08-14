@@ -4,7 +4,7 @@ import path from 'path';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento } from '../types';
+import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser } from '../types';
 import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { PurgeService } from '../services/purgeService';
@@ -276,7 +276,16 @@ router.put('/templates/:id', (req, res) => {
 
 // --- 7. GERADOR MOCK DE DOCUMENTOS FICTÍCIOS (Apenas Clientes 'teste') ---
 router.post('/mock/generate', (req, res) => {
-  const { tenant_id, tipo_doc, policy_id, incluir_variaveis_apolice, omitir_obrigatorias } = req.body;
+  const {
+    tenant_id,
+    tipo_doc,
+    policy_id,
+    incluir_variaveis_apolice,
+    omitir_obrigatorias,
+    como_destinatario,
+    tp_amb_sefaz,
+    omitir_grupo_seguro
+  } = req.body;
 
   try {
     const xmlContent = MockGeneratorService.generateMockXML({
@@ -284,7 +293,10 @@ router.post('/mock/generate', (req, res) => {
       tipoDoc: (tipo_doc || 'CTE') as TipoDocumento,
       policyId: policy_id,
       incluirVariaveisApolice: Boolean(incluir_variaveis_apolice),
-      omitirObrigatorias: omitir_obrigatorias || []
+      omitirObrigatorias: omitir_obrigatorias || [],
+      comoDestinatario: Boolean(como_destinatario),
+      tpAmbSefaz: tp_amb_sefaz === 2 ? 2 : 1,
+      omitirGrupoSeguro: Boolean(omitir_grupo_seguro)
     });
     return res.json({ status: 'sucesso', xml_content: xmlContent });
   } catch (err: any) {
@@ -431,6 +443,430 @@ router.get('/dashboard-stats', (req, res) => {
       totalApolices
     }
   });
+});
+
+// =====================================================================
+// FASE 2 — ENDPOINTS DE SEGURADORA
+// =====================================================================
+
+// --- A. Lookup de CNPJ com visibilidade mínima (só números de ramo vigentes) ---
+router.get('/tenants/lookup', (req, res) => {
+  const cnpj = String(req.query.cnpj || '').replace(/\D/g, '');
+  if (!cnpj) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Informe o CNPJ para consulta.' });
+  }
+
+  const tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpj);
+  if (!tenant) {
+    return res.json({ status: 'sucesso', encontrado: false, ramos_vigentes: [] });
+  }
+
+  const ramosVigentes = Array.from(
+    new Set(
+      dbStore.policies
+        .filter((p) => p.tenant_id === tenant.id && p.status === 'ATIVA')
+        .map((p) => p.ramo)
+    )
+  );
+
+  // Visibilidade mínima: nunca retornar insurer_id, broker_id, valores ou qualquer outro dado.
+  return res.json({ status: 'sucesso', encontrado: true, ramos_vigentes: ramosVigentes });
+});
+
+// --- B. Cadastro de Cliente pela Seguradora (cria tenant + apólice, ou detecta conflito) ---
+router.post('/insurer-clients', (req, res) => {
+  const {
+    insurer_id,
+    broker_id,
+    cnpj,
+    razao_social,
+    nome_fantasia,
+    ramo,
+    numero_apolice,
+    lmi,
+    vigencia_inicio,
+    vigencia_fim,
+    permitir_inativo_vencido,
+    aceita_averbacao_como_destinatario,
+    contato_nome,
+    contato_email,
+    contato_telefone_fixo,
+    contato_celular
+  } = req.body;
+
+  if (!insurer_id || !broker_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'insurer_id, broker_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
+    });
+  }
+
+  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
+  let tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpjLimpo);
+
+  if (tenant) {
+    // Cliente já existe — checar conflito de ramo com OUTRA seguradora
+    const policyConflitante = dbStore.policies.find(
+      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.status === 'ATIVA' && p.insurer_id !== insurer_id
+    );
+
+    if (policyConflitante) {
+      return res.status(409).json({
+        status: 'conflito',
+        mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este CNPJ vinculada a outra seguradora.`,
+        tenant_id: tenant.id,
+        ramo,
+        instrucao: 'Use POST /admin/insurer-clients/:tenantId/assume-policy para assumir a responsabilidade desta apólice.'
+      });
+    }
+
+    const jaTemEsseRamoComEstaSeguradora = dbStore.policies.some(
+      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.insurer_id === insurer_id
+    );
+    if (jaTemEsseRamoComEstaSeguradora) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'Este cliente já possui uma apólice deste ramo com esta seguradora.'
+      });
+    }
+  } else {
+    // Cliente novo — cria o tenant
+    tenant = {
+      id: `tenant_${cnpjLimpo}_${Date.now()}`,
+      cnpj,
+      razao_social,
+      status: 'ATIVO',
+      ambiente: 'producao',
+      client_id: `client_prod_${cnpjLimpo}`,
+      client_secret_hash: `secret_${cnpjLimpo}`,
+      role: 'TRANSPORTADOR',
+      token_duration_hours: 8,
+      created_at: new Date().toISOString(),
+      contato_nome,
+      contato_email,
+      contato_telefone_fixo,
+      contato_celular,
+      conta_ativada: false
+    };
+    dbStore.tenants.push(tenant);
+
+    // Dispara token de ativação (Termo de Uso) — aceite ainda pendente
+    dbStore.activationTokens.push({
+      id: uuidv4(),
+      tenant_id: tenant.id,
+      token: `act_${uuidv4()}`,
+      termo_versao: 'v1',
+      aceite: false,
+      expira_em: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      created_at: new Date().toISOString()
+    });
+  }
+
+  const newPolicy: Policy = {
+    id: `pol_${String(ramo).toLowerCase()}_${Date.now()}`,
+    numero_apolice,
+    ramo,
+    tenant_id: tenant.id,
+    insurer_id,
+    broker_id,
+    status: 'ATIVA',
+    permitir_inativo_vencido: Boolean(permitir_inativo_vencido),
+    vigencia_inicio: vigencia_inicio || new Date().toISOString(),
+    vigencia_fim: vigencia_fim || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+    lmi: lmi !== undefined ? Number(lmi) : undefined,
+    aceita_averbacao_como_destinatario: Boolean(aceita_averbacao_como_destinatario)
+  };
+  dbStore.policies.push(newPolicy);
+  dbStore.persist();
+
+  return res.json({ status: 'sucesso', tenant, policy: newPolicy });
+});
+
+// --- C. Assumir Apólice em Conflito ---
+router.post('/insurer-clients/:tenantId/assume-policy', (req, res) => {
+  const { tenantId } = req.params;
+  const { insurer_id, broker_id, ramo, numero_apolice, lmi, vigencia_inicio, vigencia_fim, permitir_inativo_vencido, aceita_averbacao_como_destinatario } =
+    req.body;
+
+  const policy = dbStore.policies.find((p) => p.tenant_id === tenantId && p.ramo === ramo && p.status === 'ATIVA');
+  if (!policy) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Nenhuma apólice ativa encontrada para este cliente/ramo.' });
+  }
+
+  policy.insurer_id = insurer_id;
+  policy.broker_id = broker_id;
+  if (numero_apolice) policy.numero_apolice = numero_apolice;
+  if (lmi !== undefined) policy.lmi = Number(lmi);
+  if (vigencia_inicio) policy.vigencia_inicio = vigencia_inicio;
+  if (vigencia_fim) policy.vigencia_fim = vigencia_fim;
+  if (permitir_inativo_vencido !== undefined) policy.permitir_inativo_vencido = Boolean(permitir_inativo_vencido);
+  if (aceita_averbacao_como_destinatario !== undefined) {
+    policy.aceita_averbacao_como_destinatario = Boolean(aceita_averbacao_como_destinatario);
+  }
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', policy });
+});
+
+// --- D. Coberturas Adicionais da Seguradora (insurer_coverages) ---
+router.get('/insurer-coverages', (req, res) => {
+  const { insurer_id } = req.query;
+  let items = dbStore.insurerCoverages;
+  if (insurer_id) items = items.filter((c) => c.insurer_id === insurer_id);
+  return res.json({ status: 'sucesso', coverages: items });
+});
+
+router.post('/insurer-coverages', (req, res) => {
+  const { insurer_id, ramo, titulo, exemplo_preenchimento, obrigatoria, aplicar_todos_clientes, tenant_id, tipo_valor } = req.body;
+
+  if (!insurer_id || !titulo) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e titulo são obrigatórios.' });
+  }
+  if (aplicar_todos_clientes === false && !tenant_id) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'tenant_id é obrigatório quando aplicar_todos_clientes for false.'
+    });
+  }
+
+  const newCoverage: InsurerCoverage = {
+    id: uuidv4(),
+    insurer_id,
+    ramo,
+    titulo,
+    exemplo_preenchimento,
+    obrigatoria: Boolean(obrigatoria),
+    aplicar_todos_clientes: aplicar_todos_clientes !== false,
+    tenant_id: aplicar_todos_clientes === false ? tenant_id : undefined,
+    tipo_valor: tipo_valor === 'monetario' ? 'monetario' : 'informativo',
+    created_at: new Date().toISOString()
+  };
+
+  dbStore.insurerCoverages.push(newCoverage);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', coverage: newCoverage });
+});
+
+router.put('/insurer-coverages/:id', (req, res) => {
+  const { id } = req.params;
+  const coverage = dbStore.insurerCoverages.find((c) => c.id === id);
+  if (!coverage) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cobertura adicional não encontrada.' });
+  }
+
+  const { ramo, titulo, exemplo_preenchimento, obrigatoria, aplicar_todos_clientes, tenant_id, tipo_valor } = req.body;
+  if (ramo !== undefined) coverage.ramo = ramo;
+  if (titulo !== undefined) coverage.titulo = titulo;
+  if (exemplo_preenchimento !== undefined) coverage.exemplo_preenchimento = exemplo_preenchimento;
+  if (obrigatoria !== undefined) coverage.obrigatoria = Boolean(obrigatoria);
+  if (aplicar_todos_clientes !== undefined) coverage.aplicar_todos_clientes = Boolean(aplicar_todos_clientes);
+  if (tenant_id !== undefined) coverage.tenant_id = tenant_id;
+  if (tipo_valor !== undefined) coverage.tipo_valor = tipo_valor === 'monetario' ? 'monetario' : 'informativo';
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', coverage });
+});
+
+router.delete('/insurer-coverages/:id', (req, res) => {
+  const { id } = req.params;
+  dbStore.insurerCoverages = dbStore.insurerCoverages.filter((c) => c.id !== id);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Cobertura adicional removida com sucesso.' });
+});
+
+// --- E. Manutenção em Massa de Apólices ---
+router.post('/policies/bulk-update', (req, res) => {
+  const { policy_ids, updates } = req.body;
+
+  if (!Array.isArray(policy_ids) || policy_ids.length === 0) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Informe ao menos um policy_id em policy_ids.' });
+  }
+
+  const { lmi, vigencia_inicio, vigencia_fim, permitir_inativo_vencido } = updates || {};
+  let atualizadas = 0;
+
+  for (const policy of dbStore.policies) {
+    if (!policy_ids.includes(policy.id)) continue;
+    if (lmi !== undefined) policy.lmi = Number(lmi);
+    if (vigencia_inicio !== undefined) policy.vigencia_inicio = vigencia_inicio;
+    if (vigencia_fim !== undefined) policy.vigencia_fim = vigencia_fim;
+    if (permitir_inativo_vencido !== undefined) policy.permitir_inativo_vencido = Boolean(permitir_inativo_vencido);
+    atualizadas++;
+  }
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', total_atualizadas: atualizadas });
+});
+
+// --- F. Perfis de Acesso (RBAC) ---
+router.get('/rbac-profiles', (req, res) => {
+  const { owner_type, owner_id } = req.query;
+  let items = dbStore.rbacProfiles;
+  if (owner_type) items = items.filter((p) => p.owner_type === owner_type);
+  if (owner_id) items = items.filter((p) => p.owner_id === owner_id);
+  return res.json({ status: 'sucesso', profiles: items });
+});
+
+router.post('/rbac-profiles', (req, res) => {
+  const { owner_type, owner_id, nome_perfil, permissions } = req.body;
+  if (!owner_type || !nome_perfil || !permissions) {
+    return res.status(400).json({ status: 'erro', mensagem: 'owner_type, nome_perfil e permissions são obrigatórios.' });
+  }
+
+  const newProfile: RbacProfile = {
+    id: uuidv4(),
+    owner_type,
+    owner_id,
+    nome_perfil,
+    permissions,
+    created_at: new Date().toISOString()
+  };
+  dbStore.rbacProfiles.push(newProfile);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', profile: newProfile });
+});
+
+router.put('/rbac-profiles/:id', (req, res) => {
+  const { id } = req.params;
+  const profile = dbStore.rbacProfiles.find((p) => p.id === id);
+  if (!profile) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Perfil de acesso não encontrado.' });
+  }
+  const { nome_perfil, permissions } = req.body;
+  if (nome_perfil !== undefined) profile.nome_perfil = nome_perfil;
+  if (permissions !== undefined) profile.permissions = permissions;
+  dbStore.persist();
+  return res.json({ status: 'sucesso', profile });
+});
+
+router.delete('/rbac-profiles/:id', (req, res) => {
+  const { id } = req.params;
+  dbStore.rbacProfiles = dbStore.rbacProfiles.filter((p) => p.id !== id);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Perfil de acesso removido com sucesso.' });
+});
+
+// --- G. Usuários Internos do Tenant (seguradora/corretora/transportador) ---
+router.get('/tenant-users', (req, res) => {
+  const { tenant_id } = req.query;
+  let items = dbStore.tenantUsers;
+  if (tenant_id) items = items.filter((u) => u.tenant_id === tenant_id);
+  return res.json({ status: 'sucesso', users: items });
+});
+
+router.post('/tenant-users', (req, res) => {
+  const { tenant_id, nome, email, rbac_profile_id, is_admin_da_conta } = req.body;
+  if (!tenant_id || !nome || !email) {
+    return res.status(400).json({ status: 'erro', mensagem: 'tenant_id, nome e email são obrigatórios.' });
+  }
+
+  const newUser: TenantUser = {
+    id: uuidv4(),
+    tenant_id,
+    nome,
+    email,
+    password_hash: `hash_${uuidv4()}`,
+    rbac_profile_id,
+    is_admin_da_conta: Boolean(is_admin_da_conta),
+    status: 'ATIVO',
+    created_at: new Date().toISOString()
+  };
+  dbStore.tenantUsers.push(newUser);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', user: newUser });
+});
+
+router.put('/tenant-users/:id', (req, res) => {
+  const { id } = req.params;
+  const user = dbStore.tenantUsers.find((u) => u.id === id);
+  if (!user) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Usuário não encontrado.' });
+  }
+  const { nome, email, rbac_profile_id, status } = req.body;
+  if (nome !== undefined) user.nome = nome;
+  if (email !== undefined) user.email = email;
+  if (rbac_profile_id !== undefined) user.rbac_profile_id = rbac_profile_id;
+  if (status !== undefined) user.status = status;
+  dbStore.persist();
+  return res.json({ status: 'sucesso', user });
+});
+
+router.delete('/tenant-users/:id', (req, res) => {
+  const { id } = req.params;
+  dbStore.tenantUsers = dbStore.tenantUsers.filter((u) => u.id !== id);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Usuário removido com sucesso.' });
+});
+
+// --- H. Delegação de Poder Seguradora → Corretora ---
+router.get('/delegation-permissions', (req, res) => {
+  const { insurer_id, broker_id } = req.query;
+  let items = dbStore.delegationPermissions;
+  if (insurer_id) items = items.filter((d) => d.insurer_id === insurer_id);
+  if (broker_id) items = items.filter((d) => d.broker_id === broker_id);
+  return res.json({ status: 'sucesso', permissions: items });
+});
+
+router.put('/delegation-permissions', (req, res) => {
+  const { insurer_id, broker_id, actions } = req.body;
+  if (!insurer_id || !broker_id || !Array.isArray(actions)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'insurer_id, broker_id e actions (lista de { action, requires_approval }) são obrigatórios.'
+    });
+  }
+
+  for (const item of actions) {
+    const existing = dbStore.delegationPermissions.find(
+      (d) => d.insurer_id === insurer_id && d.broker_id === broker_id && d.action === item.action
+    );
+    if (existing) {
+      existing.requires_approval = Boolean(item.requires_approval);
+    } else {
+      dbStore.delegationPermissions.push({
+        id: uuidv4(),
+        insurer_id,
+        broker_id,
+        action: item.action,
+        requires_approval: Boolean(item.requires_approval)
+      });
+    }
+  }
+
+  dbStore.persist();
+  return res.json({
+    status: 'sucesso',
+    permissions: dbStore.delegationPermissions.filter((d) => d.insurer_id === insurer_id && d.broker_id === broker_id)
+  });
+});
+
+// --- I. Fila de Aprovação (ações da corretora sujeitas a requires_approval) ---
+router.get('/approval-requests', (req, res) => {
+  const { insurer_id, status } = req.query;
+  let items = dbStore.approvalRequests;
+  if (insurer_id) items = items.filter((a) => a.insurer_id === insurer_id);
+  if (status) items = items.filter((a) => a.status === status);
+  return res.json({ status: 'sucesso', requests: items });
+});
+
+router.post('/approval-requests/:id/resolve', (req, res) => {
+  const { id } = req.params;
+  const { status, resolved_by } = req.body;
+
+  const request = dbStore.approvalRequests.find((a) => a.id === id);
+  if (!request) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Solicitação de aprovação não encontrada.' });
+  }
+  if (status !== 'APROVADO' && status !== 'REJEITADO') {
+    return res.status(400).json({ status: 'erro', mensagem: "status deve ser 'APROVADO' ou 'REJEITADO'." });
+  }
+
+  request.status = status;
+  request.resolved_at = new Date().toISOString();
+  request.resolved_by = resolved_by;
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', request });
 });
 
 export default router;

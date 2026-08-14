@@ -12,7 +12,16 @@ import {
   Averbacao,
   RawXMLStore,
   RecoverySession,
-  BatchTestRun
+  BatchTestRun,
+  InternalUser,
+  RbacProfile,
+  TenantUser,
+  InsurerCoverageTemplate,
+  InsurerCoverage,
+  DelegationPermission,
+  ApprovalRequest,
+  ActivationToken,
+  NotificationPreference
 } from '../types';
 
 class DBStore {
@@ -27,6 +36,16 @@ class DBStore {
   public rawXmlStore: RawXMLStore[] = [];
   public recoverySessions: RecoverySession[] = [];
   public batchTestRuns: BatchTestRun[] = [];
+  // Fase 1 — novas entidades (visão empresa, RBAC, coberturas, delegação, ativação)
+  public internalUsers: InternalUser[] = [];
+  public rbacProfiles: RbacProfile[] = [];
+  public tenantUsers: TenantUser[] = [];
+  public insurerCoverageTemplates: InsurerCoverageTemplate[] = [];
+  public insurerCoverages: InsurerCoverage[] = [];
+  public delegationPermissions: DelegationPermission[] = [];
+  public approvalRequests: ApprovalRequest[] = [];
+  public activationTokens: ActivationToken[] = [];
+  public notificationPreferences: NotificationPreference[] = [];
 
   private filePath = path.join(__dirname, '../../data_store.json');
 
@@ -50,6 +69,15 @@ class DBStore {
         this.rawXmlStore = parsed.rawXmlStore || [];
         this.recoverySessions = parsed.recoverySessions || [];
         this.batchTestRuns = parsed.batchTestRuns || [];
+        this.internalUsers = parsed.internalUsers || [];
+        this.rbacProfiles = parsed.rbacProfiles || [];
+        this.tenantUsers = parsed.tenantUsers || [];
+        this.insurerCoverageTemplates = parsed.insurerCoverageTemplates || [];
+        this.insurerCoverages = parsed.insurerCoverages || [];
+        this.delegationPermissions = parsed.delegationPermissions || [];
+        this.approvalRequests = parsed.approvalRequests || [];
+        this.activationTokens = parsed.activationTokens || [];
+        this.notificationPreferences = parsed.notificationPreferences || [];
         return;
       } catch (err) {
         console.error('Erro ao ler data_store.json. Inicializando com seeds padrão.', err);
@@ -80,7 +108,16 @@ class DBStore {
             averbacoes: this.averbacoes,
             rawXmlStore: this.rawXmlStore,
             recoverySessions: this.recoverySessions,
-            batchTestRuns: this.batchTestRuns
+            batchTestRuns: this.batchTestRuns,
+            internalUsers: this.internalUsers,
+            rbacProfiles: this.rbacProfiles,
+            tenantUsers: this.tenantUsers,
+            insurerCoverageTemplates: this.insurerCoverageTemplates,
+            insurerCoverages: this.insurerCoverages,
+            delegationPermissions: this.delegationPermissions,
+            approvalRequests: this.approvalRequests,
+            activationTokens: this.activationTokens,
+            notificationPreferences: this.notificationPreferences
           },
           null,
           2
@@ -103,6 +140,7 @@ class DBStore {
         texto_padrao: 'Averbação realizada com sucesso. Número: [NUMERO_AVERBACAO], Timestamp: [TIMESTAMP].',
         texto_customizado: 'Averbação realizada com sucesso. Número: [NUMERO_AVERBACAO], Timestamp: [TIMESTAMP].',
         placeholders: ['[NUMERO_AVERBACAO]', '[TIMESTAMP]'],
+        explicacao_nao_tecnica: 'Seu documento foi averbado com sucesso e já pode seguir viagem.',
         updated_at: new Date().toISOString()
       },
       {
@@ -115,6 +153,9 @@ class DBStore {
         texto_customizado:
           'Averbação realizada com sucesso [NUMERO_AVERBACAO], número de averbação [NUMERO_AVERBACAO], timestamp [TIMESTAMP] OBS: Seu (cadastro ou apólice) se encontra inativo, então a sua averbação pode ser negada pela seguradora caso não esteja com a renovação do seu contrato em dia. Antes de seguir viagem, consulte sua seguradora e/ou corretora para validar seu cadastro',
         placeholders: ['[NUMERO_AVERBACAO]', '[TIMESTAMP]'],
+        explicacao_nao_tecnica:
+          'Seu documento foi averbado, mas seu cadastro ou apólice está com pendência. A cobertura pode ser contestada em caso de sinistro.',
+        orientacao_correcao: 'Fale com sua seguradora ou corretora para regularizar o cadastro/apólice antes de seguir viagem.',
         updated_at: new Date().toISOString()
       },
       {
@@ -125,6 +166,8 @@ class DBStore {
         texto_padrao: 'Token de autenticação inválido, expirado ou ausente.',
         texto_customizado: 'Token de autenticação inválido, expirado ou ausente.',
         placeholders: [],
+        explicacao_nao_tecnica: 'Não foi possível confirmar sua identidade para processar a averbação.',
+        orientacao_correcao: 'Gere um novo token de acesso e tente novamente.',
         updated_at: new Date().toISOString()
       },
       {
@@ -137,6 +180,8 @@ class DBStore {
         texto_customizado:
           'ERRO 4002: O usuário para esta averbação não está ativo, fale com seu corretor ou seguradora.',
         placeholders: [],
+        explicacao_nao_tecnica: 'Seu cadastro está inativo em nosso sistema, por isso não foi possível averbar este documento.',
+        orientacao_correcao: 'Entre em contato com sua seguradora ou corretora para reativar seu cadastro.',
         updated_at: new Date().toISOString()
       },
       {
@@ -147,6 +192,8 @@ class DBStore {
         texto_padrao: 'ERRO 4003: Apólice inativa ou não localizada para o ramo e CNPJ informado.',
         texto_customizado: 'ERRO 4003: Apólice inativa ou não localizada para o ramo e CNPJ informado.',
         placeholders: [],
+        explicacao_nao_tecnica: 'Não encontramos uma apólice ativa para o ramo informado vinculada ao seu CNPJ.',
+        orientacao_correcao: 'Confirme com sua seguradora/corretora se a apólice para este ramo está ativa e corretamente cadastrada.',
         updated_at: new Date().toISOString()
       },
       {
@@ -159,6 +206,8 @@ class DBStore {
         texto_customizado:
           'ERRO 4004: Não foi possível seguir com a sua averbação por não ser localizada a condição [NOME_VARIAVEL] da sua averbação.',
         placeholders: ['[NOME_VARIAVEL]'],
+        explicacao_nao_tecnica: 'Faltou informar: [NOME_VARIAVEL].',
+        orientacao_correcao: 'Reenvie o documento com essa informação, ou corrija diretamente pelo link/portal de recuperação.',
         updated_at: new Date().toISOString()
       },
       {
@@ -169,6 +218,8 @@ class DBStore {
         texto_padrao: 'ERRO 4005: XML malformado ou fora dos padrões mínimos exigidos pelo Sefaz.',
         texto_customizado: 'ERRO 4005: XML malformado ou fora dos padrões mínimos exigidos pelo Sefaz.',
         placeholders: [],
+        explicacao_nao_tecnica: 'O arquivo enviado não pôde ser lido corretamente.',
+        orientacao_correcao: 'Verifique se o arquivo é um XML válido, autorizado pelo Sefaz, e tente novamente.',
         updated_at: new Date().toISOString()
       },
       {
@@ -181,6 +232,44 @@ class DBStore {
         texto_customizado:
           'ERRO 4006: Variável informada via link de recuperação é inválida ou expirou o tempo limite de preenchimento.',
         placeholders: [],
+        explicacao_nao_tecnica: 'O link de correção que você usou não é mais válido.',
+        orientacao_correcao: 'Solicite um novo envio do documento para gerar um novo link de correção.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4007',
+        tipo: 'erro',
+        categoria: 'REGRA_XML',
+        texto_padrao: 'ERRO 4007: Este documento já foi averbado anteriormente para este ramo de apólice (averbação [NUMERO_AVERBACAO_EXISTENTE]).',
+        texto_customizado: 'ERRO 4007: Este documento já foi averbado anteriormente para este ramo de apólice (averbação [NUMERO_AVERBACAO_EXISTENTE]).',
+        placeholders: ['[NUMERO_AVERBACAO_EXISTENTE]'],
+        explicacao_nao_tecnica: 'Este documento já está averbado — não é possível averbar o mesmo documento duas vezes no mesmo ramo.',
+        orientacao_correcao: 'Consulte a averbação existente pelo número informado; nenhuma ação é necessária.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4008',
+        tipo: 'erro',
+        categoria: 'REGRA_XML',
+        texto_padrao: 'ERRO 4008: O CNPJ solicitante não é o emissor nem um destinatário elegível para averbar este documento.',
+        texto_customizado: 'ERRO 4008: O CNPJ solicitante não é o emissor nem um destinatário elegível para averbar este documento.',
+        placeholders: [],
+        explicacao_nao_tecnica: 'Seu CNPJ não consta como emissor deste documento, e sua apólice não permite averbar como destinatário.',
+        orientacao_correcao: 'Confirme se o documento correto foi enviado, ou solicite à sua seguradora habilitar a averbação como destinatário.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4009',
+        tipo: 'erro',
+        categoria: 'CADASTRO',
+        texto_padrao: 'ERRO 4009: Conta ainda não ativada. Aceite o Termo de Uso para acessar o portal.',
+        texto_customizado: 'ERRO 4009: Conta ainda não ativada. Aceite o Termo de Uso para acessar o portal.',
+        placeholders: [],
+        explicacao_nao_tecnica: 'Você ainda não concluiu a ativação da sua conta.',
+        orientacao_correcao: 'Acesse o link de ativação enviado por e-mail e aceite o Termo de Uso para liberar seu acesso.',
         updated_at: new Date().toISOString()
       }
     ];
@@ -217,24 +306,79 @@ class DBStore {
     }));
 
     // 2. Seguradoras e Corretoras Padrão
+    // Cada seguradora/corretora agora também existe como um `tenant` (role SEGURADORA/CORRETORA),
+    // e os registros de Insurer/Broker se vinculam a esse tenant via tenant_id.
+    const tenantPorto: Tenant = {
+      id: 'tenant_seguradora_porto',
+      cnpj: '61.198.164/0001-60',
+      razao_social: 'Porto Seguro Cia de Seguros Gerais',
+      status: 'ATIVO',
+      ambiente: 'teste',
+      client_id: 'client_teste_seguradora_porto',
+      client_secret_hash: 'secret_123',
+      role: 'SEGURADORA',
+      token_duration_hours: 8,
+      created_at: new Date().toISOString(),
+      conta_ativada: true
+    };
+    const tenantTokio: Tenant = {
+      id: 'tenant_seguradora_tokio',
+      cnpj: '33.164.021/0001-00',
+      razao_social: 'Tokio Marine Seguradora S.A.',
+      status: 'ATIVO',
+      ambiente: 'teste',
+      client_id: 'client_teste_seguradora_tokio',
+      client_secret_hash: 'secret_123',
+      role: 'SEGURADORA',
+      token_duration_hours: 8,
+      created_at: new Date().toISOString(),
+      conta_ativada: true
+    };
+    const tenantCorretoraArckatech: Tenant = {
+      id: 'tenant_corretora_arckatech',
+      cnpj: '12.345.678/0001-90',
+      razao_social: 'Arckatech Corretora de Seguros de Carga',
+      status: 'ATIVO',
+      ambiente: 'teste',
+      client_id: 'client_teste_corretora_arckatech',
+      client_secret_hash: 'secret_123',
+      role: 'CORRETORA',
+      token_duration_hours: 8,
+      created_at: new Date().toISOString(),
+      conta_ativada: true
+    };
+
     const insurerPorto: Insurer = {
       id: 'ins_porto_01',
-      cnpj: '61.198.164/0001-60',
-      nome: 'Porto Seguro Cia de Seguros Gerais',
+      tenant_id: tenantPorto.id,
+      cnpj: tenantPorto.cnpj,
+      nome: tenantPorto.razao_social,
+      razao_social: 'Porto Seguro Cia de Seguros Gerais',
+      nome_fantasia: 'Porto Seguro',
       created_at: new Date().toISOString()
     };
     const insurerTokio: Insurer = {
       id: 'ins_tokio_02',
-      cnpj: '33.164.021/0001-00',
-      nome: 'Tokio Marine Seguradora S.A.',
+      tenant_id: tenantTokio.id,
+      cnpj: tenantTokio.cnpj,
+      nome: tenantTokio.razao_social,
+      razao_social: 'Tokio Marine Seguradora S.A.',
+      nome_fantasia: 'Tokio Marine',
       created_at: new Date().toISOString()
     };
     this.insurers = [insurerPorto, insurerTokio];
 
     const brokerArckatech: Broker = {
       id: 'brk_arckatech_01',
-      cnpj: '12.345.678/0001-90',
-      nome: 'Arckatech Corretora de Seguros de Carga',
+      tenant_id: tenantCorretoraArckatech.id,
+      cnpj: tenantCorretoraArckatech.cnpj,
+      nome: tenantCorretoraArckatech.razao_social,
+      razao_social: 'Arckatech Corretora de Seguros de Carga',
+      nome_fantasia: 'Arckatech Corretora',
+      corretor_responsavel_nome: 'Fernanda Lima',
+      corretor_responsavel_email: 'fernanda.lima@arckatechcorretora.com.br',
+      corretor_responsavel_telefone_fixo: '(11) 4002-8900',
+      corretor_responsavel_celular: '(11) 98888-7766',
       created_at: new Date().toISOString()
     };
     this.brokers = [brokerArckatech];
@@ -250,7 +394,8 @@ class DBStore {
       client_secret_hash: 'secret_123',
       role: 'TRANSPORTADOR',
       token_duration_hours: 8,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      conta_ativada: true
     };
 
     const tenantTranslog: Tenant = {
@@ -263,7 +408,8 @@ class DBStore {
       client_secret_hash: 'secret_123',
       role: 'TRANSPORTADOR',
       token_duration_hours: 8,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      conta_ativada: true
     };
 
     const tenantInativo: Tenant = {
@@ -276,7 +422,8 @@ class DBStore {
       client_secret_hash: 'secret_123',
       role: 'TRANSPORTADOR',
       token_duration_hours: 8,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      conta_ativada: true
     };
 
     const tenantProd: Tenant = {
@@ -289,10 +436,37 @@ class DBStore {
       client_secret_hash: 'secret_prod_123',
       role: 'TRANSPORTADOR',
       token_duration_hours: 12,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      conta_ativada: true
     };
 
-    this.tenants = [tenantExpressa, tenantTranslog, tenantInativo, tenantProd];
+    // 5º transportador de teste — conta ainda NÃO ativada (testa o fluxo de Termo de Uso/aceite)
+    const tenantPendenteAtivacao: Tenant = {
+      id: 'tenant_pendente_ativacao',
+      cnpj: '55.666.777/0001-55',
+      razao_social: 'Nova Rota Transportes Ltda',
+      status: 'ATIVO',
+      ambiente: 'teste',
+      client_id: 'client_teste_novarota',
+      client_secret_hash: 'secret_123',
+      role: 'TRANSPORTADOR',
+      token_duration_hours: 8,
+      created_at: new Date().toISOString(),
+      contato_nome: 'Bruno Castro',
+      contato_email: 'bruno.castro@novarotateste.com.br',
+      conta_ativada: false
+    };
+
+    this.tenants = [
+      tenantPorto,
+      tenantTokio,
+      tenantCorretoraArckatech,
+      tenantExpressa,
+      tenantTranslog,
+      tenantInativo,
+      tenantProd,
+      tenantPendenteAtivacao
+    ];
 
     // 4. Apólices
     const policy1: Policy = {
@@ -305,7 +479,9 @@ class DBStore {
       status: 'ATIVA',
       permitir_inativo_vencido: false,
       vigencia_inicio: '2026-01-01T00:00:00Z',
-      vigencia_fim: '2026-12-31T23:59:59Z'
+      vigencia_fim: '2026-12-31T23:59:59Z',
+      lmi: 300000,
+      aceita_averbacao_como_destinatario: false
     };
 
     const policy2: Policy = {
@@ -318,7 +494,9 @@ class DBStore {
       status: 'ATIVA',
       permitir_inativo_vencido: false,
       vigencia_inicio: '2026-01-01T00:00:00Z',
-      vigencia_fim: '2026-12-31T23:59:59Z'
+      vigencia_fim: '2026-12-31T23:59:59Z',
+      lmi: 500000,
+      aceita_averbacao_como_destinatario: true
     };
 
     const policyExcecao: Policy = {
@@ -331,7 +509,9 @@ class DBStore {
       status: 'INATIVA',
       permitir_inativo_vencido: true, // Flag de bypass habilitada
       vigencia_inicio: '2025-01-01T00:00:00Z',
-      vigencia_fim: '2025-12-31T23:59:59Z' // Apólice Vencida
+      vigencia_fim: '2025-12-31T23:59:59Z' // Apólice Vencida,
+      lmi: 150000,
+      aceita_averbacao_como_destinatario: false
     };
 
     const policyProd: Policy = {
@@ -344,10 +524,28 @@ class DBStore {
       status: 'ATIVA',
       permitir_inativo_vencido: false,
       vigencia_inicio: '2026-01-01T00:00:00Z',
-      vigencia_fim: '2026-12-31T23:59:59Z'
+      vigencia_fim: '2026-12-31T23:59:59Z',
+      lmi: 1000000,
+      aceita_averbacao_como_destinatario: false
     };
 
     this.policies = [policy1, policy2, policyExcecao, policyProd];
+
+    // Apólice do 5º transportador (fica visível só depois que ele ativar a conta)
+    this.policies.push({
+      id: 'pol_rctrc_novarota',
+      numero_apolice: 'POL-RCTRC-2026-005',
+      ramo: 'RCTRC',
+      tenant_id: tenantPendenteAtivacao.id,
+      insurer_id: insurerPorto.id,
+      broker_id: brokerArckatech.id,
+      status: 'ATIVA',
+      permitir_inativo_vencido: false,
+      vigencia_inicio: new Date().toISOString(),
+      vigencia_fim: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+      lmi: 400000,
+      aceita_averbacao_como_destinatario: false
+    });
 
     // 5. Regras Dinâmicas por Apólice
     this.policyRules = [
@@ -382,6 +580,200 @@ class DBStore {
         instrucao_recuperacao: 'Informe o centro de distribuição de origem da carga'
       }
     ];
+
+    // 6. Visão Empresa — ADM e Agente ARCKATECH
+    const admDefault: InternalUser = {
+      id: uuidv4(),
+      nome: 'Admin ARCKATECH',
+      email: 'admin@arckatech.com.br',
+      password_hash: 'hash_admin_dev',
+      role: 'ADM',
+      status: 'ATIVO',
+      created_at: new Date().toISOString()
+    };
+
+    const perfilAgenteSuporte: RbacProfile = {
+      id: uuidv4(),
+      owner_type: 'ARCKATECH',
+      nome_perfil: 'Agente de Suporte',
+      permissions: {
+        apolices: 'ver',
+        clientes: 'ver',
+        coberturas: 'ver',
+        relatorios: 'ver',
+        usuarios: 'sem_acesso',
+        delegacao_corretora: 'sem_acesso'
+      },
+      created_at: new Date().toISOString()
+    };
+
+    const agenteDefault: InternalUser = {
+      id: uuidv4(),
+      nome: 'Agente de Suporte ARCKATECH',
+      email: 'suporte@arckatech.com.br',
+      password_hash: 'hash_agente_dev',
+      role: 'AGENTE',
+      rbac_profile_id: perfilAgenteSuporte.id,
+      status: 'ATIVO',
+      created_at: new Date().toISOString()
+    };
+
+    this.internalUsers = [admDefault, agenteDefault];
+
+    // 7. Perfis de Acesso (RBAC) da Seguradora e da Corretora
+    const perfilAdminSeguradora: RbacProfile = {
+      id: uuidv4(),
+      owner_type: 'SEGURADORA',
+      owner_id: insurerPorto.id,
+      nome_perfil: 'Administrador da Seguradora',
+      permissions: {
+        apolices: 'editar',
+        clientes: 'editar',
+        coberturas: 'editar',
+        relatorios: 'ver',
+        usuarios: 'editar',
+        delegacao_corretora: 'editar'
+      },
+      created_at: new Date().toISOString()
+    };
+
+    const perfilAnalistaCorretora: RbacProfile = {
+      id: uuidv4(),
+      owner_type: 'CORRETORA',
+      owner_id: brokerArckatech.id,
+      nome_perfil: 'Analista da Corretora',
+      permissions: {
+        apolices: 'ver',
+        clientes: 'editar',
+        coberturas: 'ver',
+        relatorios: 'ver',
+        usuarios: 'sem_acesso',
+        delegacao_corretora: 'sem_acesso'
+      },
+      created_at: new Date().toISOString()
+    };
+
+    this.rbacProfiles = [perfilAgenteSuporte, perfilAdminSeguradora, perfilAnalistaCorretora];
+
+    // 8. Usuários dentro de cada tenant (login individual)
+    this.tenantUsers = [
+      {
+        id: uuidv4(),
+        tenant_id: tenantPorto.id,
+        nome: 'Carla Mendes',
+        email: 'carla.mendes@portoseguro-teste.com.br',
+        password_hash: 'hash_dev',
+        rbac_profile_id: perfilAdminSeguradora.id,
+        status: 'ATIVO',
+        created_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        tenant_id: tenantCorretoraArckatech.id,
+        nome: 'Ricardo Souza',
+        email: 'ricardo.souza@arckatechcorretora.com.br',
+        password_hash: 'hash_dev',
+        rbac_profile_id: perfilAnalistaCorretora.id,
+        status: 'ATIVO',
+        created_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        tenant_id: tenantExpressa.id,
+        nome: 'João Pereira',
+        email: 'joao.pereira@expressateste.com.br',
+        password_hash: 'hash_dev',
+        is_admin_da_conta: true,
+        status: 'ATIVO',
+        created_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        tenant_id: tenantTranslog.id,
+        nome: 'Marcia Alves',
+        email: 'marcia.alves@translogteste.com.br',
+        password_hash: 'hash_dev',
+        is_admin_da_conta: true,
+        status: 'ATIVO',
+        created_at: new Date().toISOString()
+      }
+    ];
+
+    // 9. Catálogo global de Coberturas Adicionais (templates pré-existentes)
+    this.insurerCoverageTemplates = ['Container', 'Acessórios', 'Avarias', 'Frete'].map((titulo) => ({
+      id: uuidv4(),
+      titulo,
+      ativo: true,
+      created_at: new Date().toISOString()
+    }));
+
+    // 10. Coberturas Adicionais configuradas por uma Seguradora (evolução de policy_rules)
+    this.insurerCoverages = [
+      {
+        id: uuidv4(),
+        insurer_id: insurerPorto.id,
+        ramo: 'RCTRC',
+        titulo: 'Container',
+        exemplo_preenchimento: 'R$ 25.000,00',
+        obrigatoria: false,
+        aplicar_todos_clientes: true,
+        tipo_valor: 'monetario',
+        created_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        insurer_id: insurerTokio.id,
+        ramo: 'RCDC',
+        titulo: 'Avarias',
+        exemplo_preenchimento: 'Sem avarias aparentes',
+        obrigatoria: true,
+        aplicar_todos_clientes: false,
+        tenant_id: tenantTranslog.id,
+        tipo_valor: 'informativo',
+        created_at: new Date().toISOString()
+      }
+    ];
+
+    // 11. Delegação de Poder Seguradora → Corretora (matriz por ação)
+    this.delegationPermissions = [
+      { id: uuidv4(), insurer_id: insurerPorto.id, broker_id: brokerArckatech.id, action: 'CRIAR_CLIENTE', requires_approval: false },
+      { id: uuidv4(), insurer_id: insurerPorto.id, broker_id: brokerArckatech.id, action: 'EDITAR_CLIENTE', requires_approval: false },
+      { id: uuidv4(), insurer_id: insurerPorto.id, broker_id: brokerArckatech.id, action: 'CRIAR_APOLICE', requires_approval: true },
+      { id: uuidv4(), insurer_id: insurerPorto.id, broker_id: brokerArckatech.id, action: 'EDITAR_APOLICE', requires_approval: true },
+      { id: uuidv4(), insurer_id: insurerPorto.id, broker_id: brokerArckatech.id, action: 'CRIAR_COBERTURA_ADICIONAL', requires_approval: true },
+      { id: uuidv4(), insurer_id: insurerPorto.id, broker_id: brokerArckatech.id, action: 'EDITAR_COBERTURA_ADICIONAL', requires_approval: true }
+    ];
+
+    // 12. Ativação de Conta (Termo de Uso) — exemplo já aceito nos tenants de teste
+    this.activationTokens = [tenantExpressa, tenantTranslog, tenantInativo, tenantProd].map((t) => ({
+      id: uuidv4(),
+      tenant_id: t.id,
+      token: `act_${uuidv4()}`,
+      termo_versao: 'v1',
+      aceite: true,
+      aceite_em: new Date().toISOString(),
+      expira_em: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+      created_at: new Date().toISOString()
+    }));
+
+    // Token de ativação PENDENTE (ainda não aceito) do 5º transportador de teste
+    this.activationTokens.push({
+      id: uuidv4(),
+      tenant_id: tenantPendenteAtivacao.id,
+      token: 'act_pendente_teste_ativacao',
+      termo_versao: 'v1',
+      aceite: false,
+      expira_em: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      created_at: new Date().toISOString()
+    });
+
+    // 13. Preferências de Notificação (padrão: e-mail + portal, sem WhatsApp/SMS no MVP)
+    this.notificationPreferences = this.tenantUsers
+      .filter((tu) => tu.is_admin_da_conta)
+      .flatMap((tu) => [
+        { id: uuidv4(), tenant_user_id: tu.id, canal: 'EMAIL' as const, ativo: true },
+        { id: uuidv4(), tenant_user_id: tu.id, canal: 'PORTAL' as const, ativo: true }
+      ]);
   }
 }
 

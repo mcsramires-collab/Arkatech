@@ -4,6 +4,9 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
+import brokerRoutes from './routes/broker';
+import tenantRoutes from './routes/tenant';
+import internalRoutes from './routes/internal';
 
 dotenv.config();
 
@@ -29,6 +32,9 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/averbar', averbacaoRoutes);
 app.use('/api/v1/averbacoes', averbacaoRoutes);
 app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/broker', brokerRoutes);
+app.use('/api/v1/tenant', tenantRoutes);
+app.use('/api/v1/internal', internalRoutes);
 
 // Servidor HTTP
 app.listen(PORT, () => {
