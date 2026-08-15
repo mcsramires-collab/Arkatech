@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: arckatech-postgres-dev
+    restart: always
+    environment:
+      POSTGRES_USER: arckatech_user
+      POSTGRES_PASSWORD: arckatech_password
+      POSTGRES_DB: arckatech_db
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: arckatech-redis-dev
+    restart: always
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data_dev:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: arckatech-backend-dev
+    restart: always
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://arckatech_user:arckatech_password@postgres:5432/arckatech_db?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: dev_secret_key_arckatech_super_secure_2026
+      ENCRYPTION_KEY: dev_encryption_key_32_bytes_len!!
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: arckatech-frontend-dev
+    restart: always
+    ports:
+      - '5173:5173'
+    environment:
+      VITE_API_URL: http://localhost:3000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data_dev:
+  redis_data_dev:
