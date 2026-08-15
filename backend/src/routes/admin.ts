@@ -72,7 +72,7 @@ router.get('/brokers', (req, res) => res.json({ status: 'sucesso', brokers: dbSt
 router.get('/policies', (req, res) => res.json({ status: 'sucesso', policies: dbStore.policies }));
 
 router.post('/policies', (req, res) => {
-  const { numero_apolice, ramo, tenant_id, insurer_id, broker_id, permitir_inativo_vencido, status, vigencia_inicio, vigencia_fim } = req.body;
+  const { numero_apolice, ramo, tenant_id, insurer_id, broker_id, permitir_inativo_vencido, aceita_averbacao_como_destinatario, status, vigencia_inicio, vigencia_fim } = req.body;
 
   if (!numero_apolice || !ramo || !tenant_id || !insurer_id || !broker_id) {
     return res.status(400).json({
@@ -90,6 +90,7 @@ router.post('/policies', (req, res) => {
     broker_id,
     status: status || 'ATIVA',
     permitir_inativo_vencido: Boolean(permitir_inativo_vencido),
+aceita_averbacao_como_destinatario: Boolean(aceita_averbacao_como_destinatario),
     vigencia_inicio: vigencia_inicio || new Date().toISOString(),
     vigencia_fim: vigencia_fim || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
   };

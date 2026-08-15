@@ -100,7 +100,14 @@ export class BatchRunnerService {
 
       for (let i = 0; i < cfg.quantidade; i++) {
         try {
-          const docXml = MockGeneratorService.generateMockXML(tenantId, 'CTE');
+          const docXml = MockGeneratorService.generateMockXML({
+  tenantId,
+  tipoDoc: 'CTE',
+  policyId: dbStore.policies.find(
+    (p) => p.tenant_id === tenantId && p.ramo === ramo
+  )?.id,
+  incluirVariaveisApolice: true
+});
           const res = AverbacaoService.process({
             tenant_id: tenantId,
             ramo,
