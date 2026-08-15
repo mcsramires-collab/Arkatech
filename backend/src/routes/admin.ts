@@ -72,7 +72,7 @@ router.get('/brokers', (req, res) => res.json({ status: 'sucesso', brokers: dbSt
 router.get('/policies', (req, res) => res.json({ status: 'sucesso', policies: dbStore.policies }));
 
 router.post('/policies', (req, res) => {
-  const { numero_apolice, ramo, tenant_id, insurer_id, broker_id, permitir_inativo_vencido, aceita_averbacao_como_destinatario, status, vigencia_inicio, vigencia_fim } = req.body;
+  const { numero_apolice, ramo, tenant_id, insurer_id, broker_id, co_broker_id, assessoria_id, permitir_inativo_vencido, status, vigencia_inicio, vigencia_fim, lmi, aceita_averbacao_como_destinatario } = req.body;
 
   if (!numero_apolice || !ramo || !tenant_id || !insurer_id || !broker_id) {
     return res.status(400).json({
@@ -88,11 +88,14 @@ router.post('/policies', (req, res) => {
     tenant_id,
     insurer_id,
     broker_id,
+    co_broker_id,
+    assessoria_id,
     status: status || 'ATIVA',
     permitir_inativo_vencido: Boolean(permitir_inativo_vencido),
-aceita_averbacao_como_destinatario: Boolean(aceita_averbacao_como_destinatario),
     vigencia_inicio: vigencia_inicio || new Date().toISOString(),
-    vigencia_fim: vigencia_fim || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    vigencia_fim: vigencia_fim || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+    lmi: lmi !== undefined ? Number(lmi) : undefined,
+    aceita_averbacao_como_destinatario: Boolean(aceita_averbacao_como_destinatario)
   };
 
   dbStore.policies.unshift(newPolicy);
@@ -479,6 +482,8 @@ router.post('/insurer-clients', (req, res) => {
   const {
     insurer_id,
     broker_id,
+    co_broker_id,
+    assessoria_id,
     cnpj,
     razao_social,
     nome_fantasia,
@@ -570,6 +575,8 @@ router.post('/insurer-clients', (req, res) => {
     tenant_id: tenant.id,
     insurer_id,
     broker_id,
+    co_broker_id,
+    assessoria_id,
     status: 'ATIVA',
     permitir_inativo_vencido: Boolean(permitir_inativo_vencido),
     vigencia_inicio: vigencia_inicio || new Date().toISOString(),
@@ -868,6 +875,82 @@ router.post('/approval-requests/:id/resolve', (req, res) => {
 
   dbStore.persist();
   return res.json({ status: 'sucesso', request });
+});
+
+// --- J. Regra de Titularidade v2: Regra A (função no documento) ---
+router.get('/policy-titularity-rules', (req, res) => {
+  const { policy_id } = req.query;
+  let items = dbStore.policyTitularityRules;
+  if (policy_id) items = items.filter((r) => r.policy_id === policy_id);
+  return res.json({ status: 'sucesso', rules: items });
+});
+
+router.put('/policy-titularity-rules', (req, res) => {
+  const { policy_id, funcoes } = req.body;
+  if (!policy_id || !Array.isArray(funcoes)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'policy_id e funcoes (lista de { funcao, habilitada }) são obrigatórios.'
+    });
+  }
+
+  for (const item of funcoes) {
+    const existing = dbStore.policyTitularityRules.find(
+      (r) => r.policy_id === policy_id && r.funcao === item.funcao
+    );
+    if (existing) {
+      existing.habilitada = Boolean(item.habilitada);
+    } else {
+      dbStore.policyTitularityRules.push({
+        id: uuidv4(),
+        policy_id,
+        funcao: item.funcao,
+        habilitada: Boolean(item.habilitada)
+      });
+    }
+  }
+
+  dbStore.persist();
+  return res.json({
+    status: 'sucesso',
+    rules: dbStore.policyTitularityRules.filter((r) => r.policy_id === policy_id)
+  });
+});
+
+// --- K. Regra de Titularidade v2: Regra B (bypass por rota/produto) ---
+router.get('/policy-bypass-rules', (req, res) => {
+  const { policy_id } = req.query;
+  let items = dbStore.policyBypassRules;
+  if (policy_id) items = items.filter((r) => r.policy_id === policy_id);
+  return res.json({ status: 'sucesso', rules: items });
+});
+
+router.post('/policy-bypass-rules', (req, res) => {
+  const { policy_id, rota_uf_origem, rota_uf_destino, produto_predominante } = req.body;
+  if (!policy_id || (!rota_uf_origem && !rota_uf_destino && !produto_predominante)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'policy_id é obrigatório, e ao menos um de rota_uf_origem, rota_uf_destino ou produto_predominante deve ser informado.'
+    });
+  }
+
+  const newRule = {
+    id: uuidv4(),
+    policy_id,
+    rota_uf_origem,
+    rota_uf_destino,
+    produto_predominante
+  };
+  dbStore.policyBypassRules.push(newRule);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', rule: newRule });
+});
+
+router.delete('/policy-bypass-rules/:id', (req, res) => {
+  const { id } = req.params;
+  dbStore.policyBypassRules = dbStore.policyBypassRules.filter((r) => r.id !== id);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Regra de bypass removida com sucesso.' });
 });
 
 export default router;

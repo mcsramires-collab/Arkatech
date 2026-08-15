@@ -21,7 +21,9 @@ import {
   DelegationPermission,
   ApprovalRequest,
   ActivationToken,
-  NotificationPreference
+  NotificationPreference,
+  PolicyTitularityRule,
+  PolicyBypassRule
 } from '../types';
 
 class DBStore {
@@ -46,6 +48,8 @@ class DBStore {
   public approvalRequests: ApprovalRequest[] = [];
   public activationTokens: ActivationToken[] = [];
   public notificationPreferences: NotificationPreference[] = [];
+  public policyTitularityRules: PolicyTitularityRule[] = [];
+  public policyBypassRules: PolicyBypassRule[] = [];
 
   private filePath = path.join(__dirname, '../../data_store.json');
 
@@ -78,6 +82,8 @@ class DBStore {
         this.approvalRequests = parsed.approvalRequests || [];
         this.activationTokens = parsed.activationTokens || [];
         this.notificationPreferences = parsed.notificationPreferences || [];
+        this.policyTitularityRules = parsed.policyTitularityRules || [];
+        this.policyBypassRules = parsed.policyBypassRules || [];
         return;
       } catch (err) {
         console.error('Erro ao ler data_store.json. Inicializando com seeds padrão.', err);
@@ -117,7 +123,9 @@ class DBStore {
             delegationPermissions: this.delegationPermissions,
             approvalRequests: this.approvalRequests,
             activationTokens: this.activationTokens,
-            notificationPreferences: this.notificationPreferences
+            notificationPreferences: this.notificationPreferences,
+            policyTitularityRules: this.policyTitularityRules,
+            policyBypassRules: this.policyBypassRules
           },
           null,
           2
@@ -774,6 +782,23 @@ class DBStore {
         { id: uuidv4(), tenant_user_id: tu.id, canal: 'EMAIL' as const, ativo: true },
         { id: uuidv4(), tenant_user_id: tu.id, canal: 'PORTAL' as const, ativo: true }
       ]);
+
+    // 14. Regra de Titularidade v2 — Regra A (função no documento) e Regra B (bypass por rota/produto)
+    // policy2 = pol_rcdc_translog: mantém o comportamento equivalente ao antigo aceita_averbacao_como_destinatario=true,
+    // agora modelado como regra explícita — e ganha mais uma função habilitada (Tomador) para exercitar a Regra A completa.
+    this.policyTitularityRules = [
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'DESTINATARIO', habilitada: true },
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'TOMADOR', habilitada: true },
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'REMETENTE', habilitada: false },
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'EXPEDIDOR', habilitada: false },
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'RECEBEDOR', habilitada: false }
+    ];
+
+    // Regra B de exemplo: policy1 (Expressa/RCTRC) aceita bypass sem CNPJ no documento
+    // para viagens com rota SP -> SP (útil para testar o cenário de "CNPJ ausente do documento").
+    this.policyBypassRules = [
+      { id: uuidv4(), policy_id: policy1.id, rota_uf_origem: 'SP', rota_uf_destino: 'SP' }
+    ];
   }
 }
 

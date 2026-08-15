@@ -89,15 +89,56 @@ export class AverbacaoService {
       return this.erro('ERR-4003');
     }
 
-    // 5. Checagem de Titularidade — o CNPJ do tenant é o emissor ou (se permitido) o destinatário do documento?
+    // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
+    const regrasAplicadas: string[] = [];
     const tenantCnpjLimpo = tenant.cnpj.replace(/\D/g, '');
-    const isEmitente = parsedDoc.cnpjEmitente && parsedDoc.cnpjEmitente.replace(/\D/g, '') === tenantCnpjLimpo;
-    const isDestinatario = parsedDoc.cnpjDestinatario && parsedDoc.cnpjDestinatario.replace(/\D/g, '') === tenantCnpjLimpo;
+    const norm = (v?: string) => (v ? v.replace(/\D/g, '') : undefined);
 
+    const isEmitente = norm(parsedDoc.cnpjEmitente) === tenantCnpjLimpo;
+
+    const funcaoParaCnpj: Record<string, string | undefined> = {
+      DESTINATARIO: norm(parsedDoc.cnpjDestinatario),
+      REMETENTE: norm(parsedDoc.cnpjRemetente),
+      TOMADOR: norm(parsedDoc.cnpjTomador),
+      EXPEDIDOR: norm(parsedDoc.cnpjExpedidor),
+      RECEBEDOR: norm(parsedDoc.cnpjRecebedor)
+    };
+
+    const titularityRules = dbStore.policyTitularityRules.filter((r) => r.policy_id === policy.id);
+
+    let matchedByFuncao = false;
     if (!isEmitente) {
-      if (!isDestinatario || !policy.aceita_averbacao_como_destinatario) {
-        return this.erro('ERR-4008');
+      if (titularityRules.length > 0) {
+        matchedByFuncao = titularityRules.some(
+          (r) => r.habilitada && funcaoParaCnpj[r.funcao] === tenantCnpjLimpo
+        );
+      } else {
+        // Sem regras cadastradas: cai no comportamento legado (só Destinatário, via flag antiga)
+        matchedByFuncao = Boolean(policy.aceita_averbacao_como_destinatario) && funcaoParaCnpj.DESTINATARIO === tenantCnpjLimpo;
       }
+    }
+
+    let matchedByBypass = false;
+    if (!isEmitente && !matchedByFuncao) {
+      const bypassRules = dbStore.policyBypassRules.filter((r) => r.policy_id === policy.id);
+      matchedByBypass = bypassRules.some((r) => {
+        const rotaOk =
+          (!r.rota_uf_origem || r.rota_uf_origem === parsedDoc.ufOrigem) &&
+          (!r.rota_uf_destino || r.rota_uf_destino === parsedDoc.ufDestino);
+        const produtoOk = !r.produto_predominante || r.produto_predominante === parsedDoc.produtoPredominante;
+        return rotaOk && produtoOk;
+      });
+    }
+
+    if (!isEmitente && !matchedByFuncao && !matchedByBypass) {
+      return this.erro('ERR-4008');
+    }
+
+    if (matchedByFuncao) {
+      const funcaoUsada = Object.entries(funcaoParaCnpj).find(([, v]) => v === tenantCnpjLimpo)?.[0];
+      if (funcaoUsada) regrasAplicadas.push(`Titularidade aceita via função '${funcaoUsada}' do documento.`);
+    } else if (matchedByBypass) {
+      regrasAplicadas.push('Titularidade aceita via bypass (Regra B — rota/produto), sem CNPJ presente no documento.');
     }
 
     // 6. Checagem de Deduplicação — (chave_documento, protocolo_aceitacao_sefaz, ramo) já averbados?
@@ -120,7 +161,6 @@ export class AverbacaoService {
     const isInactiveProblem = isTenantInactive || isPolicyInactiveOrExpired;
 
     let hasWarningBypass = false;
-    const regrasAplicadas: string[] = [];
 
     if (isInactiveProblem) {
       if (policy.permitir_inativo_vencido) {

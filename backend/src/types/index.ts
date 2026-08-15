@@ -4,6 +4,7 @@ export type UserRole = 'ADMIN' | 'SEGURADORA' | 'CORRETORA' | 'TRANSPORTADOR';
 export type RamoApolice = 'RCTRC' | 'RCDC' | 'RCV';
 export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE' | 'MDFE';
 export type InternalUserRole = 'ADM' | 'AGENTE';
+export type FuncaoDocumento = 'EMISSOR' | 'DESTINATARIO' | 'REMETENTE' | 'TOMADOR' | 'EXPEDIDOR' | 'RECEBEDOR';
 export type DelegationAction =
   | 'CRIAR_CLIENTE'
   | 'EDITAR_CLIENTE'
@@ -62,13 +63,40 @@ export interface Policy {
   ramo: RamoApolice;
   tenant_id: string; // Transportador / Embarcador vinculado
   insurer_id: string;
-  broker_id: string;
+  broker_id: string; // Corretora líder — obrigatória
+  co_broker_id?: string; // Co-corretora — opcional
+  assessoria_id?: string; // Assessoria — opcional, mesma visibilidade/funções de Broker
   status: 'ATIVA' | 'INATIVA' | 'VENCIDA';
   permitir_inativo_vencido: boolean;
   vigencia_inicio: string;
   vigencia_fim: string;
   lmi?: number; // Limite Máximo da Apólice
-  aceita_averbacao_como_destinatario: boolean; // permite averbar documentos em que este CNPJ é o destinatário, não o emissor
+  /** @deprecated usar PolicyTitularityRule com funcao='DESTINATARIO'. Mantido por compatibilidade. */
+  aceita_averbacao_como_destinatario: boolean;
+}
+
+/**
+ * Regra A da Titularidade v2 — define em quais funções do documento fiscal o CNPJ do
+ * segurado pode aparecer para a averbação ser aceita (além de EMISSOR, que é sempre aceito).
+ */
+export interface PolicyTitularityRule {
+  id: string;
+  policy_id: string;
+  funcao: FuncaoDocumento;
+  habilitada: boolean;
+}
+
+/**
+ * Regra B da Titularidade v2 — bypass: aceita a averbação mesmo sem o CNPJ do segurado
+ * aparecer em nenhuma função do documento, desde que a rota e/ou o produto predominante
+ * batam com o configurado. Pelo menos um dos três campos precisa estar preenchido.
+ */
+export interface PolicyBypassRule {
+  id: string;
+  policy_id: string;
+  rota_uf_origem?: string;
+  rota_uf_destino?: string;
+  produto_predominante?: string;
 }
 
 /**

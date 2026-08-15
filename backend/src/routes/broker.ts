@@ -55,6 +55,8 @@ router.post('/clients', (req, res) => {
   const {
     insurer_id,
     broker_id,
+    co_broker_id,
+    assessoria_id,
     cnpj,
     razao_social,
     nome_fantasia,
@@ -172,6 +174,8 @@ router.post('/clients', (req, res) => {
     tenant_id: tenant.id,
     insurer_id,
     broker_id,
+    co_broker_id,
+    assessoria_id,
     status: 'ATIVA',
     permitir_inativo_vencido: Boolean(permitir_inativo_vencido),
     vigencia_inicio: vigencia_inicio || new Date().toISOString(),

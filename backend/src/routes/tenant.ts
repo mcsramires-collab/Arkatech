@@ -71,7 +71,7 @@ router.post('/activation/:token/aceitar', (req, res) => {
 router.get('/policies', (req, res) => {
   const tenantId = String(req.query.tenant_id || '');
   const gate = checkActivated(tenantId);
-  if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
+  if (!gate.ok) return res.status(gate.code).json(gate.body);
 
   const policies = dbStore.policies
     .filter((p) => p.tenant_id === tenantId)
@@ -92,7 +92,7 @@ router.get('/policies', (req, res) => {
 router.get('/averbacoes', (req, res) => {
   const tenantId = String(req.query.tenant_id || '');
   const gate = checkActivated(tenantId);
-  if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
+  if (!gate.ok) return res.status(gate.code).json(gate.body);
 
   const items = dbStore.averbacoes
     .filter((a) => a.tenant_id === tenantId)
@@ -111,7 +111,7 @@ router.get('/averbacoes', (req, res) => {
 router.get('/recovery-pendentes', (req, res) => {
   const tenantId = String(req.query.tenant_id || '');
   const gate = checkActivated(tenantId);
-  if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
+  if (!gate.ok) return res.status(gate.code).json(gate.body);
 
   const pendentes = dbStore.recoverySessions.filter(
     (r) => r.tenant_id === tenantId && !r.utilizada && new Date(r.expira_em) > new Date()
