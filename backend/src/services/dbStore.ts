@@ -500,19 +500,19 @@ class DBStore {
     };
 
     const policyExcecao: Policy = {
-  id: 'pol_rcv_inativo_excecao',
-  numero_apolice: 'POL-RCV-EXCECAO-999',
-  ramo: 'RCV',
-  tenant_id: 'ten_inativo', // em vez de tenantInativo.id
-  insurer_id: 'ins_porto',  // em vez de insurerPorto.id (ou 'ins_1', dependendo do id no seu mock)
-  broker_id: 'brok_1',      // em vez de brokerArckatech.id
-  status: 'INATIVA',
-  permitir_inativo_vencido: true, // Flag de bypass habilitada
-  vigencia_inicio: '2025-01-01T00:00:00Z',
-  vigencia_fim: '2025-12-31T23:59:59Z', // Apólice Vencida
-  lmi: 150000,
-  aceita_averbacao_como_destinatario: false
-};
+      id: 'pol_rcv_inativo_excecao',
+      numero_apolice: 'POL-RCV-EXCECAO-999',
+      ramo: 'RCV',
+      tenant_id: tenantInativo.id,
+      insurer_id: insurerPorto.id,
+      broker_id: brokerArckatech.id,
+      status: 'INATIVA',
+      permitir_inativo_vencido: true, // Flag de bypass habilitada
+      vigencia_inicio: '2025-01-01T00:00:00Z',
+      vigencia_fim: '2025-12-31T23:59:59Z', // Apólice Vencida
+      lmi: 150000,
+      aceita_averbacao_como_destinatario: false
+    };
 
     const policyProd: Policy = {
       id: 'pol_prod_real',
