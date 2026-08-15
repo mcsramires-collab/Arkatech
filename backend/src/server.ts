@@ -7,6 +7,7 @@ import adminRoutes from './routes/admin';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
 import internalRoutes from './routes/internal';
+import { internalApiKeyMiddleware } from './middleware/internalApiKeyMiddleware';
 
 dotenv.config();
 
@@ -31,10 +32,14 @@ app.get('/health', (req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/averbar', averbacaoRoutes);
 app.use('/api/v1/averbacoes', averbacaoRoutes);
-app.use('/api/v1/admin', adminRoutes);
-app.use('/api/v1/broker', brokerRoutes);
+// Painéis internos (Seguradora, Corretora, ARCKATECH) — protegidos por chave de API
+// enquanto não existe login real por usuário. Ver middleware/internalApiKeyMiddleware.ts.
+app.use('/api/v1/admin', internalApiKeyMiddleware, adminRoutes);
+app.use('/api/v1/broker', internalApiKeyMiddleware, brokerRoutes);
+app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
+// Portal do Transportador — segue sem a chave interna (é o público final), mas ainda
+// sem autenticação por usuário real; ver seção de gaps no doc de estado técnico.
 app.use('/api/v1/tenant', tenantRoutes);
-app.use('/api/v1/internal', internalRoutes);
 
 // Servidor HTTP
 app.listen(PORT, () => {
