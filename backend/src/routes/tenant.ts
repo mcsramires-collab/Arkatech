@@ -1,11 +1,13 @@
 import { Router, Response } from 'express';
 import multer from 'multer';
+import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
+import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore';
 import { AverbacaoService } from '../services/averbacao';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
-import { TenantUser } from '../types';
+import { TenantUser, BusinessRuleRequest } from '../types';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -180,7 +182,7 @@ router.get('/averbacoes', authMiddleware, (req: AuthenticatedRequest, res: Respo
   }
   if (numero_averbacao) {
     const needle = String(numero_averbacao).toLowerCase();
-    filtered = filtered.filter((a) => a.numero_averbacao.toLowerCase().includes(needle));
+    filtered = filtered.filter((a) => (a.numero_averbacao ?? '').toLowerCase().includes(needle));
   }
   if (chave_documento) {
     filtered = filtered.filter((a) => a.chave_documento === String(chave_documento));
@@ -247,7 +249,17 @@ router.get('/users', authMiddleware, (req: AuthenticatedRequest, res: Response) 
   return res.json({ status: 'sucesso', users: items });
 });
 
-router.post('/users', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+/**
+ * Gera uma senha temporária aleatória para um TenantUser recém-criado. Como ainda não existe
+ * envio de e-mail integrado neste sistema (nem aqui, nem em /admin/tenant-users), a senha em
+ * texto plano é devolvida UMA ÚNICA VEZ na resposta deste POST — quem criar o usuário precisa
+ * repassá-la para a pessoa por um canal separado. Não há ainda fluxo de "esqueci minha senha".
+ */
+function gerarSenhaTemporaria(): string {
+  return crypto.randomBytes(9).toString('base64url');
+}
+
+router.post('/users', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const { nome, email, rbac_profile_id, is_admin_da_conta } = req.body;
 
@@ -255,12 +267,15 @@ router.post('/users', authMiddleware, (req: AuthenticatedRequest, res: Response)
     return res.status(400).json({ status: 'erro', mensagem: 'nome e email são obrigatórios.' });
   }
 
+  const senhaTemporaria = gerarSenhaTemporaria();
+  const passwordHash = await bcrypt.hash(senhaTemporaria, 10);
+
   const newUser: TenantUser = {
     id: uuidv4(),
     tenant_id: tenantId,
     nome,
     email,
-    password_hash: `hash_${uuidv4()}`,
+    password_hash: passwordHash,
     rbac_profile_id,
     is_admin_da_conta: Boolean(is_admin_da_conta),
     status: 'ATIVO',
@@ -268,7 +283,9 @@ router.post('/users', authMiddleware, (req: AuthenticatedRequest, res: Response)
   };
   dbStore.tenantUsers.push(newUser);
   dbStore.persist();
-  return res.json({ status: 'sucesso', user: newUser });
+
+  const { password_hash, ...userSemSenha } = newUser;
+  return res.json({ status: 'sucesso', user: userSemSenha, senha_temporaria: senhaTemporaria });
 });
 
 router.put('/users/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
@@ -279,14 +296,16 @@ router.put('/users/:id', authMiddleware, (req: AuthenticatedRequest, res: Respon
     return res.status(404).json({ status: 'erro', mensagem: 'Usuário não encontrado.' });
   }
 
-  const { nome, email, rbac_profile_id, status } = req.body;
+  const { nome, email, rbac_profile_id, status, is_admin_da_conta } = req.body;
   if (nome !== undefined) user.nome = nome;
   if (email !== undefined) user.email = email;
   if (rbac_profile_id !== undefined) user.rbac_profile_id = rbac_profile_id;
   if (status !== undefined) user.status = status;
+  if (is_admin_da_conta !== undefined) user.is_admin_da_conta = Boolean(is_admin_da_conta);
 
   dbStore.persist();
-  return res.json({ status: 'sucesso', user });
+  const { password_hash, ...userSemSenha } = user;
+  return res.json({ status: 'sucesso', user: userSemSenha });
 });
 
 router.delete('/users/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
@@ -361,6 +380,86 @@ router.put('/notification-preferences', (req, res) => {
 
   dbStore.persist();
   return res.json({ status: 'sucesso', preference: pref });
+});
+
+// --- Solicitações de Regras de Negócio (MVP) — o transportador/embarcador solicita uma condição
+// nova ou uma alteração de regra existente na apólice; quem aprova/rejeita é a seguradora
+// (PUT /admin/regras-solicitacoes/:id). Sem fluxo de aprovação automática nesta versão.
+router.get('/regras-solicitacoes', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const items = dbStore.businessRuleRequests
+    .filter((r) => r.tenant_id === tenantId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return res.json({ status: 'sucesso', solicitacoes: items });
+});
+
+router.post('/regras-solicitacoes', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const { tipo, descricao } = req.body;
+
+  if (!tipo) {
+    return res.status(400).json({ status: 'erro', mensagem: 'tipo é obrigatório.' });
+  }
+
+  const solicitanteNome = req.tenant!.tenant_user_nome || req.tenant!.razao_social;
+
+  const newRequest: BusinessRuleRequest = {
+    id: uuidv4(),
+    tenant_id: tenantId,
+    tipo,
+    descricao,
+    status: 'PENDENTE',
+    solicitante_nome: solicitanteNome,
+    created_at: new Date().toISOString()
+  };
+  dbStore.businessRuleRequests.unshift(newRequest);
+  dbStore.persist();
+
+  return res.json({ status: 'sucesso', solicitacao: newRequest });
+});
+
+// --- Estatísticas do Dashboard (Início do Portal) — agregados simples sobre os dados reais do
+// próprio tenant; nada aqui é mockado, mas propositalmente não inclui nada que exija consultas
+// caras (ex: sem paginação/filtro — o volume de dados de demonstração é pequeno).
+router.get('/dashboard-stats', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+
+  const averbacoesTenant = dbStore.averbacoes.filter((a) => a.tenant_id === tenantId);
+  const totalAverbacoes = averbacoesTenant.filter((a) => a.status === 'SUCESSO').length;
+  const totalRecusadas = averbacoesTenant.filter((a) => a.status === 'ERRO').length;
+  const totalPendentes = dbStore.recoverySessions.filter(
+    (r) => r.tenant_id === tenantId && !r.utilizada && new Date(r.expira_em) > new Date()
+  ).length;
+
+  const valorTotalAverbado = averbacoesTenant
+    .filter((a) => a.status === 'SUCESSO')
+    .reduce((sum, a) => sum + (a.valor_considerado_averbacao || 0), 0);
+
+  const solicitacoesRegrasPendentes = dbStore.businessRuleRequests.filter(
+    (r) => r.tenant_id === tenantId && r.status === 'PENDENTE'
+  ).length;
+
+  const ultimasAverbacoes = averbacoesTenant.slice(0, 5).map((a) => ({
+    id: a.id,
+    numero_averbacao: a.numero_averbacao,
+    status: a.status,
+    tipo_documento: a.tipo_documento,
+    chave_documento: a.chave_documento,
+    valor_considerado_averbacao: a.valor_considerado_averbacao,
+    created_at: a.created_at
+  }));
+
+  return res.json({
+    status: 'sucesso',
+    stats: {
+      total_averbacoes: totalAverbacoes,
+      total_recusadas: totalRecusadas,
+      total_pendentes_recuperacao: totalPendentes,
+      valor_total_averbado: valorTotalAverbado,
+      solicitacoes_regras_pendentes: solicitacoesRegrasPendentes,
+      ultimas_averbacoes: ultimasAverbacoes
+    }
+  });
 });
 
 export default router;
