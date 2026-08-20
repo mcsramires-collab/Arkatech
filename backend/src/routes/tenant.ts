@@ -1,10 +1,14 @@
 import { Router, Response } from 'express';
+import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { AverbacaoService } from '../services/averbacao';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
+import { TenantUser } from '../types';
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 /**
  * Rotas do Portal do Transportador/Embarcador.
@@ -15,6 +19,10 @@ const router = Router();
  * pessoa que soubesse (ou adivinhasse) o tenant_id de outra empresa conseguia ver
  * as apólices e averbações dela (o comentário anterior deste arquivo já registrava
  * isso como pendência de produção).
+ *
+ * /importar-lote e /users seguem o mesmo padrão: tenant_id sempre vem do JWT,
+ * nunca de um campo livre no body/query — nenhuma empresa consegue importar
+ * documentos ou gerenciar usuários em nome de outro tenant.
  *
  * /activation-status, /activation/:token/aceitar e /recovery/:token/corrigir
  * permanecem sem JWT de propósito: são fluxos de "link enviado por e-mail" — o
@@ -105,23 +113,116 @@ router.get('/policies', authMiddleware, (req: AuthenticatedRequest, res: Respons
   return res.json({ status: 'sucesso', policies });
 });
 
-// --- Histórico de Averbações do Próprio CNPJ (linguagem simples) ---
+// --- Importação de Documentos Fiscais em Lote (equivalente ao /admin/importar-lote,
+// porém sem tenant_id livre no body: o tenant vem sempre do próprio JWT, então uma
+// empresa jamais consegue importar documentos "em nome" de outro tenant) ---
+router.post(
+  '/importar-lote',
+  authMiddleware,
+  upload.array('arquivos', 200),
+  (req: AuthenticatedRequest, res: Response) => {
+    const tenantId = req.tenant!.tenant_id;
+    const gate = checkActivated(tenantId);
+    if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
+
+    const { ramo } = req.body;
+    const files = req.files as Express.Multer.File[] | undefined;
+
+    if (!ramo) {
+      return res.status(400).json({ status: 'erro', mensagem: 'ramo é obrigatório.' });
+    }
+    if (!files || files.length === 0) {
+      return res.status(400).json({ status: 'erro', mensagem: 'Nenhum arquivo XML foi enviado.' });
+    }
+
+    const appBaseUrl = `${req.protocol}://${req.get('host')}`;
+    const resultados = files.map((file) => {
+      const xmlContent = file.buffer.toString('utf-8');
+      const resultado = AverbacaoService.process({ tenant_id: tenantId, ramo, xml_content: xmlContent }, appBaseUrl);
+      return {
+        arquivo: file.originalname,
+        status: resultado.status,
+        codigo: resultado.codigo,
+        mensagem: resultado.mensagem,
+        numero_averbacao: resultado.numero_averbacao,
+        variaveis_faltantes: resultado.variaveis_faltantes
+      };
+    });
+
+    const totalSucesso = resultados.filter((r) => r.status === 'sucesso' || r.status === 'aviso').length;
+    const totalErro = resultados.filter((r) => r.status === 'erro').length;
+
+    return res.json({
+      status: 'sucesso',
+      total: resultados.length,
+      total_sucesso: totalSucesso,
+      total_erro: totalErro,
+      resultados
+    });
+  }
+);
+
+// --- Histórico de Averbações do Próprio CNPJ (linguagem simples), com paginação e filtros ---
 router.get('/averbacoes', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const gate = checkActivated(tenantId);
   if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
-  const items = dbStore.averbacoes
-    .filter((a) => a.tenant_id === tenantId)
-    .map((a) => {
-      const template = dbStore.responseTemplates.find((t) => t.codigo === a.codigo_resposta);
-      return {
-        ...a,
-        explicacao_nao_tecnica: template?.explicacao_nao_tecnica
-      };
-    });
+  const { status, tipo_documento, numero_averbacao, chave_documento, data_de, data_ate } = req.query;
 
-  return res.json({ status: 'sucesso', averbacoes: items });
+  let filtered = dbStore.averbacoes.filter((a) => a.tenant_id === tenantId);
+
+  if (status) {
+    filtered = filtered.filter((a) => a.status === String(status).toUpperCase());
+  }
+  if (tipo_documento) {
+    filtered = filtered.filter((a) => a.tipo_documento === String(tipo_documento).toUpperCase());
+  }
+  if (numero_averbacao) {
+    const needle = String(numero_averbacao).toLowerCase();
+    filtered = filtered.filter((a) => a.numero_averbacao.toLowerCase().includes(needle));
+  }
+  if (chave_documento) {
+    filtered = filtered.filter((a) => a.chave_documento === String(chave_documento));
+  }
+  if (data_de) {
+    const from = new Date(String(data_de));
+    if (!isNaN(from.getTime())) filtered = filtered.filter((a) => new Date(a.created_at) >= from);
+  }
+  if (data_ate) {
+    const to = new Date(String(data_ate));
+    if (!isNaN(to.getTime())) filtered = filtered.filter((a) => new Date(a.created_at) <= to);
+  }
+
+  const totalItems = filtered.length;
+
+  const pageRaw = Number(req.query.page);
+  const pageSizeRaw = Number(req.query.page_size);
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
+  const pageSize =
+    Number.isFinite(pageSizeRaw) && pageSizeRaw > 0 ? Math.min(Math.floor(pageSizeRaw), 200) : 20;
+
+  const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / pageSize);
+  const startIndex = (page - 1) * pageSize;
+
+  const items = filtered.slice(startIndex, startIndex + pageSize).map((a) => {
+    const template = dbStore.responseTemplates.find((t) => t.codigo === a.codigo_resposta);
+    return {
+      ...a,
+      explicacao_nao_tecnica: template?.explicacao_nao_tecnica
+    };
+  });
+
+  return res.json({
+    status: 'sucesso',
+    averbacoes: items,
+    paginacao: {
+      pagina: page,
+      tamanho_pagina: pageSize,
+      total_itens: totalItems,
+      total_paginas: totalPages
+    }
+  });
 });
 
 // --- Pendências de Correção (variáveis faltantes) — sem precisar do link externo ---
@@ -135,6 +236,70 @@ router.get('/recovery-pendentes', authMiddleware, (req: AuthenticatedRequest, re
   );
 
   return res.json({ status: 'sucesso', pendencias: pendentes });
+});
+
+// --- Usuários do Próprio Tenant (equivalente ao /admin/tenant-users, porém sempre
+// escopado ao tenant_id do JWT — nunca a um tenant_id arbitrário vindo de query/body,
+// para uma empresa não conseguir listar/criar/editar/remover usuários de outra) ---
+router.get('/users', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const items = dbStore.tenantUsers.filter((u) => u.tenant_id === tenantId);
+  return res.json({ status: 'sucesso', users: items });
+});
+
+router.post('/users', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const { nome, email, rbac_profile_id, is_admin_da_conta } = req.body;
+
+  if (!nome || !email) {
+    return res.status(400).json({ status: 'erro', mensagem: 'nome e email são obrigatórios.' });
+  }
+
+  const newUser: TenantUser = {
+    id: uuidv4(),
+    tenant_id: tenantId,
+    nome,
+    email,
+    password_hash: `hash_${uuidv4()}`,
+    rbac_profile_id,
+    is_admin_da_conta: Boolean(is_admin_da_conta),
+    status: 'ATIVO',
+    created_at: new Date().toISOString()
+  };
+  dbStore.tenantUsers.push(newUser);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', user: newUser });
+});
+
+router.put('/users/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const { id } = req.params;
+  const user = dbStore.tenantUsers.find((u) => u.id === id && u.tenant_id === tenantId);
+  if (!user) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Usuário não encontrado.' });
+  }
+
+  const { nome, email, rbac_profile_id, status } = req.body;
+  if (nome !== undefined) user.nome = nome;
+  if (email !== undefined) user.email = email;
+  if (rbac_profile_id !== undefined) user.rbac_profile_id = rbac_profile_id;
+  if (status !== undefined) user.status = status;
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', user });
+});
+
+router.delete('/users/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const { id } = req.params;
+  const exists = dbStore.tenantUsers.some((u) => u.id === id && u.tenant_id === tenantId);
+  if (!exists) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Usuário não encontrado.' });
+  }
+
+  dbStore.tenantUsers = dbStore.tenantUsers.filter((u) => !(u.id === id && u.tenant_id === tenantId));
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Usuário removido com sucesso.' });
 });
 
 // --- Corrigir Direto no Portal (mesmo mecanismo do link de recuperação, sem sair da tela) ---

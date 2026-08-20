@@ -169,6 +169,10 @@ export interface Averbacao {
   tp_amb_sefaz?: 1 | 2; // 1=produção, 2=homologação — extraído do XML, independente do tenant.ambiente
   tipo_documento: TipoDocumento;
   chave_documento: string;
+  serie_documento?: string; // ide.serie do CT-e/NF-e/MDF-e
+  cnpj_remetente?: string;
+  cnpj_destinatario?: string;
+  cnpj_tomador?: string;
   protocolo_aceitacao_sefaz?: string; // nProt do protXXX/infProt do XML, usado na deduplicação
   raw_xml_id: string;
   recovery_token?: string;
