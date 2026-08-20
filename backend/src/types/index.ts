@@ -156,7 +156,8 @@ export interface RawXMLStore {
 
 export interface Averbacao {
   id: string;
-  numero_averbacao: string;
+  /** Ausente em registros status='ERRO' — só é gerado quando a averbação é aceita. */
+  numero_averbacao?: string;
   protocolo_interno_averbacao: string; // identificador interno nosso, independente do formato "de mercado" do nAver
   tenant_id: string;
   policy_id: string;
@@ -169,6 +170,7 @@ export interface Averbacao {
   tp_amb_sefaz?: 1 | 2; // 1=produção, 2=homologação — extraído do XML, independente do tenant.ambiente
   tipo_documento: TipoDocumento;
   chave_documento: string;
+  numero_documento?: string; // número "de mercado" do próprio documento (nCT/nNF/nMDF), não o número da averbação
   serie_documento?: string; // ide.serie do CT-e/NF-e/MDF-e
   cnpj_remetente?: string;
   cnpj_destinatario?: string;
@@ -328,4 +330,25 @@ export interface NotificationPreference {
   tenant_user_id: string;
   canal: 'EMAIL' | 'PORTAL' | 'SMS';
   ativo: boolean;
+}
+
+// ===================== REGRAS DE NEGÓCIO (SOLICITAÇÃO DO TRANSPORTADOR) =====================
+
+/**
+ * Solicitação de uma nova regra de negócio (ex: condição por valor de carga, papel do CNPJ
+ * na averbação) feita pelo transportador/embarcador à seguradora, via Portal do Segurado.
+ * MVP: só o lado do transportador (criar/consultar). A aprovação/rejeição pela seguradora é
+ * feita por quem administra o painel interno (via /admin), ainda sem tela dedicada no Portal
+ * da Seguradora — só a API.
+ */
+export interface BusinessRuleRequest {
+  id: string;
+  tenant_id: string;
+  tipo: string; // ex: "Papel do CNPJ na averbação", "Condição por valor de carga"
+  descricao?: string;
+  status: 'PENDENTE' | 'APROVADA' | 'REJEITADA';
+  solicitante_nome: string;
+  comentario_seguradora?: string;
+  created_at: string;
+  resolved_at?: string;
 }
