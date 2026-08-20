@@ -1,14 +1,31 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import { dbStore } from '../services/dbStore';
 import { AverbacaoService } from '../services/averbacao';
 import { ResponseEngine } from '../services/responseEngine';
+import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 
 const router = Router();
 
 /**
- * Rotas do Portal do Transportador/Embarcador. Nesta fase de testes internos, o tenant é
- * identificado por tenant_id direto (mesmo padrão usado em /admin e /broker) — em produção,
- * substituir por autenticação JWT via authMiddleware, como já ocorre em /api/v1/averbar.
+ * Rotas do Portal do Transportador/Embarcador.
+ *
+ * /policies, /averbacoes e /recovery-pendentes agora exigem o JWT emitido por
+ * POST /api/v1/auth/token (authMiddleware) e usam o tenant_id do próprio token —
+ * não mais um tenant_id livre por query string. Isso fecha a brecha em que qualquer
+ * pessoa que soubesse (ou adivinhasse) o tenant_id de outra empresa conseguia ver
+ * as apólices e averbações dela (o comentário anterior deste arquivo já registrava
+ * isso como pendência de produção).
+ *
+ * /activation-status, /activation/:token/aceitar e /recovery/:token/corrigir
+ * permanecem sem JWT de propósito: são fluxos de "link enviado por e-mail" — o
+ * transportador ainda não teria como obter um token antes de aceitar o convite —,
+ * no mesmo padrão já usado em /api/v1/averbar/recuperar/:token.
+ *
+ * /notification-preferences também permanece como está por enquanto: é escopado
+ * por tenant_user_id (usuário individual dentro da empresa), e o JWT atual só
+ * carrega identidade da EMPRESA (tenant), não do usuário — não existe ainda login
+ * por usuário dentro do tenant. Proteger essa rota direito depende de login
+ * individual (TenantUser) existir primeiro.
  */
 
 const checkActivated = (tenantId: string) => {
@@ -68,8 +85,8 @@ router.post('/activation/:token/aceitar', (req, res) => {
 });
 
 // --- Apólices/Seguradoras/Corretoras Vinculadas ao Próprio CNPJ ---
-router.get('/policies', (req, res) => {
-  const tenantId = String(req.query.tenant_id || '');
+router.get('/policies', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
   const gate = checkActivated(tenantId);
   if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
@@ -89,8 +106,8 @@ router.get('/policies', (req, res) => {
 });
 
 // --- Histórico de Averbações do Próprio CNPJ (linguagem simples) ---
-router.get('/averbacoes', (req, res) => {
-  const tenantId = String(req.query.tenant_id || '');
+router.get('/averbacoes', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
   const gate = checkActivated(tenantId);
   if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
@@ -108,8 +125,8 @@ router.get('/averbacoes', (req, res) => {
 });
 
 // --- Pendências de Correção (variáveis faltantes) — sem precisar do link externo ---
-router.get('/recovery-pendentes', (req, res) => {
-  const tenantId = String(req.query.tenant_id || '');
+router.get('/recovery-pendentes', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
   const gate = checkActivated(tenantId);
   if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
