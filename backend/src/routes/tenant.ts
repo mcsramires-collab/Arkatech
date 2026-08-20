@@ -245,7 +245,9 @@ router.get('/recovery-pendentes', authMiddleware, (req: AuthenticatedRequest, re
 // para uma empresa não conseguir listar/criar/editar/remover usuários de outra) ---
 router.get('/users', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
-  const items = dbStore.tenantUsers.filter((u) => u.tenant_id === tenantId);
+  const items = dbStore.tenantUsers
+    .filter((u) => u.tenant_id === tenantId)
+    .map(({ password_hash, ...userSemSenha }) => userSemSenha);
   return res.json({ status: 'sucesso', users: items });
 });
 
