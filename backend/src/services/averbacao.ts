@@ -205,7 +205,7 @@ export class AverbacaoService {
       regrasAplicadas.push('Titularidade aceita via bypass (Regra B — rota/produto), sem CNPJ presente no documento.');
     }
 
-    // 6. Checagem de Dedupli​cação — (chave_documento, protocolo_aceitacao_sefaz, ramo) já averbados?
+    // 6. Checagem de Deduplicação — (chave_documento, protocolo_aceitacao_sefaz, ramo) já averbados?
     const jaAverbado = dbStore.averbacoes.find(
       (a) =>
         a.chave_documento === parsedDoc.chaveDocumento &&
