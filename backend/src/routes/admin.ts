@@ -2,9 +2,11 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser } from '../types';
+import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest } from '../types';
 import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { PurgeService } from '../services/purgeService';
@@ -759,21 +761,33 @@ router.get('/tenant-users', (req, res) => {
   const { tenant_id } = req.query;
   let items = dbStore.tenantUsers;
   if (tenant_id) items = items.filter((u) => u.tenant_id === tenant_id);
-  return res.json({ status: 'sucesso', users: items });
+  const usersSemSenha = items.map(({ password_hash, ...u }) => u);
+  return res.json({ status: 'sucesso', users: usersSemSenha });
 });
 
-router.post('/tenant-users', (req, res) => {
+// Mesma lógica de senha temporária usada em POST /tenant/users — mantida em sincronia para que
+// um usuário criado por aqui (painel admin interno da Arckatech) também consiga logar depois em
+// POST /auth/portal-login. Não há envio de e-mail integrado: a senha em texto plano é devolvida
+// UMA ÚNICA VEZ na resposta deste POST.
+function gerarSenhaTemporaria(): string {
+  return crypto.randomBytes(9).toString('base64url');
+}
+
+router.post('/tenant-users', async (req, res) => {
   const { tenant_id, nome, email, rbac_profile_id, is_admin_da_conta } = req.body;
   if (!tenant_id || !nome || !email) {
     return res.status(400).json({ status: 'erro', mensagem: 'tenant_id, nome e email são obrigatórios.' });
   }
+
+  const senhaTemporaria = gerarSenhaTemporaria();
+  const passwordHash = await bcrypt.hash(senhaTemporaria, 10);
 
   const newUser: TenantUser = {
     id: uuidv4(),
     tenant_id,
     nome,
     email,
-    password_hash: `hash_${uuidv4()}`,
+    password_hash: passwordHash,
     rbac_profile_id,
     is_admin_da_conta: Boolean(is_admin_da_conta),
     status: 'ATIVO',
@@ -781,7 +795,9 @@ router.post('/tenant-users', (req, res) => {
   };
   dbStore.tenantUsers.push(newUser);
   dbStore.persist();
-  return res.json({ status: 'sucesso', user: newUser });
+
+  const { password_hash, ...userSemSenha } = newUser;
+  return res.json({ status: 'sucesso', user: userSemSenha, senha_temporaria: senhaTemporaria });
 });
 
 router.put('/tenant-users/:id', (req, res) => {
@@ -790,13 +806,15 @@ router.put('/tenant-users/:id', (req, res) => {
   if (!user) {
     return res.status(404).json({ status: 'erro', mensagem: 'Usuário não encontrado.' });
   }
-  const { nome, email, rbac_profile_id, status } = req.body;
+  const { nome, email, rbac_profile_id, status, is_admin_da_conta } = req.body;
   if (nome !== undefined) user.nome = nome;
   if (email !== undefined) user.email = email;
   if (rbac_profile_id !== undefined) user.rbac_profile_id = rbac_profile_id;
   if (status !== undefined) user.status = status;
+  if (is_admin_da_conta !== undefined) user.is_admin_da_conta = Boolean(is_admin_da_conta);
   dbStore.persist();
-  return res.json({ status: 'sucesso', user });
+  const { password_hash, ...userSemSenha } = user;
+  return res.json({ status: 'sucesso', user: userSemSenha });
 });
 
 router.delete('/tenant-users/:id', (req, res) => {
@@ -951,6 +969,36 @@ router.delete('/policy-bypass-rules/:id', (req, res) => {
   dbStore.policyBypassRules = dbStore.policyBypassRules.filter((r) => r.id !== id);
   dbStore.persist();
   return res.json({ status: 'sucesso', mensagem: 'Regra de bypass removida com sucesso.' });
+});
+
+// --- K. Solicitações de Regras de Negócio (visão da seguradora — aprovar/rejeitar o que o
+// transportador/embarcador pediu em POST /tenant/regras-solicitacoes) ---
+router.get('/regras-solicitacoes', (req, res) => {
+  const { tenant_id, status } = req.query;
+  let items = dbStore.businessRuleRequests;
+  if (tenant_id) items = items.filter((r) => r.tenant_id === tenant_id);
+  if (status) items = items.filter((r) => r.status === status);
+  return res.json({ status: 'sucesso', solicitacoes: items });
+});
+
+router.put('/regras-solicitacoes/:id', (req, res) => {
+  const { id } = req.params;
+  const { status, comentario_seguradora } = req.body;
+
+  const request = dbStore.businessRuleRequests.find((r) => r.id === id);
+  if (!request) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Solicitação não encontrada.' });
+  }
+  if (status !== 'APROVADA' && status !== 'REJEITADA') {
+    return res.status(400).json({ status: 'erro', mensagem: "status deve ser 'APROVADA' ou 'REJEITADA'." });
+  }
+
+  request.status = status;
+  request.comentario_seguradora = comentario_seguradora;
+  request.resolved_at = new Date().toISOString();
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', solicitacao: request });
 });
 
 export default router;

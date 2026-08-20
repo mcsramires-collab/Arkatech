@@ -10,6 +10,12 @@ export interface AuthenticatedRequest extends Request {
     razao_social: string;
     ambiente: 'teste' | 'producao';
     role: string;
+    // Presentes só em tokens emitidos por POST /auth/portal-login (login por pessoa, usado
+    // pelo Portal do Segurado). Tokens emitidos por POST /auth/token (client_id/client_secret,
+    // usado por integrações máquina-a-máquina) não carregam identidade de usuário individual.
+    tenant_user_id?: string;
+    tenant_user_nome?: string;
+    is_admin_da_conta?: boolean;
   };
 }
 
@@ -34,7 +40,10 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
       cnpj: decoded.cnpj,
       razao_social: decoded.razao_social,
       ambiente: decoded.ambiente,
-      role: decoded.role
+      role: decoded.role,
+      tenant_user_id: decoded.tenant_user_id,
+      tenant_user_nome: decoded.tenant_user_nome,
+      is_admin_da_conta: decoded.is_admin_da_conta
     };
     next();
   } catch (err) {

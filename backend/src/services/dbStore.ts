@@ -23,7 +23,8 @@ import {
   ActivationToken,
   NotificationPreference,
   PolicyTitularityRule,
-  PolicyBypassRule
+  PolicyBypassRule,
+  BusinessRuleRequest
 } from '../types';
 
 class DBStore {
@@ -50,6 +51,7 @@ class DBStore {
   public notificationPreferences: NotificationPreference[] = [];
   public policyTitularityRules: PolicyTitularityRule[] = [];
   public policyBypassRules: PolicyBypassRule[] = [];
+  public businessRuleRequests: BusinessRuleRequest[] = [];
 
   private filePath = path.join(__dirname, '../../data_store.json');
 
@@ -84,6 +86,7 @@ class DBStore {
         this.notificationPreferences = parsed.notificationPreferences || [];
         this.policyTitularityRules = parsed.policyTitularityRules || [];
         this.policyBypassRules = parsed.policyBypassRules || [];
+        this.businessRuleRequests = parsed.businessRuleRequests || [];
         return;
       } catch (err) {
         console.error('Erro ao ler data_store.json. Inicializando com seeds padrão.', err);
@@ -125,7 +128,8 @@ class DBStore {
             activationTokens: this.activationTokens,
             notificationPreferences: this.notificationPreferences,
             policyTitularityRules: this.policyTitularityRules,
-            policyBypassRules: this.policyBypassRules
+            policyBypassRules: this.policyBypassRules,
+            businessRuleRequests: this.businessRuleRequests
           },
           null,
           2
