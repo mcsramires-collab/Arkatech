@@ -14,6 +14,7 @@ export interface ParsedDocumentData {
   cnpjExpedidor?: string;
   cnpjRecebedor?: string;
   cnpjTomador?: string;
+  serie?: string; // série do documento (ide.serie no CT-e/NF-e/MDF-e)
   ufOrigem?: string;
   ufDestino?: string;
   produtoPredominante?: string;
@@ -24,7 +25,14 @@ export interface ParsedDocumentData {
 export class XMLParserService {
   private static parser = new FastXMLParser({
     ignoreAttributes: false,
-    attributeNamePrefix: '@_'
+    attributeNamePrefix: '@_',
+    // Sem isso, o fast-xml-parser converte automaticamente qualquer tag cujo conteúdo
+    // "pareça" numérico (ex.: <CNPJ>11111111000111</CNPJ>, <serie>01</serie>) para
+    // Number — o que quebra CNPJs (perde zeros à esquerda / vira número em vez de
+    // string) e derrubava o processo inteiro em services/averbacao.ts (norm() chama
+    // .replace() esperando string). Os poucos campos que precisam ser número
+    // (vCarga, tpAmb etc.) já são explicitamente convertidos com Number(...) abaixo.
+    parseTagValue: false
   });
 
   /**
@@ -83,6 +91,7 @@ export class XMLParserService {
           rawXml: trimmed,
           cnpjEmitente: json.cnpjEmitente,
           cnpjDestinatario: json.cnpjDestinatario,
+          serie: json.serie !== undefined ? String(json.serie) : undefined,
           tpAmbSefaz: json.tpAmbSefaz,
           protocoloAceitacaoSefaz: json.protocoloAceitacaoSefaz
         };
@@ -104,6 +113,7 @@ export class XMLParserService {
       let cnpjExpedidor: string | undefined;
       let cnpjRecebedor: string | undefined;
       let cnpjTomador: string | undefined;
+      let serie: string | undefined;
       let ufOrigem: string | undefined;
       let ufDestino: string | undefined;
       let produtoPredominante: string | undefined;
@@ -127,6 +137,7 @@ export class XMLParserService {
         cnpjExpedidor = cteNode.exped?.CNPJ;
         cnpjRecebedor = cteNode.receb?.CNPJ;
         cnpjTomador = cteNode.toma?.CNPJ ?? cteNode.toma4?.CNPJ ?? cteNode.toma3?.CNPJ;
+        serie = cteNode.ide?.serie !== undefined ? String(cteNode.ide.serie) : undefined;
         ufOrigem = cteNode.ide?.UFIni;
         ufDestino = cteNode.ide?.UFFim;
         produtoPredominante = cteNode.infCTeNorm?.infCarga?.proPred;
@@ -152,6 +163,7 @@ export class XMLParserService {
         valorCarga = Number(nfeNode.total?.ICMSTot?.vProd || nfeNode.total?.ICMSTot?.vNF || 0);
         cnpjEmitente = nfeNode.emit?.CNPJ;
         cnpjDestinatario = nfeNode.dest?.CNPJ;
+        serie = nfeNode.ide?.serie !== undefined ? String(nfeNode.ide.serie) : undefined;
         tpAmbSefaz = nfeNode.ide?.tpAmb ? Number(nfeNode.ide.tpAmb) as 1 | 2 : undefined;
         protocoloAceitacaoSefaz = protNode?.nProt;
 
@@ -187,6 +199,7 @@ export class XMLParserService {
         numeroDocumento = String(mdfeNode.ide?.nMDF || '0');
         valorCarga = Number(mdfeNode.tot?.vCarga || 0);
         cnpjEmitente = mdfeNode.emit?.CNPJ;
+        serie = mdfeNode.ide?.serie !== undefined ? String(mdfeNode.ide.serie) : undefined;
         ufOrigem = mdfeNode.ide?.UFIni;
         ufDestino = mdfeNode.ide?.UFFim;
         tpAmbSefaz = mdfeNode.ide?.tpAmb ? Number(mdfeNode.ide.tpAmb) as 1 | 2 : undefined;
@@ -229,6 +242,7 @@ export class XMLParserService {
         cnpjExpedidor,
         cnpjRecebedor,
         cnpjTomador,
+        serie,
         ufOrigem,
         ufDestino,
         produtoPredominante,

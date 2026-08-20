@@ -92,7 +92,9 @@ export class AverbacaoService {
     // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
     const regrasAplicadas: string[] = [];
     const tenantCnpjLimpo = tenant.cnpj.replace(/\D/g, '');
-    const norm = (v?: string) => (v ? v.replace(/\D/g, '') : undefined);
+    // Aceita string ou number defensivamente — parsers de XML/JSON de terceiros podem
+    // entregar um CNPJ puramente numérico como Number em vez de String.
+    const norm = (v?: string | number) => (v !== undefined && v !== null ? String(v).replace(/\D/g, '') : undefined);
 
     const isEmitente = norm(parsedDoc.cnpjEmitente) === tenantCnpjLimpo;
 
@@ -274,6 +276,10 @@ export class AverbacaoService {
       tp_amb_sefaz: parsedDoc.tpAmbSefaz,
       tipo_documento: parsedDoc.tipoDocumento,
       chave_documento: parsedDoc.chaveDocumento,
+      serie_documento: parsedDoc.serie,
+      cnpj_remetente: parsedDoc.cnpjRemetente,
+      cnpj_destinatario: parsedDoc.cnpjDestinatario,
+      cnpj_tomador: parsedDoc.cnpjTomador,
       protocolo_aceitacao_sefaz: parsedDoc.protocoloAceitacaoSefaz,
       raw_xml_id: rawXmlRecord.id,
       recovery_token: dto.recovery_token,

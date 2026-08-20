@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { ResponseEngine } from '../services/responseEngine';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_arckatech_super_secure_2026';
+import { getJwtSecret } from '../utils/jwtSecret';
 
 export interface AuthenticatedRequest extends Request {
   tenant?: {
@@ -29,7 +28,7 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = jwt.verify(token, getJwtSecret()) as any;
     req.tenant = {
       tenant_id: decoded.tenant_id,
       cnpj: decoded.cnpj,

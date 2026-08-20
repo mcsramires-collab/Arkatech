@@ -2,9 +2,9 @@ import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { dbStore } from '../services/dbStore';
 import { ResponseEngine } from '../services/responseEngine';
+import { getJwtSecret } from '../utils/jwtSecret';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_arckatech_super_secure_2026';
 
 /**
  * POST /api/v1/auth/token
@@ -45,7 +45,19 @@ router.post('/token', (req: Request, res: Response) => {
     role: tenant.role
   };
 
-  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: expiresInSeconds });
+  let jwtSecret: string;
+  try {
+    jwtSecret = getJwtSecret();
+  } catch (err) {
+    // Falha de configuração do servidor (JWT_SECRET ausente) — não é erro do cliente.
+    return res.status(500).json({
+      status: 'erro',
+      codigo: 'ERR-5000',
+      mensagem: 'Erro interno ao emitir o token. Contate o suporte da Arckatech.'
+    });
+  }
+
+  const token = jwt.sign(payload, jwtSecret, { expiresIn: expiresInSeconds });
 
   return res.json({
     status: 'sucesso',
