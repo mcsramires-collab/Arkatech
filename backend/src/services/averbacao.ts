@@ -52,6 +52,52 @@ export class AverbacaoService {
   }
 
   /**
+   * Persiste um registro de Averbacao com status='ERRO' para documentos rejeitados DEPOIS que já
+   * sabemos a qual apólice/policy_id o documento se refere (titularidade, deduplicação, apólice
+   * vencida/cadastro inativo). Rejeições anteriores a esse ponto (tenant não encontrado, XML
+   * inválido, token de recuperação inválido) não têm policy_id e por isso não geram este
+   * registro — a única exceção histórica é ERR-4004 (variável faltante), que já é rastreada via
+   * RecoverySession em vez de Averbacao.
+   */
+  private static persistErro(
+    tenant: Tenant,
+    policy: Policy,
+    parsedDoc: ReturnType<typeof XMLParserService.parse>,
+    rawXmlId: string,
+    fmt: { codigo: string; mensagem: string },
+    regrasAplicadas: string[]
+  ): void {
+    const timestampISO = new Date().toISOString();
+    const erroRecord: Averbacao = {
+      id: uuidv4(),
+      protocolo_interno_averbacao: `PI-${uuidv4()}`,
+      tenant_id: tenant.id,
+      policy_id: policy.id,
+      status: 'ERRO',
+      codigo_resposta: fmt.codigo,
+      mensagem_resposta: fmt.mensagem,
+      valor_carga: parsedDoc.valorCarga,
+      valor_considerado_averbacao: parsedDoc.valorCarga,
+      regras_internas_aplicadas: regrasAplicadas,
+      tp_amb_sefaz: parsedDoc.tpAmbSefaz,
+      tipo_documento: parsedDoc.tipoDocumento,
+      chave_documento: parsedDoc.chaveDocumento,
+      numero_documento: parsedDoc.numeroDocumento,
+      serie_documento: parsedDoc.serie,
+      cnpj_remetente: parsedDoc.cnpjRemetente,
+      cnpj_destinatario: parsedDoc.cnpjDestinatario,
+      cnpj_tomador: parsedDoc.cnpjTomador,
+      protocolo_aceitacao_sefaz: parsedDoc.protocoloAceitacaoSefaz,
+      raw_xml_id: rawXmlId,
+      ambiente: tenant.ambiente,
+      timestamp: timestampISO,
+      created_at: timestampISO
+    };
+    dbStore.averbacoes.unshift(erroRecord);
+    dbStore.persist();
+  }
+
+  /**
    * Processa a solicitação de averbação de um documento fiscal.
    */
   public static process(dto: AverbacaoRequestDTO, appBaseUrl: string = 'http://localhost:5173'): AverbacaoResponseDTO {
@@ -88,6 +134,20 @@ export class AverbacaoService {
     if (!policy) {
       return this.erro('ERR-4003');
     }
+
+    // 4b. Gravação Bruta do XML (Criptografado / Hash SHA-256) - ISO 27001 / LGPD. Feito aqui
+    // (antes das checagens que podem rejeitar o documento) porque ERR-4007/4008/4002/4003 já
+    // conhecem o policy_id e passam a gerar um registro de Averbacao com status='ERRO', que
+    // exige um raw_xml_id — precisamos do XML bruto salvo mesmo quando o documento é rejeitado.
+    const hashSHA256 = crypto.createHash('sha256').update(contentToParse).digest('hex');
+    const rawXmlRecord: RawXMLStore = {
+      id: uuidv4(),
+      content_xml: contentToParse,
+      hash_sha256: hashSHA256,
+      encrypted_aes256: true,
+      created_at: new Date().toISOString()
+    };
+    dbStore.rawXmlStore.push(rawXmlRecord);
 
     // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
     const regrasAplicadas: string[] = [];
@@ -133,6 +193,8 @@ export class AverbacaoService {
     }
 
     if (!isEmitente && !matchedByFuncao && !matchedByBypass) {
+      const fmt = ResponseEngine.formatResponse('ERR-4008');
+      this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
       return this.erro('ERR-4008');
     }
 
@@ -143,7 +205,7 @@ export class AverbacaoService {
       regrasAplicadas.push('Titularidade aceita via bypass (Regra B — rota/produto), sem CNPJ presente no documento.');
     }
 
-    // 6. Checagem de Deduplicação — (chave_documento, protocolo_aceitacao_sefaz, ramo) já averbados?
+    // 6. Checagem de Dedupli​cação — (chave_documento, protocolo_aceitacao_sefaz, ramo) já averbados?
     const jaAverbado = dbStore.averbacoes.find(
       (a) =>
         a.chave_documento === parsedDoc.chaveDocumento &&
@@ -152,8 +214,16 @@ export class AverbacaoService {
         a.status === 'SUCESSO'
     );
     if (jaAverbado) {
+      const fmt = ResponseEngine.formatResponse('ERR-4007', {
+        // status === 'SUCESSO' garante numero_averbacao preenchido; o '' é só para satisfazer o
+        // tipo (agora opcional, já que registros status='ERRO' não têm número).
+        NUMERO_AVERBACAO_EXISTENTE: jaAverbado.numero_averbacao ?? ''
+      });
+      this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
       return this.erro('ERR-4007', {
-        NUMERO_AVERBACAO_EXISTENTE: jaAverbado.numero_averbacao
+        // status === 'SUCESSO' garante numero_averbacao preenchido; o '' é só para satisfazer o
+        // tipo (agora opcional, já que registros status='ERRO' não têm número).
+        NUMERO_AVERBACAO_EXISTENTE: jaAverbado.numero_averbacao ?? ''
       });
     }
 
@@ -170,6 +240,8 @@ export class AverbacaoService {
         regrasAplicadas.push('Bypass de apólice vencida/cadastro inativo aplicado (exceção configurada na apólice).');
       } else {
         const errCode = isTenantInactive ? 'ERR-4002' : 'ERR-4003';
+        const fmt = ResponseEngine.formatResponse(errCode);
+        this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
         return this.erro(errCode);
       }
     }
@@ -234,17 +306,6 @@ export class AverbacaoService {
       );
     }
 
-    // 11. Gravação Bruta do XML (Criptografado / Hash SHA-256) - ISO 27001 / LGPD
-    const hashSHA256 = crypto.createHash('sha256').update(contentToParse).digest('hex');
-    const rawXmlRecord: RawXMLStore = {
-      id: uuidv4(),
-      content_xml: contentToParse,
-      hash_sha256: hashSHA256,
-      encrypted_aes256: true,
-      created_at: new Date().toISOString()
-    };
-    dbStore.rawXmlStore.push(rawXmlRecord);
-
     // 12. Gerar Número de Averbação (formato de mercado) + Protocolo Interno (nosso, independente)
     const timestampISO = new Date().toISOString();
     const testePrefix = isHomologacaoSefaz ? 'TESTE-' : '';
@@ -276,6 +337,7 @@ export class AverbacaoService {
       tp_amb_sefaz: parsedDoc.tpAmbSefaz,
       tipo_documento: parsedDoc.tipoDocumento,
       chave_documento: parsedDoc.chaveDocumento,
+      numero_documento: parsedDoc.numeroDocumento,
       serie_documento: parsedDoc.serie,
       cnpj_remetente: parsedDoc.cnpjRemetente,
       cnpj_destinatario: parsedDoc.cnpjDestinatario,
