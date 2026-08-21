@@ -81,6 +81,121 @@ router.post('/activation/:token/aceitar', (req, res) => {
   return res.json({ status: 'sucesso', mensagem: 'Conta ativada com sucesso.', tenant });
 });
 
+/**
+ * GET /tenant/activation/:token
+ * Consulta pública (sem JWT) dos dados de um convite pelo TOKEN — usada pela tela de "definir
+ * senha" do Portal do Segurado (link recebido por e-mail) para mostrar de qual empresa é o
+ * convite antes da pessoa preencher qualquer coisa. Sem JWT de propósito, no mesmo padrão já
+ * usado em /api/v1/averbar/recuperar/:token — quem recebe o e-mail ainda não tem token nenhum.
+ */
+router.get('/activation/:token', (req, res) => {
+  const { token } = req.params;
+  const activation = dbStore.activationTokens.find((a) => a.token === token);
+
+  if (!activation) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Convite inválido.' });
+  }
+
+  const tenant = dbStore.tenants.find((t) => t.id === activation.tenant_id);
+  if (!tenant) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cliente não encontrado.' });
+  }
+
+  return res.json({
+    status: 'sucesso',
+    convite: {
+      razao_social: tenant.razao_social,
+      cnpj: tenant.cnpj,
+      nome_convidado: activation.convite_nome,
+      email_convidado: activation.convite_email,
+      termo_versao: activation.termo_versao,
+      ja_aceito: activation.aceite,
+      expirado: new Date(activation.expira_em) < new Date()
+    }
+  });
+});
+
+/**
+ * POST /tenant/activation/:token/definir-senha
+ * Aceita o Termo de Uso e define a senha inicial NUM ÚNICO PASSO (Fase B do plano de convite por
+ * e-mail — ver claude/Mapeamento_Portais_e_Personas.md, Ponto 2, no Project). Antes, aceitar o
+ * Termo (/activation/:token/aceitar, acima) e criar um TenantUser com login (POST /tenant/users,
+ * que exige JWT — ou seja, alguém já logado) eram dois passos completamente desconectados: não
+ * existia nenhum jeito de uma pessoa que AINDA NÃO tem login sair de um convite por e-mail já
+ * com uma conta utilizável. Esta rota cria o TenantUser inicial (admin da conta) no mesmo
+ * momento em que o Termo é aceito, a partir dos dados gravados no próprio convite.
+ */
+router.post('/activation/:token/definir-senha', async (req, res) => {
+  const { token } = req.params;
+  const { senha } = req.body;
+
+  if (!senha || String(senha).length < 8) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Senha é obrigatória e precisa ter ao menos 8 caracteres.' });
+  }
+
+  const activation = dbStore.activationTokens.find((a) => a.token === token);
+  if (!activation) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Convite inválido.' });
+  }
+  if (activation.aceite) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Este convite já foi utilizado. Faça login normalmente.' });
+  }
+  if (new Date(activation.expira_em) < new Date()) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Convite expirado. Peça para sua seguradora ou corretora reenviar o convite.' });
+  }
+
+  const tenant = dbStore.tenants.find((t) => t.id === activation.tenant_id);
+  if (!tenant) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cliente não encontrado.' });
+  }
+
+  const email = (activation.convite_email || tenant.contato_email || '').trim().toLowerCase();
+  const nome = activation.convite_nome || tenant.contato_nome || tenant.razao_social;
+
+  if (!email) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Este convite não tem e-mail associado. Contate o suporte.' });
+  }
+
+  // Evita duplicar caso, por algum motivo, já exista um TenantUser com esse e-mail neste tenant
+  // (ex: alguém criou manualmente via POST /tenant/users antes da pessoa aceitar o convite).
+  let user = dbStore.tenantUsers.find(
+    (u) => u.tenant_id === tenant.id && u.email.trim().toLowerCase() === email
+  );
+
+  const passwordHash = await bcrypt.hash(senha, 10);
+
+  if (user) {
+    user.password_hash = passwordHash;
+    user.status = 'ATIVO';
+  } else {
+    user = {
+      id: uuidv4(),
+      tenant_id: tenant.id,
+      nome,
+      email,
+      password_hash: passwordHash,
+      is_admin_da_conta: true,
+      status: 'ATIVO',
+      created_at: new Date().toISOString()
+    };
+    dbStore.tenantUsers.push(user);
+  }
+
+  activation.aceite = true;
+  activation.aceite_em = new Date().toISOString();
+  tenant.conta_ativada = true;
+
+  dbStore.persist();
+
+  const { password_hash, ...userSemSenha } = user;
+  return res.json({
+    status: 'sucesso',
+    mensagem: 'Conta ativada e senha definida com sucesso. Você já pode fazer login.',
+    user: userSemSenha,
+    tenant: { id: tenant.id, razao_social: tenant.razao_social, cnpj: tenant.cnpj }
+  });
+});
+
 // --- Apólices/Seguradoras/Corretoras Vinculadas ao Próprio CNPJ ---
 router.get('/policies', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
