@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite } from '../types';
+import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite, Broker } from '../types';
 import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { PurgeService } from '../services/purgeService';
@@ -114,7 +114,7 @@ router.put('/policies/:id', (req, res) => {
     return res.status(404).json({ status: 'erro', mensagem: 'Apólice não localizada.' });
   }
 
-  const { status, permitir_inativo_vencido, numero_apolice, ramo, insurer_id, broker_id, vigencia_inicio, vigencia_fim } = req.body;
+  const { status, permitir_inativo_vencido, numero_apolice, ramo, insurer_id, broker_id, vigencia_inicio, vigencia_fim, lmi } = req.body;
   if (status !== undefined) policy.status = status;
   if (permitir_inativo_vencido !== undefined) policy.permitir_inativo_vencido = Boolean(permitir_inativo_vencido);
   if (numero_apolice !== undefined) policy.numero_apolice = numero_apolice;
@@ -123,6 +123,7 @@ router.put('/policies/:id', (req, res) => {
   if (broker_id !== undefined) policy.broker_id = broker_id;
   if (vigencia_inicio !== undefined) policy.vigencia_inicio = vigencia_inicio;
   if (vigencia_fim !== undefined) policy.vigencia_fim = vigencia_fim;
+  if (lmi !== undefined) policy.lmi = lmi === null || lmi === '' ? undefined : Number(lmi);
 
   dbStore.persist();
   return res.json({ status: 'sucesso', policy });
@@ -1160,6 +1161,221 @@ router.delete('/policy-sublimites/:id', (req, res) => {
   dbStore.policySublimites = dbStore.policySublimites.filter((s) => s.id !== id);
   dbStore.persist();
   return res.json({ status: 'sucesso', mensagem: 'Sublimite removido com sucesso.' });
+});
+
+// =====================================================================
+// FASE 3 — PORTAL DA SEGURADORA: DASHBOARD, AVERBAÇÕES, CORRETORAS/ASSESSORIAS
+// E PERMISSÕES REAIS (Log de Auditoria ficou de fora desta rodada — ver
+// claude/Mapeamento_Portais_e_Personas.md no Project para o porquê)
+// =====================================================================
+
+// --- N. Dashboard da Seguradora — KPIs escopados por insurer_id (ver arckatechseguradora
+// src/routes/index.tsx). Distinto do /admin/dashboard-stats acima, que é visão GLOBAL
+// (uso interno ARCKATECH, sem escopo de seguradora). ---
+router.get('/insurer-dashboard-stats', (req, res) => {
+  const { insurer_id } = req.query;
+  if (!insurer_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
+  }
+
+  const policiesDaSeguradora = dbStore.policies.filter((p) => p.insurer_id === insurer_id);
+  const tenantIds = new Set(policiesDaSeguradora.map((p) => p.tenant_id));
+  const seguradosDaSeguradora = dbStore.tenants.filter((t) => tenantIds.has(t.id));
+
+  const seguradosAtivos = seguradosDaSeguradora.filter((t) => t.status === 'ATIVO').length;
+
+  const ha30Dias = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const seguradosAtivosNovos30d = seguradosDaSeguradora.filter(
+    (t) => t.status === 'ATIVO' && new Date(t.created_at) >= ha30Dias
+  ).length;
+
+  const pendenciasAprovacao = dbStore.approvalRequests.filter(
+    (a) => a.insurer_id === insurer_id && a.status === 'PENDENTE'
+  ).length;
+
+  const em30Dias = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const apolicesVencendo30Dias = policiesDaSeguradora.filter((p) => {
+    const vencimento = new Date(p.vigencia_fim);
+    return p.status !== 'INATIVA' && vencimento >= new Date() && vencimento <= em30Dias;
+  }).length;
+
+  const policyIdsDaSeguradora = new Set(policiesDaSeguradora.map((p) => p.id));
+  const averbacoesDaSeguradora = dbStore.averbacoes.filter((a) => policyIdsDaSeguradora.has(a.policy_id));
+
+  const agora = new Date();
+  const inicioMesAtual = new Date(agora.getFullYear(), agora.getMonth(), 1);
+  const inicioMesAnterior = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
+
+  const averbacoesNoMes = averbacoesDaSeguradora.filter((a) => new Date(a.created_at) >= inicioMesAtual).length;
+  const averbacoesMesAnterior = averbacoesDaSeguradora.filter(
+    (a) => new Date(a.created_at) >= inicioMesAnterior && new Date(a.created_at) < inicioMesAtual
+  ).length;
+
+  return res.json({
+    status: 'sucesso',
+    stats: {
+      segurados_ativos: seguradosAtivos,
+      segurados_ativos_novos_30d: seguradosAtivosNovos30d,
+      pendencias_aprovacao: pendenciasAprovacao,
+      apolices_vencendo_30_dias: apolicesVencendo30Dias,
+      averbacoes_no_mes: averbacoesNoMes,
+      averbacoes_mes_anterior: averbacoesMesAnterior
+    }
+  });
+});
+
+// --- O. Consulta de Averbações da Seguradora — todos os segurados da carteira daquele
+// insurer_id, com os mesmos filtros/paginação de tenant.ts GET /averbacoes (visão do
+// próprio transportador), mas aqui agregado pela seguradora. ---
+router.get('/insurer-averbacoes', (req, res) => {
+  const { insurer_id, status, tipo_documento, tenant_id, data_de, data_ate } = req.query;
+  if (!insurer_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
+  }
+
+  let policies = dbStore.policies.filter((p) => p.insurer_id === insurer_id);
+  if (tenant_id) policies = policies.filter((p) => p.tenant_id === tenant_id);
+  const policyIds = new Set(policies.map((p) => p.id));
+
+  let filtered = dbStore.averbacoes.filter((a) => policyIds.has(a.policy_id));
+
+  if (status) {
+    filtered = filtered.filter((a) => a.status === String(status).toUpperCase());
+  }
+  if (tipo_documento) {
+    filtered = filtered.filter((a) => a.tipo_documento === String(tipo_documento).toUpperCase());
+  }
+  if (data_de) {
+    const from = new Date(String(data_de));
+    if (!isNaN(from.getTime())) filtered = filtered.filter((a) => new Date(a.created_at) >= from);
+  }
+  if (data_ate) {
+    const to = new Date(String(data_ate));
+    if (!isNaN(to.getTime())) filtered = filtered.filter((a) => new Date(a.created_at) <= to);
+  }
+
+  filtered = [...filtered].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  const totalItems = filtered.length;
+  const pageRaw = Number(req.query.page);
+  const pageSizeRaw = Number(req.query.page_size);
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1;
+  const pageSize = Number.isFinite(pageSizeRaw) && pageSizeRaw > 0 ? Math.min(Math.floor(pageSizeRaw), 200) : 20;
+  const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / pageSize);
+  const startIndex = (page - 1) * pageSize;
+
+  const items = filtered.slice(startIndex, startIndex + pageSize).map((a) => {
+    const policy = dbStore.policies.find((p) => p.id === a.policy_id);
+    const tenant = policy ? dbStore.tenants.find((t) => t.id === policy.tenant_id) : undefined;
+    return {
+      ...a,
+      tenant_id: policy?.tenant_id,
+      segurado_nome: tenant?.razao_social ?? '—',
+      numero_apolice: policy?.numero_apolice
+    };
+  });
+
+  return res.json({
+    status: 'sucesso',
+    averbacoes: items,
+    paginacao: {
+      pagina: page,
+      tamanho_pagina: pageSize,
+      total_itens: totalItems,
+      total_paginas: totalPages
+    }
+  });
+});
+
+// --- P. Corretoras / Assessorias (Broker) — CRUD completo. Uma Assessoria não tem
+// modelagem própria: é o mesmo cadastro de Broker, e só passa a aparecer na listagem de
+// "Assessorias" do portal quando estiver referenciada em Policy.assessoria_id de alguma
+// apólice (ver listarAssessoriasComResumo no frontend). Criar uma Assessoria nova aqui
+// cria um Broker "solto", que só some da lista de "sem uso" quando vinculado a uma apólice. ---
+router.post('/brokers', (req, res) => {
+  const {
+    cnpj,
+    razao_social,
+    nome_fantasia,
+    corretor_responsavel_nome,
+    corretor_responsavel_email,
+    corretor_responsavel_telefone_fixo,
+    corretor_responsavel_celular
+  } = req.body;
+  if (!cnpj || !razao_social) {
+    return res.status(400).json({ status: 'erro', mensagem: 'cnpj e razao_social são obrigatórios.' });
+  }
+
+  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
+  const newBroker: Broker = {
+    id: `brk_${cnpjLimpo}_${Date.now()}`,
+    cnpj,
+    nome: razao_social,
+    razao_social,
+    nome_fantasia,
+    corretor_responsavel_nome,
+    corretor_responsavel_email,
+    corretor_responsavel_telefone_fixo,
+    corretor_responsavel_celular,
+    created_at: new Date().toISOString()
+  };
+  dbStore.brokers.push(newBroker);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', broker: newBroker });
+});
+
+router.put('/brokers/:id', (req, res) => {
+  const { id } = req.params;
+  const broker = dbStore.brokers.find((b) => b.id === id);
+  if (!broker) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Corretora/Assessoria não encontrada.' });
+  }
+  const {
+    cnpj,
+    razao_social,
+    nome_fantasia,
+    corretor_responsavel_nome,
+    corretor_responsavel_email,
+    corretor_responsavel_telefone_fixo,
+    corretor_responsavel_celular
+  } = req.body;
+  if (cnpj !== undefined) broker.cnpj = cnpj;
+  if (razao_social !== undefined) {
+    broker.razao_social = razao_social;
+    broker.nome = razao_social;
+  }
+  if (nome_fantasia !== undefined) broker.nome_fantasia = nome_fantasia;
+  if (corretor_responsavel_nome !== undefined) broker.corretor_responsavel_nome = corretor_responsavel_nome;
+  if (corretor_responsavel_email !== undefined) broker.corretor_responsavel_email = corretor_responsavel_email;
+  if (corretor_responsavel_telefone_fixo !== undefined)
+    broker.corretor_responsavel_telefone_fixo = corretor_responsavel_telefone_fixo;
+  if (corretor_responsavel_celular !== undefined) broker.corretor_responsavel_celular = corretor_responsavel_celular;
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', broker });
+});
+
+router.delete('/brokers/:id', (req, res) => {
+  const { id } = req.params;
+  const broker = dbStore.brokers.find((b) => b.id === id);
+  if (!broker) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Corretora/Assessoria não encontrada.' });
+  }
+
+  const emUso = dbStore.policies.some(
+    (p) => p.broker_id === id || p.co_broker_id === id || p.assessoria_id === id
+  );
+  if (emUso) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem:
+        'Esta corretora/assessoria está vinculada a uma ou mais apólices e não pode ser removida. Troque a corretora dessas apólices antes de excluir.'
+    });
+  }
+
+  dbStore.brokers = dbStore.brokers.filter((b) => b.id !== id);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Corretora/Assessoria removida com sucesso.' });
 });
 
 export default router;
