@@ -175,7 +175,7 @@ export interface Averbacao {
   cnpj_remetente?: string;
   cnpj_destinatario?: string;
   cnpj_tomador?: string;
-  protocolo_aceitacao_sefaz?: string; // nProt do protXXX/infProt do XML, usado na deduplição
+  protocolo_aceitacao_sefaz?: string; // nProt do protXXX/infProt do XML, usado na deduplicação
   raw_xml_id: string;
   recovery_token?: string;
   ambiente: TenantEnvironment;
