@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest } from '../types';
+import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite } from '../types';
 import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { PurgeService } from '../services/purgeService';
@@ -1073,6 +1073,93 @@ router.put('/regras-solicitacoes/:id', (req, res) => {
 
   dbStore.persist();
   return res.json({ status: 'sucesso', solicitacao: request });
+});
+
+// --- L. Configurações de Regras de Negócio da Ficha do Segurado (blob por apólice — ver
+// PolicyBusinessSettings em src/types/index.ts). Cobre Métodos de Averbação, Subcontratação,
+// Veículo e Motorista, Prazos e Datas, Região Metropolitana, Valor da Averbação e Averbação
+// Esporádica. NÃO cobre Identificação do Segurado (Regra A/B) — ver policy-titularity-rules
+// e policy-bypass-rules acima, que continuam a fonte real usada pelo motor de averbação. ---
+router.get('/policy-business-settings', (req, res) => {
+  const { policy_id } = req.query;
+  if (!policy_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'policy_id é obrigatório.' });
+  }
+  const settings = dbStore.policyBusinessSettings.find((s) => s.policy_id === policy_id);
+  return res.json({ status: 'sucesso', settings: settings ?? null });
+});
+
+router.put('/policy-business-settings', (req, res) => {
+  const { policy_id, config } = req.body;
+  if (!policy_id || typeof config !== 'object' || config === null) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'policy_id e config (objeto) são obrigatórios.'
+    });
+  }
+
+  let settings: PolicyBusinessSettings | undefined = dbStore.policyBusinessSettings.find(
+    (s) => s.policy_id === policy_id
+  );
+  const now = new Date().toISOString();
+  if (settings) {
+    settings.config = config;
+    settings.updated_at = now;
+  } else {
+    settings = { id: uuidv4(), policy_id, config, updated_at: now };
+    dbStore.policyBusinessSettings.push(settings);
+  }
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', settings });
+});
+
+// --- M. Sublimites por Mercadoria (lista por apólice) ---
+router.get('/policy-sublimites', (req, res) => {
+  const { policy_id } = req.query;
+  let items = dbStore.policySublimites;
+  if (policy_id) items = items.filter((s) => s.policy_id === policy_id);
+  return res.json({ status: 'sucesso', sublimites: items });
+});
+
+router.post('/policy-sublimites', (req, res) => {
+  const { policy_id, tag, valor } = req.body;
+  if (!policy_id || !tag) {
+    return res.status(400).json({ status: 'erro', mensagem: 'policy_id e tag são obrigatórios.' });
+  }
+
+  const newSublimite: PolicySublimite = {
+    id: uuidv4(),
+    policy_id,
+    tag,
+    valor: valor || 'R$ 0,00',
+    created_at: new Date().toISOString()
+  };
+  dbStore.policySublimites.push(newSublimite);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', sublimite: newSublimite });
+});
+
+router.put('/policy-sublimites/:id', (req, res) => {
+  const { id } = req.params;
+  const sublimite = dbStore.policySublimites.find((s) => s.id === id);
+  if (!sublimite) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Sublimite não encontrado.' });
+  }
+
+  const { tag, valor } = req.body;
+  if (tag !== undefined) sublimite.tag = tag;
+  if (valor !== undefined) sublimite.valor = valor;
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', sublimite });
+});
+
+router.delete('/policy-sublimites/:id', (req, res) => {
+  const { id } = req.params;
+  dbStore.policySublimites = dbStore.policySublimites.filter((s) => s.id !== id);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Sublimite removido com sucesso.' });
 });
 
 export default router;

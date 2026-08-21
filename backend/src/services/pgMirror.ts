@@ -105,6 +105,19 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     columns: ['id', 'policy_id', 'rota_uf_origem', 'rota_uf_destino', 'produto_predominante']
   },
   {
+    table: 'policy_business_settings',
+    storeKey: 'policyBusinessSettings',
+    pk: 'id',
+    columns: ['id', 'policy_id', 'config', 'updated_at'],
+    jsonbColumns: ['config']
+  },
+  {
+    table: 'policy_sublimites',
+    storeKey: 'policySublimites',
+    pk: 'id',
+    columns: ['id', 'policy_id', 'tag', 'valor', 'created_at']
+  },
+  {
     table: 'policy_rules',
     storeKey: 'policyRules',
     pk: 'id',
