@@ -358,3 +358,39 @@ export interface BusinessRuleRequest {
   created_at: string;
   resolved_at?: string;
 }
+
+// ===================== CONFIGURAÇÕES DA FICHA DO SEGURADO (PORTAL DA SEGURADORA) =====================
+
+/**
+ * Configurações de negócio de uma APÓLICE que ainda não ganharam modelagem normalizada
+ * própria — Métodos de Averbação, Subcontratação, Veículo e Motorista, Prazos e Datas,
+ * Região Metropolitana, Valor da Averbação e Averbação Esporádica (todas sub-seções da
+ * aba "Regras de Negócio" da Ficha do Segurado, ver arckatechseguradora/src/components/
+ * portal/regras-negocio.tsx). Guardadas como um único blob JSON por apólice em vez de uma
+ * tabela por sub-seção — essas telas ainda mudam com frequência junto com o produto, e uma
+ * tabela rígida por campo travaria a entrega. NÃO inclui Identificação do Segurado
+ * (Regra A / Regra B): essas já têm modelagem própria e imposição real no motor de regras
+ * (ver PolicyTitularityRule / PolicyBypassRule) — o campo `config.identificacaoRegraB` aqui
+ * guarda só os detalhes extras de exibição do construtor de condições da Regra B (CNPJ,
+ * produto, valor de corte, CFOP etc.) que o motor de regras ainda NÃO aplica hoje; o que o
+ * motor realmente impõe no bypass continua sendo só rota_uf_origem / rota_uf_destino /
+ * produto_predominante em PolicyBypassRule.
+ */
+export interface PolicyBusinessSettings {
+  id: string;
+  policy_id: string;
+  config: Record<string, any>;
+  updated_at: string;
+}
+
+/**
+ * Sublimite de cobertura por palavra-chave de mercadoria, específico de uma apólice
+ * (aba "Sublimites por Mercadoria" da Ficha do Segurado).
+ */
+export interface PolicySublimite {
+  id: string;
+  policy_id: string;
+  tag: string;
+  valor: string;
+  created_at: string;
+}
