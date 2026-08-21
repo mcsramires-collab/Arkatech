@@ -4,6 +4,7 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import { ENTITY_CONFIGS, EntityMirrorConfig } from '../src/services/pgMirror';
+import { getPgPool, isPgConfigured } from '../src/services/pgPool';
 
 dotenv.config();
 
@@ -16,8 +17,13 @@ dotenv.config();
  *
  *   DATABASE_URL="postgres://..." DATA_DIR="/app/storage" npm run validate:mirror
  *
+ * (ou, se você configurou por partes: DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME em vez de
+ * DATABASE_URL — ver `src/services/pgPool.ts` para as duas formas aceitas.)
+ *
  * Rode com as MESMAS variáveis de ambiente do serviço `apiarcka` em produção (mesma DATA_DIR,
- * mesma DATABASE_URL), pra comparar o JSON e o Postgres reais — não os de um ambiente local.
+ * mesma configuração de banco), pra comparar o JSON e o Postgres reais — não os de um ambiente
+ * local. Reutiliza `getPgPool()`/`isPgConfigured()` de `pgPool.ts` (a mesma lógica de conexão
+ * usada pelo espelhamento da Fase 1), em vez de duplicar essa resolução aqui.
  * Sai com código 0 se tudo bater, ou 1 se encontrar qualquer divergência (linhas faltando de um
  * lado ou do outro, ou campos com valor diferente entre o JSON e o Postgres).
  */
@@ -131,16 +137,16 @@ async function validateTable(
 }
 
 async function main() {
-  if (!process.env.DATABASE_URL) {
-    console.error('[validar-espelhamento] DATABASE_URL não configurada. Defina-a e rode de novo.');
+  if (!isPgConfigured()) {
+    console.error(
+      '[validar-espelhamento] Nenhuma configuração de banco encontrada (defina DATABASE_URL, ou ' +
+        'DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME) e rode de novo.'
+    );
     process.exit(1);
   }
 
   const jsonStore = loadJsonStore();
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined
-  });
+  const pool = getPgPool() as Pool;
 
   console.log(`[validar-espelhamento] Lendo dado real de: ${filePath}`);
   console.log(`[validar-espelhamento] Comparando ${ENTITY_CONFIGS.length} tabelas...\n`);
