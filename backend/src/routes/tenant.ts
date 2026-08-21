@@ -7,6 +7,7 @@ import { dbStore } from '../services/dbStore';
 import { AverbacaoService } from '../services/averbacao';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
+import { checkActivated } from '../services/accountActivation';
 import { TenantUser, BusinessRuleRequest } from '../types';
 
 const router = Router();
@@ -38,22 +39,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
  * individual (TenantUser) existir primeiro.
  */
 
-const checkActivated = (tenantId: string) => {
-  const tenant = dbStore.tenants.find((t) => t.id === tenantId);
-  if (!tenant) return { ok: false, code: 404, body: { status: 'erro', mensagem: 'Cliente não encontrado.' } };
-  if (!tenant.conta_ativada) {
-    return {
-      ok: false,
-      code: 403,
-      body: {
-        status: 'erro',
-        codigo: 'ERR-4009',
-        mensagem: 'Conta ainda não ativada. Aceite o Termo de Uso para acessar o portal.'
-      }
-    };
-  }
-  return { ok: true, tenant };
-};
+// checkActivated agora vive em services/accountActivation.ts — reaproveitado também por
+// routes/averbacao.ts (ver comentário lá).
 
 // --- Status de Ativação da Conta (Termo de Uso) ---
 router.get('/activation-status', (req, res) => {

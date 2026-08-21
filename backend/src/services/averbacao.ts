@@ -228,9 +228,18 @@ export class AverbacaoService {
     }
 
     // 7. Validação de Inatividade / Apólice Vencida com Flag de Exceção
+    //
+    // Antes, "apólice vencida" só era detectado via policy.status !== 'ATIVA' — um campo MANUAL.
+    // Se ninguém trocasse esse campo à mão quando a vigência realmente expirava, o sistema
+    // aceitava a averbação normalmente mesmo com a data de vigência já passada. Agora a data de
+    // vigência (vigencia_fim) também é checada automaticamente, sem depender de ninguém lembrar
+    // de atualizar o status — mas continua respeitando o mesmo bypass (permitir_inativo_vencido)
+    // já usado pra apólice vencida/cadastro inativo, já que é exatamente o caso que esse flag
+    // sempre disse cobrir.
     const isTenantInactive = tenant.status === 'INATIVO';
-    const isPolicyInactiveOrExpired = policy.status !== 'ATIVA';
-    const isInactiveProblem = isTenantInactive || isPolicyInactiveOrExpired;
+    const isPolicyStatusInactive = policy.status !== 'ATIVA';
+    const isPolicyExpiredByDate = Boolean(policy.vigencia_fim) && new Date(policy.vigencia_fim).getTime() < Date.now();
+    const isInactiveProblem = isTenantInactive || isPolicyStatusInactive || isPolicyExpiredByDate;
 
     let hasWarningBypass = false;
 
@@ -239,10 +248,17 @@ export class AverbacaoService {
         hasWarningBypass = true;
         regrasAplicadas.push('Bypass de apólice vencida/cadastro inativo aplicado (exceção configurada na apólice).');
       } else {
-        const errCode = isTenantInactive ? 'ERR-4002' : 'ERR-4003';
-        const fmt = ResponseEngine.formatResponse(errCode);
+        // ERR-4011 é o caso novo: status ainda 'ATIVA' na apólice, mas a vigência já passou —
+        // ERR-4002/ERR-4003 continuam cobrindo os dois motivos já existentes antes.
+        const errCode = isTenantInactive ? 'ERR-4002' : isPolicyStatusInactive ? 'ERR-4003' : 'ERR-4011';
+        const fmt =
+          errCode === 'ERR-4011'
+            ? ResponseEngine.formatResponse(errCode, { VIGENCIA_FIM: policy.vigencia_fim })
+            : ResponseEngine.formatResponse(errCode);
         this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
-        return this.erro(errCode);
+        return errCode === 'ERR-4011'
+          ? this.erro(errCode, { VIGENCIA_FIM: policy.vigencia_fim })
+          : this.erro(errCode);
       }
     }
 
@@ -296,6 +312,23 @@ export class AverbacaoService {
     const valorConsiderado = parsedDoc.valorCarga + totalCoberturas;
     for (const c of coberturasAplicadas) {
       regrasAplicadas.push(`Cobertura adicional '${c.titulo}' localizada e somada (R$ ${c.valor.toFixed(2)}).`);
+    }
+
+    // 9b. Checagem de LMI (Limite Máximo de Garantia) — antes, policy.lmi era gravado e editável
+    // pela seguradora nas telas de cadastro/edição de apólice, mas nunca era comparado com o
+    // valor da averbação em nenhum lugar do fluxo: dava pra averbar um valor acima do limite
+    // contratado sem nenhum aviso. Só aplica quando a apólice tem um LMI configurado (campo
+    // opcional) — sem LMI cadastrado, não há limite a enforçar.
+    if (policy.lmi !== undefined && valorConsiderado > policy.lmi) {
+      const fmt = ResponseEngine.formatResponse('ERR-4010', {
+        VALOR_AVERBACAO: valorConsiderado.toFixed(2),
+        LMI_APOLICE: policy.lmi.toFixed(2)
+      });
+      this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+      return this.erro('ERR-4010', {
+        VALOR_AVERBACAO: valorConsiderado.toFixed(2),
+        LMI_APOLICE: policy.lmi.toFixed(2)
+      });
     }
 
     // 10. Tratamento de Ambiente Sefaz (tpAmb) — homologação nunca tem validade jurídica real
