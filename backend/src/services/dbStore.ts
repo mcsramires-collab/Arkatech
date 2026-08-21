@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { mirrorToPostgres } from './pgMirror';
 import {
   Tenant,
   Insurer,
@@ -104,7 +105,31 @@ class DBStore {
     this.persist();
   }
 
+  // Fase 1 da migração para Postgres (ver claude/Plano_Migracao_Postgres.md no Project) — modo
+  // "espelhamento automático": toda chamada a persist() agenda (debounced) uma passagem de
+  // `mirrorToPostgres`, que copia o estado atual de todos os arrays para o Postgres. Debounce
+  // evita disparar uma passagem completa a cada mutação isolada quando várias acontecem em
+  // sequência rápida (ex: seed inicial, importação em lote). Se DATABASE_URL não estiver
+  // configurada, `mirrorToPostgres` é um no-op — nenhuma rota depende deste espelhamento hoje.
+  private mirrorDebounceTimer: NodeJS.Timeout | null = null;
+  private static readonly MIRROR_DEBOUNCE_MS = 3000;
+
+  private scheduleMirror() {
+    if (this.mirrorDebounceTimer) {
+      clearTimeout(this.mirrorDebounceTimer);
+    }
+    this.mirrorDebounceTimer = setTimeout(() => {
+      this.mirrorDebounceTimer = null;
+      mirrorToPostgres(this).catch((err) => {
+        console.error('[dbStore] Falha não tratada ao agendar espelhamento para o Postgres:', err);
+      });
+    }, DBStore.MIRROR_DEBOUNCE_MS);
+    // Não impede o processo Node de encerrar por causa deste timer pendente (ex: em testes/CLI).
+    this.mirrorDebounceTimer.unref?.();
+  }
+
   public persist() {
+    this.scheduleMirror();
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
