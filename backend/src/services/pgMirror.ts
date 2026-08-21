@@ -19,7 +19,7 @@ import { getPgPool, isPgConfigured } from './pgPool';
  * espelhamento está funcionando de ponta a ponta.
  */
 
-interface EntityMirrorConfig {
+export interface EntityMirrorConfig {
   table: string;
   /** Nome da propriedade correspondente em `dbStore` (ex: 'policyRules' -> tabela policy_rules). */
   storeKey: string;
@@ -30,7 +30,10 @@ interface EntityMirrorConfig {
 
 // Ordem de dependência (pai antes de filho) — mesma ordem usada na migration
 // `1787257248207_init-schema.js`. Upserts rodam nesta ordem; deletes rodam na ordem inversa.
-const ENTITY_CONFIGS: EntityMirrorConfig[] = [
+// Exportada para ser reutilizada pelo script de validação da Fase 2
+// (`scripts/validarEspelhamento.ts`) — uma única fonte de verdade para o mapeamento
+// entidade -> tabela/colunas, em vez de duplicar essa lista em dois lugares.
+export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
   {
     table: 'tenants',
     storeKey: 'tenants',
