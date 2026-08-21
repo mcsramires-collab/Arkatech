@@ -11,6 +11,7 @@ import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { PurgeService } from '../services/purgeService';
 import { AverbacaoService } from '../services/averbacao';
+import { sendActivationInviteEmail } from '../services/emailService';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -479,8 +480,57 @@ router.get('/tenants/lookup', (req, res) => {
   return res.json({ status: 'sucesso', encontrado: true, ramos_vigentes: ramosVigentes });
 });
 
+// URL pública do Portal do Segurado, usada para montar o link do e-mail de convite abaixo.
+// PUBLIC_APP_URL já é a variável documentada em .env.production.example para "a URL pública do
+// app"; localhost:5173 como fallback cobre o dev local do arckatech-cargo-portal (vite dev).
+function portalSeguradoBaseUrl(): string {
+  return process.env.PUBLIC_APP_URL || 'http://localhost:5173';
+}
+
+/**
+ * Gera um novo ActivationToken de convite (Termo de Uso + primeira senha) para o tenant, e tenta
+ * enviar o e-mail via Resend — usado tanto na criação de um cliente novo (POST /insurer-clients)
+ * quanto no reenvio manual (POST /insurer-clients/:tenantId/reenviar-convite, abaixo). Nunca
+ * lança: se o e-mail não puder ser enviado, devolve o motivo para quem chamou decidir o que
+ * mostrar na tela (o convite/token continua criado e válido de qualquer forma — só o e-mail
+ * automático que pode ter falhado).
+ */
+async function criarEEnviarConvite(
+  tenant: Tenant,
+  nomeConvidado: string | undefined,
+  emailConvidado: string | undefined
+): Promise<{ enviado: boolean; destino?: string; motivo?: string }> {
+  const activationToken = {
+    id: uuidv4(),
+    tenant_id: tenant.id,
+    token: `act_${uuidv4()}`,
+    termo_versao: 'v1',
+    aceite: false,
+    expira_em: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    created_at: new Date().toISOString(),
+    convite_nome: nomeConvidado,
+    convite_email: emailConvidado
+  };
+  dbStore.activationTokens.push(activationToken);
+  dbStore.persist();
+
+  const destino = (emailConvidado || tenant.contato_email || '').trim();
+  if (!destino) {
+    return { enviado: false, motivo: 'Nenhum e-mail de contato informado para este cliente.' };
+  }
+
+  const resultado = await sendActivationInviteEmail({
+    to: destino,
+    nomeDestinatario: nomeConvidado || tenant.contato_nome || tenant.razao_social,
+    razaoSocial: tenant.razao_social,
+    activationUrl: `${portalSeguradoBaseUrl()}/ativacao/${activationToken.token}`
+  });
+
+  return { ...resultado, destino };
+}
+
 // --- B. Cadastro de Cliente pela Seguradora (cria tenant + apólice, ou detecta conflito) ---
-router.post('/insurer-clients', (req, res) => {
+router.post('/insurer-clients', async (req, res) => {
   const {
     insurer_id,
     broker_id,
@@ -511,6 +561,7 @@ router.post('/insurer-clients', (req, res) => {
 
   const cnpjLimpo = String(cnpj).replace(/\D/g, '');
   let tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpjLimpo);
+  let clienteNovo = false;
 
   if (tenant) {
     // Cliente já existe — checar conflito de ramo com OUTRA seguradora
@@ -539,6 +590,7 @@ router.post('/insurer-clients', (req, res) => {
     }
   } else {
     // Cliente novo — cria o tenant
+    clienteNovo = true;
     tenant = {
       id: `tenant_${cnpjLimpo}_${Date.now()}`,
       cnpj,
@@ -557,17 +609,6 @@ router.post('/insurer-clients', (req, res) => {
       conta_ativada: false
     };
     dbStore.tenants.push(tenant);
-
-    // Dispara token de ativação (Termo de Uso) — aceite ainda pendente
-    dbStore.activationTokens.push({
-      id: uuidv4(),
-      tenant_id: tenant.id,
-      token: `act_${uuidv4()}`,
-      termo_versao: 'v1',
-      aceite: false,
-      expira_em: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      created_at: new Date().toISOString()
-    });
   }
 
   const newPolicy: Policy = {
@@ -589,7 +630,40 @@ router.post('/insurer-clients', (req, res) => {
   dbStore.policies.push(newPolicy);
   dbStore.persist();
 
-  return res.json({ status: 'sucesso', tenant, policy: newPolicy });
+  // Convite por e-mail (Termo de Uso + primeira senha) só é disparado na criação do cliente —
+  // um cliente já existente que ganha mais uma apólice/ramo não deve receber um novo convite
+  // toda vez (senão a pessoa recebe um e-mail de "defina sua senha" repetido a cada apólice nova).
+  let convite: { enviado: boolean; destino?: string; motivo?: string } | undefined;
+  if (clienteNovo) {
+    convite = await criarEEnviarConvite(tenant, contato_nome, contato_email);
+  }
+
+  return res.json({ status: 'sucesso', tenant, policy: newPolicy, convite });
+});
+
+/**
+ * POST /admin/insurer-clients/:tenantId/reenviar-convite
+ * Gera um novo convite (Termo de Uso + primeira senha) e tenta reenviar o e-mail — para quando o
+ * primeiro convite expirou (30 dias), foi perdido/caiu em spam, ou o e-mail de contato mudou.
+ * O corpo aceita um `email` opcional para reenviar a um endereço diferente do cadastrado.
+ */
+router.post('/insurer-clients/:tenantId/reenviar-convite', async (req, res) => {
+  const { tenantId } = req.params;
+  const { email } = req.body as { email?: string };
+
+  const tenant = dbStore.tenants.find((t) => t.id === tenantId);
+  if (!tenant) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cliente não encontrado.' });
+  }
+  if (tenant.conta_ativada) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'Este cliente já ativou a conta. Não há convite pendente para reenviar.'
+    });
+  }
+
+  const convite = await criarEEnviarConvite(tenant, tenant.contato_nome, email || tenant.contato_email);
+  return res.json({ status: 'sucesso', convite });
 });
 
 // --- C. Assumir Apólice em Conflito ---

@@ -321,6 +321,12 @@ export interface ActivationToken {
   aceite_em?: string;
   expira_em: string;
   created_at: string;
+  // Convite unificado (Termo de Uso + primeira senha, ver POST /tenant/activation/:token/definir-senha) —
+  // nome/e-mail da pessoa convidada, usados para criar o TenantUser inicial no momento do aceite e para
+  // montar o e-mail de convite enviado via Resend (ver services/emailService.ts). Sem esses dois campos
+  // preenchidos, o token ainda funciona no fluxo antigo (POST /activation/:token/aceitar, só Termo de Uso).
+  convite_nome?: string;
+  convite_email?: string;
 }
 
 // ===================== PREFERÊNCIAS DE NOTIFICAÇÃO =====================
