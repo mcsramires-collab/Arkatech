@@ -25,7 +25,9 @@ import {
   NotificationPreference,
   PolicyTitularityRule,
   PolicyBypassRule,
-  BusinessRuleRequest
+  BusinessRuleRequest,
+  PolicyBusinessSettings,
+  PolicySublimite
 } from '../types';
 
 class DBStore {
@@ -53,6 +55,10 @@ class DBStore {
   public policyTitularityRules: PolicyTitularityRule[] = [];
   public policyBypassRules: PolicyBypassRule[] = [];
   public businessRuleRequests: BusinessRuleRequest[] = [];
+  // Fase 2 — Ficha do Segurado real (Portal da Seguradora): demais sub-seções de Regras de
+  // Negócio (blob por apólice) e Sublimites por Mercadoria (lista por apólice).
+  public policyBusinessSettings: PolicyBusinessSettings[] = [];
+  public policySublimites: PolicySublimite[] = [];
 
   // Por padrão, grava dentro da própria pasta de build (comportamento antigo, ok para dev local).
   // Em produção, defina a env var DATA_DIR apontando para um diretório com volume persistente
@@ -95,6 +101,8 @@ class DBStore {
         this.policyTitularityRules = parsed.policyTitularityRules || [];
         this.policyBypassRules = parsed.policyBypassRules || [];
         this.businessRuleRequests = parsed.businessRuleRequests || [];
+        this.policyBusinessSettings = parsed.policyBusinessSettings || [];
+        this.policySublimites = parsed.policySublimites || [];
 
         if (this.ensureDefaultResponseTemplates()) {
           this.persist();
@@ -165,7 +173,9 @@ class DBStore {
             notificationPreferences: this.notificationPreferences,
             policyTitularityRules: this.policyTitularityRules,
             policyBypassRules: this.policyBypassRules,
-            businessRuleRequests: this.businessRuleRequests
+            businessRuleRequests: this.businessRuleRequests,
+            policyBusinessSettings: this.policyBusinessSettings,
+            policySublimites: this.policySublimites
           },
           null,
           2
