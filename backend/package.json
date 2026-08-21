@@ -13,7 +13,8 @@
     "migrate:up": "node-pg-migrate up -m migrations",
     "migrate:down": "node-pg-migrate down -m migrations",
     "migrate:create": "node-pg-migrate create -m migrations",
-    "validate:mirror": "ts-node scripts/validarEspelhamento.ts"
+    "validate:mirror": "ts-node scripts/validarEspelhamento.ts",
+    "sync:inicial": "ts-node scripts/sincronizarInicial.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
