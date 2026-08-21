@@ -95,6 +95,10 @@ class DBStore {
         this.policyTitularityRules = parsed.policyTitularityRules || [];
         this.policyBypassRules = parsed.policyBypassRules || [];
         this.businessRuleRequests = parsed.businessRuleRequests || [];
+
+        if (this.ensureDefaultResponseTemplates()) {
+          this.persist();
+        }
         return;
       } catch (err) {
         console.error('Erro ao ler data_store.json. Inicializando com seeds padrão.', err);
@@ -173,9 +177,16 @@ class DBStore {
     }
   }
 
-  private seedDefaultData() {
-    // 1. Templates de Resposta (Configuráveis no banco)
-    this.responseTemplates = [
+  /**
+   * Lista canônica de ResponseTemplate padrão do sistema. Usada tanto no seed inicial (quando
+   * ainda não existe data_store.json) quanto por ensureDefaultResponseTemplates() — necessário
+   * porque seedDefaultData() só roda em banco vazio; qualquer código novo adicionado aqui depois
+   * que o data_store.json já existe em produção precisa desse backfill pra aparecer, senão a
+   * averbação retorna "Mensagem de retorno [CODIGO] não configurada no banco de dados" (ver
+   * ResponseEngine.formatResponse).
+   */
+  private buildDefaultResponseTemplates(): ResponseTemplate[] {
+    return [
       {
         id: uuidv4(),
         codigo: 'SUC-2000',
@@ -315,8 +326,56 @@ class DBStore {
         explicacao_nao_tecnica: 'Você ainda não concluiu a ativação da sua conta.',
         orientacao_correcao: 'Acesse o link de ativação enviado por e-mail e aceite o Termo de Uso para liberar seu acesso.',
         updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4010',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          'ERRO 4010: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o Limite Máximo de Garantia da apólice (R$ [LMI_APOLICE]).',
+        texto_customizado:
+          'ERRO 4010: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o Limite Máximo de Garantia da apólice (R$ [LMI_APOLICE]).',
+        placeholders: ['[VALOR_AVERBACAO]', '[LMI_APOLICE]'],
+        explicacao_nao_tecnica: 'O valor da carga deste documento é maior do que o limite contratado na sua apólice.',
+        orientacao_correcao:
+          'Confirme o valor declarado no documento, ou fale com sua seguradora/corretora para avaliar um aumento do limite contratado.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4011',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao: 'ERRO 4011: A apólice está fora do período de vigência (venceu em [VIGENCIA_FIM]).',
+        texto_customizado: 'ERRO 4011: A apólice está fora do período de vigência (venceu em [VIGENCIA_FIM]).',
+        placeholders: ['[VIGENCIA_FIM]'],
+        explicacao_nao_tecnica: 'A vigência contratada da sua apólice já terminou.',
+        orientacao_correcao:
+          'Fale com sua seguradora/corretora para renovar a apólice, ou solicite a exceção de "permitir inativo/vencido" caso a renovação já esteja em andamento.',
+        updated_at: new Date().toISOString()
       }
     ];
+  }
+
+  /**
+   * Garante que todo código de buildDefaultResponseTemplates() exista em this.responseTemplates,
+   * adicionando só os que faltarem (nunca sobrescreve um texto_customizado já editado pela
+   * seguradora). Roda sempre que o dbStore carrega de um data_store.json já existente — é o
+   * "backfill" que faz um código de erro novo (ex: ERR-4010/ERR-4011) aparecer em produção sem
+   * precisar apagar o banco. Retorna true se algo foi adicionado (sinal pra chamar persist()).
+   */
+  private ensureDefaultResponseTemplates(): boolean {
+    const existentes = new Set(this.responseTemplates.map((t) => t.codigo));
+    const faltando = this.buildDefaultResponseTemplates().filter((t) => !existentes.has(t.codigo));
+    if (faltando.length === 0) return false;
+    this.responseTemplates.push(...faltando);
+    return true;
+  }
+
+  private seedDefaultData() {
+    // 1. Templates de Resposta (Configuráveis no banco)
+    this.responseTemplates = this.buildDefaultResponseTemplates();
 
     // 1.1 Regras de Obrigatoriedade de Tag POR TIPO DE DOCUMENTO (padrão Sefaz)
     // Estas regras valem para TODOS os documentos daquele tipo, independente da apólice/seguradora.
