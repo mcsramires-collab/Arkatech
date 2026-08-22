@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { mirrorToPostgres } from './pgMirror';
 import {
   Tenant,
   Insurer,
@@ -20,8 +21,15 @@ import {
   InsurerCoverage,
   DelegationPermission,
   ApprovalRequest,
+  DelegationException,
+  PolicyCoverageValue,
   ActivationToken,
-  NotificationPreference
+  NotificationPreference,
+  PolicyTitularityRule,
+  PolicyBypassRule,
+  BusinessRuleRequest,
+  PolicyBusinessSettings,
+  PolicySublimite
 } from '../types';
 
 class DBStore {
@@ -46,8 +54,26 @@ class DBStore {
   public approvalRequests: ApprovalRequest[] = [];
   public activationTokens: ActivationToken[] = [];
   public notificationPreferences: NotificationPreference[] = [];
+  public policyTitularityRules: PolicyTitularityRule[] = [];
+  public policyBypassRules: PolicyBypassRule[] = [];
+  public businessRuleRequests: BusinessRuleRequest[] = [];
+  // Fase 2 — Ficha do Segurado real (Portal da Seguradora): demais sub-seções de Regras de
+  // Negócio (blob por apólice) e Sublimites por Mercadoria (lista por apólice).
+  public policyBusinessSettings: PolicyBusinessSettings[] = [];
+  public policySublimites: PolicySublimite[] = [];
+  // Fase 3 — Segurança/enforcement (backlog itens 1 e 2): override por segurado da matriz de
+  // delegação, e valor real de cobertura adicional por apólice.
+  public delegationExceptions: DelegationException[] = [];
+  public policyCoverageValues: PolicyCoverageValue[] = [];
 
-  private filePath = path.join(__dirname, '../../data_store.json');
+  // Por padrão, grava dentro da própria pasta de build (comportamento antigo, ok para dev local).
+  // Em produção, defina a env var DATA_DIR apontando para um diretório com volume persistente
+  // mapeado no orquestrador (ex. Easypanel), para o dado sobreviver a reinícios/deploys do
+  // container — sem isso, tudo em memória é perdido a cada novo deploy.
+  private filePath = path.join(
+    process.env.DATA_DIR || path.join(__dirname, '../../'),
+    'data_store.json'
+  );
 
   constructor() {
     this.init();
@@ -78,6 +104,17 @@ class DBStore {
         this.approvalRequests = parsed.approvalRequests || [];
         this.activationTokens = parsed.activationTokens || [];
         this.notificationPreferences = parsed.notificationPreferences || [];
+        this.policyTitularityRules = parsed.policyTitularityRules || [];
+        this.policyBypassRules = parsed.policyBypassRules || [];
+        this.businessRuleRequests = parsed.businessRuleRequests || [];
+        this.policyBusinessSettings = parsed.policyBusinessSettings || [];
+        this.policySublimites = parsed.policySublimites || [];
+        this.delegationExceptions = parsed.delegationExceptions || [];
+        this.policyCoverageValues = parsed.policyCoverageValues || [];
+
+        if (this.ensureDefaultResponseTemplates()) {
+          this.persist();
+        }
         return;
       } catch (err) {
         console.error('Erro ao ler data_store.json. Inicializando com seeds padrão.', err);
@@ -88,7 +125,31 @@ class DBStore {
     this.persist();
   }
 
+  // Fase 1 da migração para Postgres (ver claude/Plano_Migracao_Postgres.md no Project) — modo
+  // "espelhamento automático": toda chamada a persist() agenda (debounced) uma passagem de
+  // `mirrorToPostgres`, que copia o estado atual de todos os arrays para o Postgres. Debounce
+  // evita disparar uma passagem completa a cada mutação isolada quando várias acontecem em
+  // sequência rápida (ex: seed inicial, importação em lote). Se DATABASE_URL não estiver
+  // configurada, `mirrorToPostgres` é um no-op — nenhuma rota depende deste espelhamento hoje.
+  private mirrorDebounceTimer: NodeJS.Timeout | null = null;
+  private static readonly MIRROR_DEBOUNCE_MS = 3000;
+
+  private scheduleMirror() {
+    if (this.mirrorDebounceTimer) {
+      clearTimeout(this.mirrorDebounceTimer);
+    }
+    this.mirrorDebounceTimer = setTimeout(() => {
+      this.mirrorDebounceTimer = null;
+      mirrorToPostgres(this).catch((err) => {
+        console.error('[dbStore] Falha não tratada ao agendar espelhamento para o Postgres:', err);
+      });
+    }, DBStore.MIRROR_DEBOUNCE_MS);
+    // Não impede o processo Node de encerrar por causa deste timer pendente (ex: em testes/CLI).
+    this.mirrorDebounceTimer.unref?.();
+  }
+
   public persist() {
+    this.scheduleMirror();
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) {
@@ -117,7 +178,14 @@ class DBStore {
             delegationPermissions: this.delegationPermissions,
             approvalRequests: this.approvalRequests,
             activationTokens: this.activationTokens,
-            notificationPreferences: this.notificationPreferences
+            notificationPreferences: this.notificationPreferences,
+            policyTitularityRules: this.policyTitularityRules,
+            policyBypassRules: this.policyBypassRules,
+            businessRuleRequests: this.businessRuleRequests,
+            policyBusinessSettings: this.policyBusinessSettings,
+            policySublimites: this.policySublimites,
+            delegationExceptions: this.delegationExceptions,
+            policyCoverageValues: this.policyCoverageValues
           },
           null,
           2
@@ -129,9 +197,16 @@ class DBStore {
     }
   }
 
-  private seedDefaultData() {
-    // 1. Templates de Resposta (Configuráveis no banco)
-    this.responseTemplates = [
+  /**
+   * Lista canônica de ResponseTemplate padrão do sistema. Usada tanto no seed inicial (quando
+   * ainda não existe data_store.json) quanto por ensureDefaultResponseTemplates() — necessário
+   * porque seedDefaultData() só roda em banco vazio; qualquer código novo adicionado aqui depois
+   * que o data_store.json já existe em produção precisa desse backfill pra aparecer, senão a
+   * averbação retorna "Mensagem de retorno [CODIGO] não configurada no banco de dados" (ver
+   * ResponseEngine.formatResponse).
+   */
+  private buildDefaultResponseTemplates(): ResponseTemplate[] {
+    return [
       {
         id: uuidv4(),
         codigo: 'SUC-2000',
@@ -271,8 +346,56 @@ class DBStore {
         explicacao_nao_tecnica: 'Você ainda não concluiu a ativação da sua conta.',
         orientacao_correcao: 'Acesse o link de ativação enviado por e-mail e aceite o Termo de Uso para liberar seu acesso.',
         updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4010',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          'ERRO 4010: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o Limite Máximo de Garantia da apólice (R$ [LMI_APOLICE]).',
+        texto_customizado:
+          'ERRO 4010: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o Limite Máximo de Garantia da apólice (R$ [LMI_APOLICE]).',
+        placeholders: ['[VALOR_AVERBACAO]', '[LMI_APOLICE]'],
+        explicacao_nao_tecnica: 'O valor da carga deste documento é maior do que o limite contratado na sua apólice.',
+        orientacao_correcao:
+          'Confirme o valor declarado no documento, ou fale com sua seguradora/corretora para avaliar um aumento do limite contratado.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4011',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao: 'ERRO 4011: A apólice está fora do período de vigência (venceu em [VIGENCIA_FIM]).',
+        texto_customizado: 'ERRO 4011: A apólice está fora do período de vigência (venceu em [VIGENCIA_FIM]).',
+        placeholders: ['[VIGENCIA_FIM]'],
+        explicacao_nao_tecnica: 'A vigência contratada da sua apólice já terminou.',
+        orientacao_correcao:
+          'Fale com sua seguradora/corretora para renovar a apólice, ou solicite a exceção de "permitir inativo/vencido" caso a renovação já esteja em andamento.',
+        updated_at: new Date().toISOString()
       }
     ];
+  }
+
+  /**
+   * Garante que todo código de buildDefaultResponseTemplates() exista em this.responseTemplates,
+   * adicionando só os que faltarem (nunca sobrescreve um texto_customizado já editado pela
+   * seguradora). Roda sempre que o dbStore carrega de um data_store.json já existente — é o
+   * "backfill" que faz um código de erro novo (ex: ERR-4010/ERR-4011) aparecer em produção sem
+   * precisar apagar o banco. Retorna true se algo foi adicionado (sinal pra chamar persist()).
+   */
+  private ensureDefaultResponseTemplates(): boolean {
+    const existentes = new Set(this.responseTemplates.map((t) => t.codigo));
+    const faltando = this.buildDefaultResponseTemplates().filter((t) => !existentes.has(t.codigo));
+    if (faltando.length === 0) return false;
+    this.responseTemplates.push(...faltando);
+    return true;
+  }
+
+  private seedDefaultData() {
+    // 1. Templates de Resposta (Configuráveis no banco)
+    this.responseTemplates = this.buildDefaultResponseTemplates();
 
     // 1.1 Regras de Obrigatoriedade de Tag POR TIPO DE DOCUMENTO (padrão Sefaz)
     // Estas regras valem para TODOS os documentos daquele tipo, independente da apólice/seguradora.
@@ -509,7 +632,7 @@ class DBStore {
       status: 'INATIVA',
       permitir_inativo_vencido: true, // Flag de bypass habilitada
       vigencia_inicio: '2025-01-01T00:00:00Z',
-      vigencia_fim: '2025-12-31T23:59:59Z' // Apólice Vencida,
+      vigencia_fim: '2025-12-31T23:59:59Z', // Apólice Vencida
       lmi: 150000,
       aceita_averbacao_como_destinatario: false
     };
@@ -774,6 +897,23 @@ class DBStore {
         { id: uuidv4(), tenant_user_id: tu.id, canal: 'EMAIL' as const, ativo: true },
         { id: uuidv4(), tenant_user_id: tu.id, canal: 'PORTAL' as const, ativo: true }
       ]);
+
+    // 14. Regra de Titularidade v2 — Regra A (função no documento) e Regra B (bypass por rota/produto)
+    // policy2 = pol_rcdc_translog: mantém o comportamento equivalente ao antigo aceita_averbacao_como_destinatario=true,
+    // agora modelado como regra explícita — e ganha mais uma função habilitada (Tomador) para exercitar a Regra A completa.
+    this.policyTitularityRules = [
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'DESTINATARIO', habilitada: true },
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'TOMADOR', habilitada: true },
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'REMETENTE', habilitada: false },
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'EXPEDIDOR', habilitada: false },
+      { id: uuidv4(), policy_id: policy2.id, funcao: 'RECEBEDOR', habilitada: false }
+    ];
+
+    // Regra B de exemplo: policy1 (Expressa/RCTRC) aceita bypass sem CNPJ no documento
+    // para viagens com rota SP -> SP (útil para testar o cenário de "CNPJ ausente do documento").
+    this.policyBypassRules = [
+      { id: uuidv4(), policy_id: policy1.id, rota_uf_origem: 'SP', rota_uf_destino: 'SP' }
+    ];
   }
 }
 

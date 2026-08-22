@@ -1,9 +1,21 @@
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore';
 import { Tenant, Insurer, InternalUser } from '../types';
 
 const router = Router();
+
+/**
+ * Senha temporária real para um InternalUser recém-criado (ADM/Agente) — mesmo padrão já usado
+ * em tenant.ts (gerarSenhaTemporaria) e admin.ts (tenant-users). Não existe rota de login para
+ * InternalUser hoje, então isto não desbloqueia nada por si só — mas evita o hash falso
+ * (`hash_${uuid}`) que existia aqui antes, inconsistente com o resto do backend.
+ */
+function gerarSenhaTemporaria(): string {
+  return crypto.randomBytes(9).toString('base64url');
+}
 
 /**
  * Rotas de uso exclusivo da equipe ARCKATECH (ADM/Agente) — acesso irrestrito,
@@ -93,7 +105,7 @@ router.get('/users', (req, res) => {
   return res.json({ status: 'sucesso', users: dbStore.internalUsers });
 });
 
-router.post('/users', (req, res) => {
+router.post('/users', async (req, res) => {
   const { nome, email, role, rbac_profile_id } = req.body;
   if (!nome || !email || !role) {
     return res.status(400).json({ status: 'erro', mensagem: 'nome, email e role (ADM ou AGENTE) são obrigatórios.' });
@@ -102,11 +114,14 @@ router.post('/users', (req, res) => {
     return res.status(400).json({ status: 'erro', mensagem: 'rbac_profile_id é obrigatório para usuários do tipo AGENTE.' });
   }
 
+  const senhaTemporaria = gerarSenhaTemporaria();
+  const passwordHash = await bcrypt.hash(senhaTemporaria, 10);
+
   const newUser: InternalUser = {
     id: uuidv4(),
     nome,
     email,
-    password_hash: `hash_${uuidv4()}`,
+    password_hash: passwordHash,
     role,
     rbac_profile_id: role === 'AGENTE' ? rbac_profile_id : undefined,
     status: 'ATIVO',
@@ -114,7 +129,10 @@ router.post('/users', (req, res) => {
   };
   dbStore.internalUsers.push(newUser);
   dbStore.persist();
-  return res.json({ status: 'sucesso', user: newUser });
+  // Senha em texto plano devolvida uma única vez — mesmo padrão de POST /admin/tenant-users e
+  // POST /tenant/users. Não há ainda envio de e-mail nem rota de login para InternalUser; fica
+  // registrada aqui só para manter o hash real consistente com o resto do backend.
+  return res.json({ status: 'sucesso', user: newUser, senha_temporaria: senhaTemporaria });
 });
 
 router.put('/users/:id', (req, res) => {

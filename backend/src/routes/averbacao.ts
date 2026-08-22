@@ -2,6 +2,8 @@ import { Router, Response } from 'express';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { AverbacaoService } from '../services/averbacao';
 import { dbStore } from '../services/dbStore';
+import { ResponseEngine } from '../services/responseEngine';
+import { checkActivated } from '../services/accountActivation';
 
 const router = Router();
 
@@ -11,6 +13,23 @@ const router = Router();
  */
 router.post('/', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
+
+  // Antes, este endpoint só exigia um JWT válido — não checava se a conta (Termo de Uso) já
+  // tinha sido ativada. Alguém com login válido mas conta_ativada=false ainda conseguia averbar
+  // normalmente. Mesmo gate já usado em /tenant/* (ver services/accountActivation.ts).
+  const gate = checkActivated(tenantId);
+  if (!gate.ok) {
+    if (gate.code === 404) return res.status(404).json(gate.body);
+    const fmt = ResponseEngine.formatResponse('ERR-4009');
+    return res.status(403).json({
+      status: 'erro',
+      codigo: fmt.codigo,
+      mensagem: fmt.mensagem,
+      explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
+      orientacao_correcao: fmt.orientacao_correcao
+    });
+  }
+
   const { ramo, xml_content, recovery_token, supplemented_vars } = req.body;
 
   if (!ramo || !xml_content) {

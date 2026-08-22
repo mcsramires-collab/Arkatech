@@ -1,5 +1,5 @@
 import { dbStore } from './dbStore';
-import { TipoDocumento } from '../types';
+import { TipoDocumento, FuncaoDocumento } from '../types';
 
 export interface MockGenerationOptions {
   tenantId: string;
@@ -7,7 +7,11 @@ export interface MockGenerationOptions {
   policyId?: string;
   incluirVariaveisApolice?: boolean;
   omitirObrigatorias?: string[]; // nomes de variáveis a propositalmente OMITIR (para testar recusa)
-  comoDestinatario?: boolean; // gera o documento com o tenant como DESTINATÁRIO, não emitente (testa a regra do item 3.1)
+  comoDestinatario?: boolean; // atalho legado — equivale a funcaoTenant='DESTINATARIO'
+  funcaoTenant?: FuncaoDocumento; // em qual função do documento o CNPJ do tenant aparece (default EMISSOR)
+  omitirCnpjTenant?: boolean; // gera o documento SEM o CNPJ do tenant em nenhuma função — testa a Regra B (bypass)
+  ufOrigem?: string; // usado junto com omitirCnpjTenant para testar bypass por rota
+  ufDestino?: string;
   tpAmbSefaz?: 1 | 2; // 1=produção (default), 2=homologação — testa a regra do "protocolo TESTE"
   omitirGrupoSeguro?: boolean; // MDF-e apenas: gera sem o grupo <seg>, para testar a rejeição 699 do Sefaz
 }
@@ -58,6 +62,10 @@ export class MockGeneratorService {
       incluirVariaveisApolice,
       omitirObrigatorias,
       comoDestinatario,
+      funcaoTenant,
+      omitirCnpjTenant,
+      ufOrigem,
+      ufDestino,
       tpAmbSefaz = 1,
       omitirGrupoSeguro
     } = options;
@@ -81,16 +89,30 @@ export class MockGeneratorService {
     const dateISO = new Date().toISOString().slice(0, 19) + '-03:00';
     const nProt = `1352${Date.now().toString().slice(-11)}`;
 
-    // Contraparte fictícia (a "outra empresa" do documento — emitente ou destinatária, dependendo do cenário)
+    // Contraparte fictícia (usada em toda função do documento onde o tenant NÃO está)
     const contraparteCNPJ = '98765432000188';
     const contraparteNome = 'INDUSTRIAS REUNIDAS TESTE SA';
+    const tenantCNPJ = tenant.cnpj.replace(/\D/g, '');
 
-    const emitCNPJ = comoDestinatario ? contraparteCNPJ : tenant.cnpj.replace(/\D/g, '');
-    const emitNome = comoDestinatario ? contraparteNome : tenant.razao_social;
-    const destCNPJ = comoDestinatario ? tenant.cnpj.replace(/\D/g, '') : contraparteCNPJ;
-    const destNome = comoDestinatario ? tenant.razao_social : contraparteNome;
+    // Função efetiva do tenant no documento (comoDestinatario é atalho legado)
+    const funcao = omitirCnpjTenant ? undefined : comoDestinatario ? 'DESTINATARIO' : funcaoTenant || 'EMISSOR';
+
+    const cnpjPara = (papel: string) => (funcao === papel ? tenantCNPJ : contraparteCNPJ);
+    const nomePara = (papel: string) => (funcao === papel ? tenant.razao_social : contraparteNome);
+
+    // Emitente sempre precisa existir; se o tenant não está em nenhuma função (bypass), o emitente é a contraparte.
+    const emitCNPJ = omitirCnpjTenant ? contraparteCNPJ : funcao === 'EMISSOR' ? tenantCNPJ : contraparteCNPJ;
+    const emitNome = omitirCnpjTenant ? contraparteNome : funcao === 'EMISSOR' ? tenant.razao_social : contraparteNome;
+    const destCNPJ = omitirCnpjTenant ? contraparteCNPJ : cnpjPara('DESTINATARIO');
+    const destNome = omitirCnpjTenant ? contraparteNome : nomePara('DESTINATARIO');
+    const remCNPJ = omitirCnpjTenant ? contraparteCNPJ : cnpjPara('REMETENTE');
+    const tomaCNPJ = omitirCnpjTenant ? contraparteCNPJ : cnpjPara('TOMADOR');
+    const expedCNPJ = omitirCnpjTenant ? contraparteCNPJ : cnpjPara('EXPEDIDOR');
+    const recebCNPJ = omitirCnpjTenant ? contraparteCNPJ : cnpjPara('RECEBEDOR');
 
     const chave = this.randomChave(emitCNPJ, docNum, '35', tipoDoc === 'NFE' ? '55' : tipoDoc === 'MDFE' ? '58' : '57');
+    const ufIniFinal = ufOrigem || 'SP';
+    const ufFimFinal = ufDestino || 'MG';
 
     const obsField = incluirVariaveisApolice
       ? this.buildObsField(policyId, omitirObrigatorias || [])
@@ -130,15 +152,32 @@ export class MockGeneratorService {
         <dhEmi>${dateISO}</dhEmi>
         <tpAmb>${tpAmbSefaz}</tpAmb>
         <tpEmis>1</tpEmis>
+        <UFIni>${ufIniFinal}</UFIni>
+        <UFFim>${ufFimFinal}</UFFim>
+        <toma3>
+          <toma>0</toma>
+        </toma3>
       </ide>
       <emit>
         <CNPJ>${emitCNPJ}</CNPJ>
         <xNome>${emitNome}</xNome>
       </emit>
+      <rem>
+        <CNPJ>${remCNPJ}</CNPJ>
+      </rem>
       <dest>
         <CNPJ>${destCNPJ}</CNPJ>
         <xNome>${destNome}</xNome>
       </dest>
+      <exped>
+        <CNPJ>${expedCNPJ}</CNPJ>
+      </exped>
+      <receb>
+        <CNPJ>${recebCNPJ}</CNPJ>
+      </receb>
+      <toma>
+        <CNPJ>${tomaCNPJ}</CNPJ>
+      </toma>
       <vPrest>
         <vTPrest>${valorCarga}</vTPrest>
         <vRec>${valorCarga}</vRec>
@@ -220,8 +259,8 @@ export class MockGeneratorService {
         <tpAmb>${tpAmbSefaz}</tpAmb>
         <nMDF>${docNum}</nMDF>
         <dhEmi>${dateISO}</dhEmi>
-        <UFIni>SP</UFIni>
-        <UFFim>MG</UFFim>
+        <UFIni>${ufIniFinal}</UFIni>
+        <UFFim>${ufFimFinal}</UFFim>
       </ide>
       <emit>
         <CNPJ>${emitCNPJ}</CNPJ>

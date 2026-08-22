@@ -4,6 +4,7 @@ export type UserRole = 'ADMIN' | 'SEGURADORA' | 'CORRETORA' | 'TRANSPORTADOR';
 export type RamoApolice = 'RCTRC' | 'RCDC' | 'RCV';
 export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE' | 'MDFE';
 export type InternalUserRole = 'ADM' | 'AGENTE';
+export type FuncaoDocumento = 'EMISSOR' | 'DESTINATARIO' | 'REMETENTE' | 'TOMADOR' | 'EXPEDIDOR' | 'RECEBEDOR';
 export type DelegationAction =
   | 'CRIAR_CLIENTE'
   | 'EDITAR_CLIENTE'
@@ -62,13 +63,40 @@ export interface Policy {
   ramo: RamoApolice;
   tenant_id: string; // Transportador / Embarcador vinculado
   insurer_id: string;
-  broker_id: string;
+  broker_id: string; // Corretora líder — obrigatória
+  co_broker_id?: string; // Co-corretora — opcional
+  assessoria_id?: string; // Assessoria — opcional, mesma visibilidade/funções de Broker
   status: 'ATIVA' | 'INATIVA' | 'VENCIDA';
   permitir_inativo_vencido: boolean;
   vigencia_inicio: string;
   vigencia_fim: string;
   lmi?: number; // Limite Máximo da Apólice
-  aceita_averbacao_como_destinatario: boolean; // permite averbar documentos em que este CNPJ é o destinatário, não o emissor
+  /** @deprecated usar PolicyTitularityRule com funcao='DESTINATARIO'. Mantido por compatibilidade. */
+  aceita_averbacao_como_destinatario: boolean;
+}
+
+/**
+ * Regra A da Titularidade v2 — define em quais funções do documento fiscal o CNPJ do
+ * segurado pode aparecer para a averbação ser aceita (além de EMISSOR, que é sempre aceito).
+ */
+export interface PolicyTitularityRule {
+  id: string;
+  policy_id: string;
+  funcao: FuncaoDocumento;
+  habilitada: boolean;
+}
+
+/**
+ * Regra B da Titularidade v2 — bypass: aceita a averbação mesmo sem o CNPJ do segurado
+ * aparecer em nenhuma função do documento, desde que a rota e/ou o produto predominante
+ * batam com o configurado. Pelo menos um dos três campos precisa estar preenchido.
+ */
+export interface PolicyBypassRule {
+  id: string;
+  policy_id: string;
+  rota_uf_origem?: string;
+  rota_uf_destino?: string;
+  produto_predominante?: string;
 }
 
 /**
@@ -128,7 +156,8 @@ export interface RawXMLStore {
 
 export interface Averbacao {
   id: string;
-  numero_averbacao: string;
+  /** Ausente em registros status='ERRO' — só é gerado quando a averbação é aceita. */
+  numero_averbacao?: string;
   protocolo_interno_averbacao: string; // identificador interno nosso, independente do formato "de mercado" do nAver
   tenant_id: string;
   policy_id: string;
@@ -141,6 +170,11 @@ export interface Averbacao {
   tp_amb_sefaz?: 1 | 2; // 1=produção, 2=homologação — extraído do XML, independente do tenant.ambiente
   tipo_documento: TipoDocumento;
   chave_documento: string;
+  numero_documento?: string; // número "de mercado" do próprio documento (nCT/nNF/nMDF), não o número da averbação
+  serie_documento?: string; // ide.serie do CT-e/NF-e/MDF-e
+  cnpj_remetente?: string;
+  cnpj_destinatario?: string;
+  cnpj_tomador?: string;
   protocolo_aceitacao_sefaz?: string; // nProt do protXXX/infProt do XML, usado na deduplicação
   raw_xml_id: string;
   recovery_token?: string;
@@ -276,6 +310,49 @@ export interface ApprovalRequest {
   resolved_by?: string;
 }
 
+/**
+ * Override da matriz de delegação (DelegationPermission) para um segurado específico dentro da
+ * carteira de uma corretora — aba "Exceções por segurado" em Permissões e Autonomia. Ao contrário
+ * de DelegationPermission (que é por ação), a exceção é um único nível que vale para TODAS as
+ * ações daquele segurado, e tem prioridade sobre a matriz geral quando existe:
+ * - AUTONOMO: nunca exige aprovação para esse segurado, mesmo que a ação exija na matriz geral.
+ * - MEDIANTE_APROVACAO: sempre exige aprovação para esse segurado, mesmo que a ação seja
+ *   autônoma na matriz geral.
+ * - BLOQUEADA: a corretora não pode executar nenhuma ação delegada para esse segurado (nem
+ *   direto, nem via aprovação) — usado para suspender a autonomia de um cliente específico.
+ */
+export type DelegationExceptionLevel = 'AUTONOMO' | 'MEDIANTE_APROVACAO' | 'BLOQUEADA';
+
+export interface DelegationException {
+  id: string;
+  insurer_id: string;
+  broker_id: string;
+  tenant_id: string;
+  nivel: DelegationExceptionLevel;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Valor real de uma Cobertura Adicional (InsurerCoverage) dentro de uma apólice específica.
+ * InsurerCoverage é só a *definição* da cobertura (título, tipo monetário/informativo,
+ * obrigatoriedade, escopo) — não tem valor nenhum atribuído. PolicyCoverageValue é o registro de
+ * "esta cobertura X está ativada nesta apólice Y, com valor R$ Z". `desconta_lmi` indica se esse
+ * valor deve ser descontado do LMI da apólice no cálculo de limite de averbação — por decisão de
+ * escopo, este campo é apenas persistido nesta rodada e AINDA NÃO é lido pelo AverbacaoService
+ * (mesma decisão já tomada para os demais filtros da Regra B): mudar o motor de cálculo de limite
+ * financeiro exige validação de produto antes de entrar em produção.
+ */
+export interface PolicyCoverageValue {
+  id: string;
+  policy_id: string;
+  insurer_coverage_id: string;
+  valor: number;
+  desconta_lmi: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 // ===================== ATIVAÇÃO DE CONTA (TRANSPORTADOR) =====================
 
 export interface ActivationToken {
@@ -287,6 +364,12 @@ export interface ActivationToken {
   aceite_em?: string;
   expira_em: string;
   created_at: string;
+  // Convite unificado (Termo de Uso + primeira senha, ver POST /tenant/activation/:token/definir-senha) —
+  // nome/e-mail da pessoa convidada, usados para criar o TenantUser inicial no momento do aceite e para
+  // montar o e-mail de convite enviado via Resend (ver services/emailService.ts). Sem esses dois campos
+  // preenchidos, o token ainda funciona no fluxo antigo (POST /activation/:token/aceitar, só Termo de Uso).
+  convite_nome?: string;
+  convite_email?: string;
 }
 
 // ===================== PREFERÊNCIAS DE NOTIFICAÇÃO =====================
@@ -296,4 +379,61 @@ export interface NotificationPreference {
   tenant_user_id: string;
   canal: 'EMAIL' | 'PORTAL' | 'SMS';
   ativo: boolean;
+}
+
+// ===================== REGRAS DE NEGÓCIO (SOLICITAÇÃO DO TRANSPORTADOR) =====================
+
+/**
+ * Solicitação de uma nova regra de negócio (ex: condição por valor de carga, papel do CNPJ
+ * na averbação) feita pelo transportador/embarcador à seguradora, via Portal do Segurado.
+ * MVP: só o lado do transportador (criar/consultar). A aprovação/rejeição pela seguradora é
+ * feita por quem administra o painel interno (via /admin), ainda sem tela dedicada no Portal
+ * da Seguradora — só a API.
+ */
+export interface BusinessRuleRequest {
+  id: string;
+  tenant_id: string;
+  tipo: string; // ex: "Papel do CNPJ na averbação", "Condição por valor de carga"
+  descricao?: string;
+  status: 'PENDENTE' | 'APROVADA' | 'REJEITADA';
+  solicitante_nome: string;
+  comentario_seguradora?: string;
+  created_at: string;
+  resolved_at?: string;
+}
+
+// ===================== CONFIGURAÇÕES DA FICHA DO SEGURADO (PORTAL DA SEGURADORA) =====================
+
+/**
+ * Configurações de negócio de uma APÓLICE que ainda não ganharam modelagem normalizada
+ * própria — Métodos de Averbação, Subcontratação, Veículo e Motorista, Prazos e Datas,
+ * Região Metropolitana, Valor da Averbação e Averbação Esporádica (todas sub-seções da
+ * aba "Regras de Negócio" da Ficha do Segurado, ver arckatechseguradora/src/components/
+ * portal/regras-negocio.tsx). Guardadas como um único blob JSON por apólice em vez de uma
+ * tabela por sub-seção — essas telas ainda mudam com frequência junto com o produto, e uma
+ * tabela rígida por campo travaria a entrega. NÃO inclui Identificação do Segurado
+ * (Regra A / Regra B): essas já têm modelagem própria e imposição real no motor de regras
+ * (ver PolicyTitularityRule / PolicyBypassRule) — o campo `config.identificacaoRegraB` aqui
+ * guarda só os detalhes extras de exibição do construtor de condições da Regra B (CNPJ,
+ * produto, valor de corte, CFOP etc.) que o motor de regras ainda NÃO aplica hoje; o que o
+ * motor realmente impõe no bypass continua sendo só rota_uf_origem / rota_uf_destino /
+ * produto_predominante em PolicyBypassRule.
+ */
+export interface PolicyBusinessSettings {
+  id: string;
+  policy_id: string;
+  config: Record<string, any>;
+  updated_at: string;
+}
+
+/**
+ * Sublimite de cobertura por palavra-chave de mercadoria, específico de uma apólice
+ * (aba "Sublimites por Mercadoria" da Ficha do Segurado).
+ */
+export interface PolicySublimite {
+  id: string;
+  policy_id: string;
+  tag: string;
+  valor: string;
+  created_at: string;
 }
