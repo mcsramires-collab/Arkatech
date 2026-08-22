@@ -310,6 +310,49 @@ export interface ApprovalRequest {
   resolved_by?: string;
 }
 
+/**
+ * Override da matriz de delegação (DelegationPermission) para um segurado específico dentro da
+ * carteira de uma corretora — aba "Exceções por segurado" em Permissões e Autonomia. Ao contrário
+ * de DelegationPermission (que é por ação), a exceção é um único nível que vale para TODAS as
+ * ações daquele segurado, e tem prioridade sobre a matriz geral quando existe:
+ * - AUTONOMO: nunca exige aprovação para esse segurado, mesmo que a ação exija na matriz geral.
+ * - MEDIANTE_APROVACAO: sempre exige aprovação para esse segurado, mesmo que a ação seja
+ *   autônoma na matriz geral.
+ * - BLOQUEADA: a corretora não pode executar nenhuma ação delegada para esse segurado (nem
+ *   direto, nem via aprovação) — usado para suspender a autonomia de um cliente específico.
+ */
+export type DelegationExceptionLevel = 'AUTONOMO' | 'MEDIANTE_APROVACAO' | 'BLOQUEADA';
+
+export interface DelegationException {
+  id: string;
+  insurer_id: string;
+  broker_id: string;
+  tenant_id: string;
+  nivel: DelegationExceptionLevel;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Valor real de uma Cobertura Adicional (InsurerCoverage) dentro de uma apólice específica.
+ * InsurerCoverage é só a *definição* da cobertura (título, tipo monetário/informativo,
+ * obrigatoriedade, escopo) — não tem valor nenhum atribuído. PolicyCoverageValue é o registro de
+ * "esta cobertura X está ativada nesta apólice Y, com valor R$ Z". `desconta_lmi` indica se esse
+ * valor deve ser descontado do LMI da apólice no cálculo de limite de averbação — por decisão de
+ * escopo, este campo é apenas persistido nesta rodada e AINDA NÃO é lido pelo AverbacaoService
+ * (mesma decisão já tomada para os demais filtros da Regra B): mudar o motor de cálculo de limite
+ * financeiro exige validação de produto antes de entrar em produção.
+ */
+export interface PolicyCoverageValue {
+  id: string;
+  policy_id: string;
+  insurer_coverage_id: string;
+  valor: number;
+  desconta_lmi: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 // ===================== ATIVAÇÃO DE CONTA (TRANSPORTADOR) =====================
 
 export interface ActivationToken {

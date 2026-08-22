@@ -6,12 +6,13 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite, Broker } from '../types';
+import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite, Broker, DelegationException, DelegationExceptionLevel, PolicyCoverageValue } from '../types';
 import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { PurgeService } from '../services/purgeService';
 import { AverbacaoService } from '../services/averbacao';
 import { sendActivationInviteEmail } from '../services/emailService';
+import { aplicarAcaoDelegada } from '../services/delegatedActions';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -941,6 +942,61 @@ router.put('/delegation-permissions', (req, res) => {
   });
 });
 
+// --- Exceções por Segurado (override da matriz de delegação para um tenant específico dentro
+// da carteira de uma corretora) — aba "Exceções por segurado" em Permissões e Autonomia. ---
+router.get('/delegation-exceptions', (req, res) => {
+  const { insurer_id, broker_id } = req.query;
+  if (!insurer_id || !broker_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e broker_id são obrigatórios.' });
+  }
+  const items = dbStore.delegationExceptions.filter((e) => e.insurer_id === insurer_id && e.broker_id === broker_id);
+  return res.json({ status: 'sucesso', exceptions: items });
+});
+
+router.put('/delegation-exceptions', (req, res) => {
+  const { insurer_id, broker_id, tenant_id, nivel } = req.body;
+  if (!insurer_id || !broker_id || !tenant_id || !nivel) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'insurer_id, broker_id, tenant_id e nivel são obrigatórios.'
+    });
+  }
+  const niveisValidos: DelegationExceptionLevel[] = ['AUTONOMO', 'MEDIANTE_APROVACAO', 'BLOQUEADA'];
+  if (!niveisValidos.includes(nivel)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: "nivel deve ser 'AUTONOMO', 'MEDIANTE_APROVACAO' ou 'BLOQUEADA'."
+    });
+  }
+
+  const now = new Date().toISOString();
+  let exception: DelegationException | undefined = dbStore.delegationExceptions.find(
+    (e) => e.insurer_id === insurer_id && e.broker_id === broker_id && e.tenant_id === tenant_id
+  );
+  if (exception) {
+    exception.nivel = nivel;
+    exception.updated_at = now;
+  } else {
+    exception = { id: uuidv4(), insurer_id, broker_id, tenant_id, nivel, created_at: now, updated_at: now };
+    dbStore.delegationExceptions.push(exception);
+  }
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', exception });
+});
+
+router.delete('/delegation-exceptions/:id', (req, res) => {
+  const { id } = req.params;
+  const exists = dbStore.delegationExceptions.some((e) => e.id === id);
+  if (!exists) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Exceção não encontrada.' });
+  }
+  // Remover a exceção faz o segurado voltar a seguir a matriz geral (DelegationPermission).
+  dbStore.delegationExceptions = dbStore.delegationExceptions.filter((e) => e.id !== id);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Exceção removida — segurado volta a seguir a matriz geral.' });
+});
+
 // --- I. Fila de Aprovação (ações da corretora sujeitas a requires_approval) ---
 router.get('/approval-requests', (req, res) => {
   const { insurer_id, status } = req.query;
@@ -961,13 +1017,33 @@ router.post('/approval-requests/:id/resolve', (req, res) => {
   if (status !== 'APROVADO' && status !== 'REJEITADO') {
     return res.status(400).json({ status: 'erro', mensagem: "status deve ser 'APROVADO' ou 'REJEITADO'." });
   }
+  if (request.status !== 'PENDENTE') {
+    return res.status(409).json({ status: 'erro', mensagem: 'Esta solicitação já foi resolvida anteriormente.' });
+  }
+
+  // Antes desta rodada, aprovar uma solicitação só mudava o status — nunca executava de fato a
+  // ação pendente (ex: aprovar CRIAR_CLIENTE nunca criava o tenant/apólice). Ao aprovar, aplica a
+  // ação de verdade via o mesmo serviço usado pelas rotas diretas em broker.ts.
+  let resultadoAplicacao: unknown;
+  if (status === 'APROVADO') {
+    const resultado = aplicarAcaoDelegada(request.action, request.insurer_id, request.broker_id, request.payload);
+    if (!resultado.ok) {
+      const httpStatus = resultado.codigo === 'nao_encontrado' ? 404 : resultado.codigo === 'conflito' ? 409 : 400;
+      return res.status(httpStatus).json({
+        ...resultado,
+        status: resultado.codigo,
+        mensagem: `Solicitação aprovada, mas a ação não pôde ser aplicada: ${resultado.mensagem}`
+      });
+    }
+    resultadoAplicacao = resultado;
+  }
 
   request.status = status;
   request.resolved_at = new Date().toISOString();
   request.resolved_by = resolved_by;
 
   dbStore.persist();
-  return res.json({ status: 'sucesso', request });
+  return res.json({ status: 'sucesso', request, resultado: resultadoAplicacao });
 });
 
 // --- J. Regra de Titularidade v2: Regra A (função no documento) ---
@@ -1161,6 +1237,86 @@ router.delete('/policy-sublimites/:id', (req, res) => {
   dbStore.policySublimites = dbStore.policySublimites.filter((s) => s.id !== id);
   dbStore.persist();
   return res.json({ status: 'sucesso', mensagem: 'Sublimite removido com sucesso.' });
+});
+
+// --- N. Coberturas Adicionais com valor real por apólice (PolicyCoverageValue) — "ativado nesta
+// apólice com valor R$ X". Distinto de InsurerCoverage, que é só a definição da cobertura.
+// desconta_lmi é persistido mas ainda NÃO é lido pelo AverbacaoService nesta rodada (ver
+// claude/Mapeamento_Portais_e_Personas.md no Project para o porquê). ---
+router.get('/policy-coverage-values', (req, res) => {
+  const { policy_id } = req.query;
+  if (!policy_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'policy_id é obrigatório.' });
+  }
+  const items = dbStore.policyCoverageValues.filter((v) => v.policy_id === policy_id);
+  return res.json({ status: 'sucesso', coverage_values: items });
+});
+
+router.post('/policy-coverage-values', (req, res) => {
+  const { policy_id, insurer_coverage_id, valor, desconta_lmi } = req.body;
+  if (!policy_id || !insurer_coverage_id) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'policy_id e insurer_coverage_id são obrigatórios.'
+    });
+  }
+  const policy = dbStore.policies.find((p) => p.id === policy_id);
+  if (!policy) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Apólice não encontrada.' });
+  }
+  const coverage = dbStore.insurerCoverages.find((c) => c.id === insurer_coverage_id);
+  if (!coverage) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cobertura adicional não encontrada.' });
+  }
+  const existente = dbStore.policyCoverageValues.find(
+    (v) => v.policy_id === policy_id && v.insurer_coverage_id === insurer_coverage_id
+  );
+  if (existente) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem: 'Esta cobertura já está ativada nesta apólice. Use a edição para alterar o valor.'
+    });
+  }
+
+  const now = new Date().toISOString();
+  const newValue: PolicyCoverageValue = {
+    id: uuidv4(),
+    policy_id,
+    insurer_coverage_id,
+    valor: Number(valor) || 0,
+    desconta_lmi: Boolean(desconta_lmi),
+    created_at: now,
+    updated_at: now
+  };
+  dbStore.policyCoverageValues.push(newValue);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', coverage_value: newValue });
+});
+
+router.put('/policy-coverage-values/:id', (req, res) => {
+  const { id } = req.params;
+  const value = dbStore.policyCoverageValues.find((v) => v.id === id);
+  if (!value) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cobertura ativada não encontrada nesta apólice.' });
+  }
+  const { valor, desconta_lmi } = req.body;
+  if (valor !== undefined) value.valor = Number(valor) || 0;
+  if (desconta_lmi !== undefined) value.desconta_lmi = Boolean(desconta_lmi);
+  value.updated_at = new Date().toISOString();
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', coverage_value: value });
+});
+
+router.delete('/policy-coverage-values/:id', (req, res) => {
+  const { id } = req.params;
+  const exists = dbStore.policyCoverageValues.some((v) => v.id === id);
+  if (!exists) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cobertura ativada não encontrada nesta apólice.' });
+  }
+  dbStore.policyCoverageValues = dbStore.policyCoverageValues.filter((v) => v.id !== id);
+  dbStore.persist();
+  return res.json({ status: 'sucesso', mensagem: 'Cobertura removida desta apólice com sucesso.' });
 });
 
 // =====================================================================

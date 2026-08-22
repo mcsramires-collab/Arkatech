@@ -21,6 +21,8 @@ import {
   InsurerCoverage,
   DelegationPermission,
   ApprovalRequest,
+  DelegationException,
+  PolicyCoverageValue,
   ActivationToken,
   NotificationPreference,
   PolicyTitularityRule,
@@ -59,6 +61,10 @@ class DBStore {
   // Negócio (blob por apólice) e Sublimites por Mercadoria (lista por apólice).
   public policyBusinessSettings: PolicyBusinessSettings[] = [];
   public policySublimites: PolicySublimite[] = [];
+  // Fase 3 — Segurança/enforcement (backlog itens 1 e 2): override por segurado da matriz de
+  // delegação, e valor real de cobertura adicional por apólice.
+  public delegationExceptions: DelegationException[] = [];
+  public policyCoverageValues: PolicyCoverageValue[] = [];
 
   // Por padrão, grava dentro da própria pasta de build (comportamento antigo, ok para dev local).
   // Em produção, defina a env var DATA_DIR apontando para um diretório com volume persistente
@@ -103,6 +109,8 @@ class DBStore {
         this.businessRuleRequests = parsed.businessRuleRequests || [];
         this.policyBusinessSettings = parsed.policyBusinessSettings || [];
         this.policySublimites = parsed.policySublimites || [];
+        this.delegationExceptions = parsed.delegationExceptions || [];
+        this.policyCoverageValues = parsed.policyCoverageValues || [];
 
         if (this.ensureDefaultResponseTemplates()) {
           this.persist();
@@ -175,7 +183,9 @@ class DBStore {
             policyBypassRules: this.policyBypassRules,
             businessRuleRequests: this.businessRuleRequests,
             policyBusinessSettings: this.policyBusinessSettings,
-            policySublimites: this.policySublimites
+            policySublimites: this.policySublimites,
+            delegationExceptions: this.delegationExceptions,
+            policyCoverageValues: this.policyCoverageValues
           },
           null,
           2

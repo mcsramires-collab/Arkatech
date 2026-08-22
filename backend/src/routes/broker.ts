@@ -1,7 +1,8 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { Tenant, Policy, DelegationAction } from '../types';
+import { resolveRequiresApproval, criarApprovalRequest, aplicarAcaoDelegada } from '../services/delegatedActions';
 
 const router = Router();
 
@@ -96,6 +97,8 @@ router.post('/clients', (req, res) => {
         cnpj,
         razao_social,
         nome_fantasia,
+        co_broker_id,
+        assessoria_id,
         ramo,
         numero_apolice,
         lmi,
@@ -187,6 +190,183 @@ router.post('/clients', (req, res) => {
   dbStore.persist();
 
   return res.json({ status: 'sucesso', tenant, policy: newPolicy });
+});
+
+// =====================================================================
+// Enforcement das demais 5 ações de delegação (EDITAR_CLIENTE, CRIAR_APOLICE, EDITAR_APOLICE,
+// CRIAR_COBERTURA_ADICIONAL, EDITAR_COBERTURA_ADICIONAL) — até aqui só CRIAR_CLIENTE (acima) era
+// de fato imposto; as demais eram configuráveis na matriz de Permissões (Ponto 6) mas não tinham
+// nenhuma rota do lado da corretora que as consumisse. Todas seguem o mesmo formato de resposta
+// de POST /clients: 'pendente_aprovacao' quando a matriz/exceção exige aprovação da seguradora,
+// ou aplicação direta (via delegatedActions.ts) quando é autônoma.
+// =====================================================================
+
+function responderAcaoDelegada(
+  res: Response,
+  insurerId: string,
+  brokerId: string,
+  tenantId: string | undefined,
+  action: DelegationAction,
+  payload: Record<string, any>
+) {
+  const resolucao = resolveRequiresApproval(insurerId, brokerId, tenantId, action);
+  if (resolucao.blocked) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'A autonomia da corretora para este segurado foi bloqueada pela seguradora (exceção por segurado).'
+    });
+  }
+
+  if (resolucao.requiresApproval) {
+    const approvalRequest = criarApprovalRequest(insurerId, brokerId, action, payload);
+    return res.json({
+      status: 'pendente_aprovacao',
+      mensagem: 'Esta ação exige aprovação da seguradora. Sua solicitação foi registrada e ficará pendente até ser analisada.',
+      approval_request: approvalRequest
+    });
+  }
+
+  const resultado = aplicarAcaoDelegada(action, insurerId, brokerId, payload);
+  if (!resultado.ok) {
+    const httpStatus = resultado.codigo === 'nao_encontrado' ? 404 : resultado.codigo === 'conflito' ? 409 : 400;
+    return res.status(httpStatus).json({ ...resultado, status: resultado.codigo });
+  }
+  return res.json({ status: 'sucesso', ...resultado });
+}
+
+// --- Editar Cliente (segurado) já existente na carteira ---
+router.put('/clients/:tenantId', (req, res) => {
+  const { tenantId } = req.params;
+  const { insurer_id, broker_id, razao_social, contato_nome, contato_email, contato_telefone_fixo, contato_celular } =
+    req.body;
+  if (!insurer_id || !broker_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e broker_id são obrigatórios.' });
+  }
+
+  return responderAcaoDelegada(res, insurer_id, broker_id, tenantId, 'EDITAR_CLIENTE', {
+    tenant_id: tenantId,
+    razao_social,
+    contato_nome,
+    contato_email,
+    contato_telefone_fixo,
+    contato_celular
+  });
+});
+
+// --- Nova apólice para um segurado JÁ existente na carteira ---
+router.post('/policies', (req, res) => {
+  const {
+    insurer_id,
+    broker_id,
+    tenant_id,
+    co_broker_id,
+    assessoria_id,
+    ramo,
+    numero_apolice,
+    lmi,
+    vigencia_inicio,
+    vigencia_fim,
+    permitir_inativo_vencido,
+    aceita_averbacao_como_destinatario
+  } = req.body;
+
+  if (!insurer_id || !broker_id || !tenant_id || !ramo || !numero_apolice) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'insurer_id, broker_id, tenant_id, ramo e numero_apolice são obrigatórios.'
+    });
+  }
+
+  return responderAcaoDelegada(res, insurer_id, broker_id, tenant_id, 'CRIAR_APOLICE', {
+    tenant_id,
+    co_broker_id,
+    assessoria_id,
+    ramo,
+    numero_apolice,
+    lmi,
+    vigencia_inicio,
+    vigencia_fim,
+    permitir_inativo_vencido,
+    aceita_averbacao_como_destinatario
+  });
+});
+
+// --- Editar apólice já existente na carteira da corretora ---
+router.put('/policies/:id', (req, res) => {
+  const { id } = req.params;
+  const { insurer_id, broker_id, status, permitir_inativo_vencido, numero_apolice, vigencia_inicio, vigencia_fim, lmi } =
+    req.body;
+  if (!insurer_id || !broker_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e broker_id são obrigatórios.' });
+  }
+
+  const policy = dbStore.policies.find((p) => p.id === id);
+  if (!policy) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Apólice não encontrada.' });
+  }
+  if (policy.broker_id !== broker_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta apólice não pertence à carteira desta corretora.' });
+  }
+
+  return responderAcaoDelegada(res, insurer_id, broker_id, policy.tenant_id, 'EDITAR_APOLICE', {
+    policy_id: id,
+    status,
+    permitir_inativo_vencido,
+    numero_apolice,
+    vigencia_inicio,
+    vigencia_fim,
+    lmi
+  });
+});
+
+// --- Ativar Cobertura Adicional (com valor real) numa apólice da carteira ---
+router.post('/coverages', (req, res) => {
+  const { insurer_id, broker_id, policy_id, insurer_coverage_id, valor, desconta_lmi } = req.body;
+  if (!insurer_id || !broker_id || !policy_id || !insurer_coverage_id) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'insurer_id, broker_id, policy_id e insurer_coverage_id são obrigatórios.'
+    });
+  }
+
+  const policy = dbStore.policies.find((p) => p.id === policy_id);
+  if (!policy) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Apólice não encontrada.' });
+  }
+  if (policy.broker_id !== broker_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta apólice não pertence à carteira desta corretora.' });
+  }
+
+  return responderAcaoDelegada(res, insurer_id, broker_id, policy.tenant_id, 'CRIAR_COBERTURA_ADICIONAL', {
+    policy_id,
+    insurer_coverage_id,
+    valor,
+    desconta_lmi
+  });
+});
+
+// --- Editar valor de uma Cobertura Adicional já ativada numa apólice da carteira ---
+router.put('/coverages/:id', (req, res) => {
+  const { id } = req.params;
+  const { insurer_id, broker_id, valor, desconta_lmi } = req.body;
+  if (!insurer_id || !broker_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e broker_id são obrigatórios.' });
+  }
+
+  const coverageValue = dbStore.policyCoverageValues.find((v) => v.id === id);
+  if (!coverageValue) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cobertura ativada não encontrada.' });
+  }
+  const policy = dbStore.policies.find((p) => p.id === coverageValue.policy_id);
+  if (!policy || policy.broker_id !== broker_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta cobertura não pertence à carteira desta corretora.' });
+  }
+
+  return responderAcaoDelegada(res, insurer_id, broker_id, policy.tenant_id, 'EDITAR_COBERTURA_ADICIONAL', {
+    id,
+    valor,
+    desconta_lmi
+  });
 });
 
 // --- Relatório escopado à carteira da corretora ---

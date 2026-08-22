@@ -235,6 +235,18 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
       'id', 'tenant_id', 'tipo', 'descricao', 'status', 'solicitante_nome',
       'comentario_seguradora', 'created_at', 'resolved_at'
     ]
+  },
+  {
+    table: 'delegation_exceptions',
+    storeKey: 'delegationExceptions',
+    pk: 'id',
+    columns: ['id', 'insurer_id', 'broker_id', 'tenant_id', 'nivel', 'created_at', 'updated_at']
+  },
+  {
+    table: 'policy_coverage_values',
+    storeKey: 'policyCoverageValues',
+    pk: 'id',
+    columns: ['id', 'policy_id', 'insurer_coverage_id', 'valor', 'desconta_lmi', 'created_at', 'updated_at']
   }
 ];
 
