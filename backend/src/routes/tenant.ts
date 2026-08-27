@@ -343,14 +343,34 @@ router.get('/averbacoes', authMiddleware, (req: AuthenticatedRequest, res: Respo
 });
 
 // --- Pendências de Correção (variáveis faltantes) — sem precisar do link externo ---
+//
+// Achado da auditoria de 27/08 (Documentos Pendentes, revisão do status "Negada"): o protótipo
+// mockado antigo modelava esta tela com um status "Negada"/"Autorizada"/"Pendente" que nunca
+// existiu de verdade no backend — o modelo real (RecoverySession) só distingue "utilizada"
+// (corrigida com sucesso) de "não utilizada". Antes desta correção, uma pendência que passava do
+// prazo de 24h simplesmente desaparecia desta lista sem nenhum aviso ao cliente — o documento
+// nunca seria averbado, mas nada na tela dizia isso (e o backend, por um bug à parte corrigido
+// junto — ver AverbacaoService.process — nem chegava a recusar a correção depois do prazo).
+// Passa a expor um status real calculado (PENDENTE ainda dentro do prazo, EXPIRADA depois dele) e
+// a incluir também as pendências expiradas recentemente (últimos 30 dias), para o cliente saber
+// que precisa reenviar o documento em vez de simplesmente não ver mais nada sobre ele.
+const RECOVERY_EXPIRADA_JANELA_MS = 30 * 24 * 60 * 60 * 1000;
+
 router.get('/recovery-pendentes', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const gate = checkActivated(tenantId);
   if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
-  const pendentes = dbStore.recoverySessions.filter(
-    (r) => r.tenant_id === tenantId && !r.utilizada && new Date(r.expira_em) > new Date()
-  );
+  const now = Date.now();
+
+  const pendentes = dbStore.recoverySessions
+    .filter((r) => r.tenant_id === tenantId && !r.utilizada)
+    .filter((r) => now - new Date(r.expira_em).getTime() < RECOVERY_EXPIRADA_JANELA_MS)
+    .map((r) => ({
+      ...r,
+      status: (new Date(r.expira_em).getTime() > now ? 'PENDENTE' : 'EXPIRADA') as 'PENDENTE' | 'EXPIRADA'
+    }))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   return res.json({ status: 'sucesso', pendencias: pendentes });
 });
