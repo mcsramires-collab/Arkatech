@@ -116,6 +116,14 @@ export class AverbacaoService {
       if (!recoverySession) {
         return this.erro('ERR-4006');
       }
+      // Achado da auditoria de 27/08 (Documentos Pendentes): "expira_em" era gravado e exibido
+      // na tela (Portal do Segurado e link de e-mail) como um prazo real de 24h, mas nunca era
+      // checado aqui — um token "expirado" continuava sendo aceito indefinidamente. Corrigido:
+      // passado o prazo, o token deixa de valer e o documento precisa ser reenviado (o cliente
+      // não tinha como saber que aquela pendência nunca mais seria averbável antes desta correção).
+      if (new Date(recoverySession.expira_em).getTime() <= Date.now()) {
+        return this.erro('ERR-4012', { EXPIRA_EM: recoverySession.expira_em });
+      }
     }
 
     // 3. Parse do Documento XML / JSON
