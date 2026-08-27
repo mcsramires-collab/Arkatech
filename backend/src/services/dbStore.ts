@@ -379,6 +379,20 @@ class DBStore {
         orientacao_correcao:
           'Fale com sua seguradora/corretora para renovar a apólice, ou solicite a exceção de "permitir inativo/vencido" caso a renovação já esteja em andamento.',
         updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4012',
+        tipo: 'erro',
+        categoria: 'SISTEMA',
+        texto_padrao:
+          'ERRO 4012: O prazo para complementar esta pendência expirou em [EXPIRA_EM]. Reenvie o documento para gerar uma nova pendência.',
+        texto_customizado:
+          'ERRO 4012: O prazo para complementar esta pendência expirou em [EXPIRA_EM]. Reenvie o documento para gerar uma nova pendência.',
+        placeholders: ['[EXPIRA_EM]'],
+        explicacao_nao_tecnica: 'O prazo de 24 horas para complementar esta informação já passou.',
+        orientacao_correcao: 'Reenvie o documento (CT-e/NF-e/MDF-e) novamente para gerar uma nova pendência de complementação.',
+        updated_at: new Date().toISOString()
       }
     ];
   }
