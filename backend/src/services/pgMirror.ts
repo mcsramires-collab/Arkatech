@@ -248,6 +248,12 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     storeKey: 'policyCoverageValues',
     pk: 'id',
     columns: ['id', 'policy_id', 'insurer_coverage_id', 'valor', 'desconta_lmi', 'created_at', 'updated_at']
+  },
+  {
+    table: 'support_tickets',
+    storeKey: 'supportTickets',
+    pk: 'id',
+    columns: ['id', 'tenant_id', 'assunto', 'categoria', 'descricao', 'status', 'solicitante_nome', 'created_at']
   }
 ];
 

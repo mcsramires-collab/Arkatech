@@ -411,6 +411,24 @@ export interface BusinessRuleRequest {
   resolved_at?: string;
 }
 
+/**
+ * Chamado de suporte aberto pelo transportador/embarcador via Portal do Segurado. Achado da
+ * auditoria de 27/08: a tela de Suporte só disparava um toast de sucesso no cliente, sem nenhuma
+ * chamada de API — nada era persistido. MVP no mesmo espírito de `BusinessRuleRequest`: o tenant
+ * cria e consulta os próprios chamados; sem fluxo de resposta/atendimento do lado da seguradora
+ * ainda (fica para quando existir uma tela de suporte interna de verdade).
+ */
+export interface SupportTicket {
+  id: string;
+  tenant_id: string;
+  assunto: string;
+  categoria: string;
+  descricao: string;
+  status: 'ABERTO' | 'FECHADO';
+  solicitante_nome: string;
+  created_at: string;
+}
+
 // ===================== CONFIGURAÇÕES DA FICHA DO SEGURADO (PORTAL DA SEGURADORA) =====================
 
 /**
