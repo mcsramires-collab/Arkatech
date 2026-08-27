@@ -8,7 +8,7 @@ import { AverbacaoService } from '../services/averbacao';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { checkActivated } from '../services/accountActivation';
-import { TenantUser, BusinessRuleRequest } from '../types';
+import { TenantUser, BusinessRuleRequest, SupportTicket } from '../types';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -520,6 +520,47 @@ router.post('/regras-solicitacoes', authMiddleware, (req: AuthenticatedRequest, 
   dbStore.persist();
 
   return res.json({ status: 'sucesso', solicitacao: newRequest });
+});
+
+// --- Chamados de Suporte (MVP) — achado da auditoria de 27/08: a tela de Suporte do Portal do
+// Segurado só disparava um toast de sucesso no cliente, sem nenhuma chamada de API. O
+// transportador/embarcador cria e consulta os próprios chamados; sem fluxo de resposta/
+// atendimento do lado da seguradora ainda (não existe tela interna de suporte hoje).
+router.get('/suporte/chamados', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const chamados = dbStore.supportTickets
+    .filter((c) => c.tenant_id === tenantId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return res.json({ status: 'sucesso', chamados });
+});
+
+router.post('/suporte/chamados', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const { assunto, categoria, descricao } = req.body;
+
+  if (!assunto || !categoria || !descricao) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'assunto, categoria e descricao são obrigatórios.'
+    });
+  }
+
+  const solicitanteNome = req.tenant!.tenant_user_nome || req.tenant!.razao_social;
+
+  const newTicket: SupportTicket = {
+    id: uuidv4(),
+    tenant_id: tenantId,
+    assunto,
+    categoria,
+    descricao,
+    status: 'ABERTO',
+    solicitante_nome: solicitanteNome,
+    created_at: new Date().toISOString()
+  };
+  dbStore.supportTickets.unshift(newTicket);
+  dbStore.persist();
+
+  return res.json({ status: 'sucesso', chamado: newTicket });
 });
 
 // --- Estatísticas do Dashboard (Início do Portal) — agregados simples sobre os dados reais do

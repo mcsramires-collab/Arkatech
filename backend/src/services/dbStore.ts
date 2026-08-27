@@ -29,7 +29,8 @@ import {
   PolicyBypassRule,
   BusinessRuleRequest,
   PolicyBusinessSettings,
-  PolicySublimite
+  PolicySublimite,
+  SupportTicket
 } from '../types';
 
 class DBStore {
@@ -65,6 +66,8 @@ class DBStore {
   // delegação, e valor real de cobertura adicional por apólice.
   public delegationExceptions: DelegationException[] = [];
   public policyCoverageValues: PolicyCoverageValue[] = [];
+  // Fase 4 — Tela de Suporte real do Portal do Segurado (backlog item, auditoria de 27/08).
+  public supportTickets: SupportTicket[] = [];
 
   // Por padrão, grava dentro da própria pasta de build (comportamento antigo, ok para dev local).
   // Em produção, defina a env var DATA_DIR apontando para um diretório com volume persistente
@@ -111,6 +114,7 @@ class DBStore {
         this.policySublimites = parsed.policySublimites || [];
         this.delegationExceptions = parsed.delegationExceptions || [];
         this.policyCoverageValues = parsed.policyCoverageValues || [];
+        this.supportTickets = parsed.supportTickets || [];
 
         if (this.ensureDefaultResponseTemplates()) {
           this.persist();
@@ -185,7 +189,8 @@ class DBStore {
             policyBusinessSettings: this.policyBusinessSettings,
             policySublimites: this.policySublimites,
             delegationExceptions: this.delegationExceptions,
-            policyCoverageValues: this.policyCoverageValues
+            policyCoverageValues: this.policyCoverageValues,
+            supportTickets: this.supportTickets
           },
           null,
           2
