@@ -566,6 +566,21 @@ router.post('/suporte/chamados', authMiddleware, (req: AuthenticatedRequest, res
 // --- Estatísticas do Dashboard (Início do Portal) — agregados simples sobre os dados reais do
 // próprio tenant; nada aqui é mockado, mas propositalmente não inclui nada que exija consultas
 // caras (ex: sem paginação/filtro — o volume de dados de demonstração é pequeno).
+// Comparação percentual mês atual vs mês anterior (mesmo padrão de "up"/"down" já usado em
+// GET /admin/insurer-dashboard-stats, só que ali devolvia as contagens cruas — aqui devolvemos
+// o percentual pronto, no formato que o frontend do Portal do Segurado já espera desde que
+// `MetricComparison`/`ComparisonIndicator` foram introduzidos no widget "Resumo de Métricas"
+// (src/routes/index.tsx do arckatech-cargo-portal). Achado da auditoria de 27/08: o frontend já
+// lia `stats.comparacoes.*`, mas esta rota nunca devolvia esse campo — `undefined.averbacoes`
+// quebrava a tela assim que o usuário habilitasse esse widget numa sessão real (não-demo).
+function comparacaoPercentual(atual: number, anterior: number): { value: number; direction: 'up' | 'down' } {
+  if (anterior === 0) {
+    return atual === 0 ? { value: 0, direction: 'up' } : { value: 100, direction: 'up' };
+  }
+  const variacao = ((atual - anterior) / anterior) * 100;
+  return { value: Math.round(Math.abs(variacao)), direction: variacao >= 0 ? 'up' : 'down' };
+}
+
 router.get('/dashboard-stats', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
 
@@ -594,6 +609,31 @@ router.get('/dashboard-stats', authMiddleware, (req: AuthenticatedRequest, res: 
     created_at: a.created_at
   }));
 
+  const agora = new Date();
+  const inicioMesAtual = new Date(agora.getFullYear(), agora.getMonth(), 1);
+  const inicioMesAnterior = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
+
+  const noMesAtual = (a: { created_at: string }) => new Date(a.created_at) >= inicioMesAtual;
+  const noMesAnterior = (a: { created_at: string }) =>
+    new Date(a.created_at) >= inicioMesAnterior && new Date(a.created_at) < inicioMesAtual;
+
+  const averbacoesMesAtual = averbacoesTenant.filter((a) => a.status === 'SUCESSO' && noMesAtual(a));
+  const averbacoesMesAnterior = averbacoesTenant.filter((a) => a.status === 'SUCESSO' && noMesAnterior(a));
+  const recusadasMesAtual = averbacoesTenant.filter((a) => a.status === 'ERRO' && noMesAtual(a));
+  const recusadasMesAnterior = averbacoesTenant.filter((a) => a.status === 'ERRO' && noMesAnterior(a));
+
+  const somaValor = (lista: typeof averbacoesTenant) =>
+    lista.reduce((sum, a) => sum + (a.valor_considerado_averbacao || 0), 0);
+
+  const comparacoes = {
+    averbacoes: comparacaoPercentual(averbacoesMesAtual.length, averbacoesMesAnterior.length),
+    recusadas: comparacaoPercentual(recusadasMesAtual.length, recusadasMesAnterior.length),
+    valor_total_averbado: comparacaoPercentual(
+      somaValor(averbacoesMesAtual),
+      somaValor(averbacoesMesAnterior)
+    )
+  };
+
   return res.json({
     status: 'sucesso',
     stats: {
@@ -602,6 +642,8 @@ router.get('/dashboard-stats', authMiddleware, (req: AuthenticatedRequest, res: 
       total_pendentes_recuperacao: totalPendentes,
       valor_total_averbado: valorTotalAverbado,
       solicitacoes_regras_pendentes: solicitacoesRegrasPendentes,
+      comparacoes,
+      alertas: [],
       ultimas_averbacoes: ultimasAverbacoes
     }
   });
