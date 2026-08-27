@@ -197,6 +197,11 @@ router.post('/activation/:token/definir-senha', async (req, res) => {
 });
 
 // --- Apólices/Seguradoras/Corretoras Vinculadas ao Próprio CNPJ ---
+// Achado da auditoria de 27/08 (widgets da Home): o widget "Vigências e Parcerias" do Portal do
+// Segurado precisa não só de seguradora/corretora líder (já devolvidos aqui), mas também de
+// cocorretora e assessoria — que, no modelo de dados, são o MESMO cadastro de Broker referenciado
+// por Policy.co_broker_id/assessoria_id (ver comentário em routes/admin.ts, "P. Corretoras /
+// Assessorias"). Adicionados aqui pelo mesmo padrão de lookup já usado para seguradora/corretora.
 router.get('/policies', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const gate = checkActivated(tenantId);
@@ -207,10 +212,18 @@ router.get('/policies', authMiddleware, (req: AuthenticatedRequest, res: Respons
     .map((p) => {
       const insurer = dbStore.insurers.find((i) => i.id === p.insurer_id);
       const broker = dbStore.brokers.find((b) => b.id === p.broker_id);
+      const coBroker = p.co_broker_id
+        ? dbStore.brokers.find((b) => b.id === p.co_broker_id)
+        : undefined;
+      const assessoria = p.assessoria_id
+        ? dbStore.brokers.find((b) => b.id === p.assessoria_id)
+        : undefined;
       return {
         ...p,
         seguradora: insurer?.nome_fantasia || insurer?.nome,
-        corretora: broker?.nome_fantasia || broker?.nome
+        corretora: broker?.nome_fantasia || broker?.nome,
+        cocorretora: coBroker ? (coBroker.nome_fantasia || coBroker.nome) : undefined,
+        assessoria: assessoria ? (assessoria.nome_fantasia || assessoria.nome) : undefined
       };
     });
 
@@ -599,15 +612,32 @@ router.get('/dashboard-stats', authMiddleware, (req: AuthenticatedRequest, res: 
     (r) => r.tenant_id === tenantId && r.status === 'PENDENTE'
   ).length;
 
-  const ultimasAverbacoes = averbacoesTenant.slice(0, 5).map((a) => ({
-    id: a.id,
-    numero_averbacao: a.numero_averbacao,
-    status: a.status,
-    tipo_documento: a.tipo_documento,
-    chave_documento: a.chave_documento,
-    valor_considerado_averbacao: a.valor_considerado_averbacao,
-    created_at: a.created_at
-  }));
+  // Achado da auditoria de 27/08 (widgets da Home): o widget "Últimas Averbações" do frontend
+  // usava dashboard-mock.ts local mesmo em sessão real, apesar de "ultimas_averbacoes" aqui já
+  // existir. Ao reconectá-lo aos dados reais, a visão "expandida" do widget pede mais colunas do
+  // que o modelo de dados hoje extrai do XML — série, CNPJs (remetente/destinatário/tomador) e
+  // ramo (via apólice) já existem e foram incluídos abaixo. CNPJ emissor, tipo do produto, data de
+  // embarque e o detalhamento por cobertura NÃO são campos extraídos do XML hoje (só o valor total
+  // já somado, em valor_considerado_averbacao) — ficam de fora até existir extração real desses
+  // dados; o frontend simplesmente não mostra essas colunas na versão real.
+  const ultimasAverbacoes = averbacoesTenant.slice(0, 5).map((a) => {
+    const policy = dbStore.policies.find((p) => p.id === a.policy_id);
+    return {
+      id: a.id,
+      numero_averbacao: a.numero_averbacao,
+      status: a.status,
+      tipo_documento: a.tipo_documento,
+      chave_documento: a.chave_documento,
+      valor_considerado_averbacao: a.valor_considerado_averbacao,
+      created_at: a.created_at,
+      numero_documento: a.numero_documento,
+      serie_documento: a.serie_documento,
+      cnpj_remetente: a.cnpj_remetente,
+      cnpj_destinatario: a.cnpj_destinatario,
+      cnpj_tomador: a.cnpj_tomador,
+      ramo: policy?.ramo
+    };
+  });
 
   const agora = new Date();
   const inicioMesAtual = new Date(agora.getFullYear(), agora.getMonth(), 1);
