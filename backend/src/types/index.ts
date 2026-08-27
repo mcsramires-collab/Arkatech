@@ -29,6 +29,15 @@ export interface Tenant {
   contato_email?: string;
   contato_telefone_fixo?: string;
   contato_celular?: string;
+  // Nome fantasia e endereço (coletados no wizard "Novo Cadastro" da seguradora — antes eram
+  // preenchidos na tela e descartados no envio, nunca chegavam a ser persistidos aqui).
+  nome_fantasia?: string;
+  logradouro?: string;
+  numero_endereco?: string;
+  bairro?: string;
+  cidade?: string;
+  uf?: string;
+  cep?: string;
   // Ativação de conta (Termo de Uso) — só relevante para role = TRANSPORTADOR
   conta_ativada?: boolean;
 }

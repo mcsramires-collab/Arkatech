@@ -58,11 +58,30 @@ router.put('/tenants/:id', (req, res) => {
     return res.status(404).json({ status: 'erro', mensagem: 'Cliente não localizado.' });
   }
 
-  const { status, ambiente, razao_social, token_duration_hours } = req.body;
+  const {
+    status,
+    ambiente,
+    razao_social,
+    token_duration_hours,
+    nome_fantasia,
+    logradouro,
+    numero_endereco,
+    bairro,
+    cidade,
+    uf,
+    cep
+  } = req.body;
   if (status) tenant.status = status;
   if (ambiente) tenant.ambiente = ambiente;
   if (razao_social) tenant.razao_social = razao_social;
   if (token_duration_hours) tenant.token_duration_hours = Number(token_duration_hours);
+  if (nome_fantasia !== undefined) tenant.nome_fantasia = nome_fantasia;
+  if (logradouro !== undefined) tenant.logradouro = logradouro;
+  if (numero_endereco !== undefined) tenant.numero_endereco = numero_endereco;
+  if (bairro !== undefined) tenant.bairro = bairro;
+  if (cidade !== undefined) tenant.cidade = cidade;
+  if (uf !== undefined) tenant.uf = uf;
+  if (cep !== undefined) tenant.cep = cep;
 
   dbStore.persist();
   return res.json({ status: 'sucesso', tenant });
@@ -551,7 +570,13 @@ router.post('/insurer-clients', async (req, res) => {
     contato_nome,
     contato_email,
     contato_telefone_fixo,
-    contato_celular
+    contato_celular,
+    logradouro,
+    numero_endereco,
+    bairro,
+    cidade,
+    uf,
+    cep
   } = req.body;
 
   if (!insurer_id || !broker_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
@@ -608,6 +633,13 @@ router.post('/insurer-clients', async (req, res) => {
       contato_email,
       contato_telefone_fixo,
       contato_celular,
+      nome_fantasia,
+      logradouro,
+      numero_endereco,
+      bairro,
+      cidade,
+      uf,
+      cep,
       conta_ativada: false
     };
     dbStore.tenants.push(tenant);
