@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
@@ -13,16 +13,127 @@ import { PurgeService } from '../services/purgeService';
 import { AverbacaoService } from '../services/averbacao';
 import { sendActivationInviteEmail } from '../services/emailService';
 import { aplicarAcaoDelegada } from '../services/delegatedActions';
+import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+/**
+ * Fase 4 do item "Login real + RBAC" (Backlog, seção 4) para admin.ts — ao contrário de
+ * broker.ts (Fase 4 anterior: sem tráfego real hoje, migração completa de uma vez), estas rotas
+ * JÁ são consumidas em produção pelo BFF do Portal da Seguradora (arckatechseguradora), que hoje
+ * envia `insurer_id` fixo (`SEED_INSURER_ID` — ver claude/Backlog_Proximos_Passos.md no Project)
+ * em ~30 pontos. A migração cobre exatamente essas rotas nesta rodada — mantendo 100%
+ * compatibilidade para a administração Arckatech (login real ADM ou a chave interna, tratada
+ * como ADM sintético), que continua podendo informar `insurer_id` livremente para dar suporte a
+ * qualquer seguradora. Rotas que hoje não têm nenhum consumidor de frontend (gestão interna:
+ * tenants POST/PUT, policy-rules, document-rules, templates, mock/generate, importar-lote,
+ * simulador, expurgo, relatorio, docs, dashboard-stats global, rbac-profiles, tenant-users,
+ * regras-solicitacoes, policies/bulk-update) foram restritas a `actor_type === 'INTERNAL_USER'`
+ * (ver `apenasInternalUser` abaixo) — fecha o acesso de uma SEGURADORA/CORRETORA autenticada a
+ * ferramentas de administração que nunca foram pensadas para esse público, sem risco de quebrar
+ * nada (nenhum tráfego real passava por ali com outro ator).
+ */
+function resolveInsurerId(
+  req: BackofficeAuthenticatedRequest,
+  res: Response,
+  insurerIdDaRequisicao: unknown
+): string | null {
+  const ator = req.backoffice;
+  if (!ator) {
+    res.status(401).json({ status: 'erro', mensagem: 'Autenticação de backoffice ausente.' });
+    return null;
+  }
+
+  if (ator.actor_type === 'SEGURADORA') {
+    if (!ator.insurer_id) {
+      res.status(403).json({
+        status: 'erro',
+        mensagem: 'Seu usuário não está vinculado a nenhuma seguradora — sem acesso a esta área.'
+      });
+      return null;
+    }
+    return ator.insurer_id;
+  }
+
+  if (ator.actor_type === 'INTERNAL_USER') {
+    if (!insurerIdDaRequisicao || typeof insurerIdDaRequisicao !== 'string') {
+      res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
+      return null;
+    }
+    return insurerIdDaRequisicao;
+  }
+
+  res.status(403).json({
+    status: 'erro',
+    mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.'
+  });
+  return null;
+}
+
+/**
+ * Para rotas escopadas por policy_id (regras/valores/sublimites/configs de UMA apólice
+ * específica) em vez de insurer_id direto: confirma que a apólice pertence à seguradora
+ * autenticada antes de deixar ler/escrever. ADM (real ou chave interna) continua sem restrição.
+ */
+function policyPertenceAoAtor(req: BackofficeAuthenticatedRequest, res: Response, policyId: unknown): boolean {
+  const ator = req.backoffice;
+  if (!ator) {
+    res.status(401).json({ status: 'erro', mensagem: 'Autenticação de backoffice ausente.' });
+    return false;
+  }
+  if (ator.actor_type === 'INTERNAL_USER') return true;
+  if (ator.actor_type !== 'SEGURADORA') {
+    res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+    return false;
+  }
+  if (!ator.insurer_id) {
+    res.status(403).json({ status: 'erro', mensagem: 'Seu usuário não está vinculado a nenhuma seguradora — sem acesso a esta área.' });
+    return false;
+  }
+  if (!policyId || typeof policyId !== 'string') {
+    res.status(400).json({ status: 'erro', mensagem: 'policy_id é obrigatório.' });
+    return false;
+  }
+  const policy = dbStore.policies.find((p) => p.id === policyId);
+  if (!policy || policy.insurer_id !== ator.insurer_id) {
+    res.status(403).json({ status: 'erro', mensagem: 'Esta apólice não pertence à sua seguradora.' });
+    return false;
+  }
+  return true;
+}
+
+/** Rotas de administração interna sem consumidor no Portal da Seguradora hoje — ver comentário acima. */
+function apenasInternalUser(req: BackofficeAuthenticatedRequest, res: Response): boolean {
+  if (req.backoffice?.actor_type === 'INTERNAL_USER') return true;
+  res.status(403).json({
+    status: 'erro',
+    mensagem: 'Esta área é exclusiva da administração Arckatech.'
+  });
+  return false;
+}
+
 // --- 1. GESTÃO DE CLIENTES / TENANTS (com flag ambiente: teste vs producao) ---
-router.get('/tenants', (req, res) => {
+// GET fica aberto para SEGURADORA (filtrado à carteira dela, via as apólices que a vinculam a um
+// tenant — Tenant não tem insurer_id direto) além de ADM — é o que back listarSegurados() no
+// Portal da Seguradora consome. POST/PUT (acima) seguem exclusivos de ADM.
+router.get('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
+  const ator = req.backoffice;
+  if (ator?.actor_type === 'SEGURADORA') {
+    if (!ator.insurer_id) {
+      return res.status(403).json({ status: 'erro', mensagem: 'Seu usuário não está vinculado a nenhuma seguradora — sem acesso a esta área.' });
+    }
+    const tenantIds = new Set(dbStore.policies.filter((p) => p.insurer_id === ator.insurer_id).map((p) => p.tenant_id));
+    return res.json({ status: 'sucesso', tenants: dbStore.tenants.filter((t) => tenantIds.has(t.id)) });
+  }
+  if (ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  }
   return res.json({ status: 'sucesso', tenants: dbStore.tenants });
 });
 
-router.post('/tenants', (req, res) => {
+router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { cnpj, razao_social, ambiente, status, role, token_duration_hours } = req.body;
 
   if (!cnpj || !razao_social) {
@@ -50,7 +161,8 @@ router.post('/tenants', (req, res) => {
   return res.json({ status: 'sucesso', tenant: newTenant });
 });
 
-router.put('/tenants/:id', (req, res) => {
+router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const tenant = dbStore.tenants.find((t) => t.id === id);
 
@@ -92,15 +204,32 @@ router.get('/insurers', (req, res) => res.json({ status: 'sucesso', insurers: db
 router.get('/brokers', (req, res) => res.json({ status: 'sucesso', brokers: dbStore.brokers }));
 
 // --- 3. GESTÃO DE APÓLICES (CRUD completo: criar, editar, excluir) ---
-router.get('/policies', (req, res) => res.json({ status: 'sucesso', policies: dbStore.policies }));
+// Antes desta rodada, GET/POST/PUT/DELETE aqui não tinham NENHUM filtro por insurer_id — era o
+// maior gap de isolamento entre seguradoras do sistema (uma SEGURADORA autenticada enxergava e
+// editava apólices de qualquer outra). Ver claude/Backlog_Proximos_Passos.md no Project.
+router.get('/policies', (req: BackofficeAuthenticatedRequest, res) => {
+  const ator = req.backoffice;
+  if (ator?.actor_type === 'SEGURADORA') {
+    if (!ator.insurer_id) {
+      return res.status(403).json({ status: 'erro', mensagem: 'Seu usuário não está vinculado a nenhuma seguradora — sem acesso a esta área.' });
+    }
+    return res.json({ status: 'sucesso', policies: dbStore.policies.filter((p) => p.insurer_id === ator.insurer_id) });
+  }
+  if (ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  }
+  return res.json({ status: 'sucesso', policies: dbStore.policies });
+});
 
-router.post('/policies', (req, res) => {
-  const { numero_apolice, ramo, tenant_id, insurer_id, broker_id, co_broker_id, assessoria_id, permitir_inativo_vencido, status, vigencia_inicio, vigencia_fim, lmi, aceita_averbacao_como_destinatario } = req.body;
+router.post('/policies', (req: BackofficeAuthenticatedRequest, res) => {
+  const { numero_apolice, ramo, tenant_id, broker_id, co_broker_id, assessoria_id, permitir_inativo_vencido, status, vigencia_inicio, vigencia_fim, lmi, aceita_averbacao_como_destinatario } = req.body;
+  const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
+  if (!insurer_id) return;
 
-  if (!numero_apolice || !ramo || !tenant_id || !insurer_id || !broker_id) {
+  if (!numero_apolice || !ramo || !tenant_id || !broker_id) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'numero_apolice, ramo, tenant_id, insurer_id e broker_id são obrigatórios.'
+      mensagem: 'numero_apolice, ramo, tenant_id e broker_id são obrigatórios.'
     });
   }
 
@@ -126,20 +255,23 @@ router.post('/policies', (req, res) => {
   return res.json({ status: 'sucesso', policy: newPolicy });
 });
 
-router.put('/policies/:id', (req, res) => {
+router.put('/policies/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const policy = dbStore.policies.find((p) => p.id === id);
 
   if (!policy) {
     return res.status(404).json({ status: 'erro', mensagem: 'Apólice não localizada.' });
   }
+  if (!policyPertenceAoAtor(req, res, id)) return;
 
   const { status, permitir_inativo_vencido, numero_apolice, ramo, insurer_id, broker_id, vigencia_inicio, vigencia_fim, lmi } = req.body;
   if (status !== undefined) policy.status = status;
   if (permitir_inativo_vencido !== undefined) policy.permitir_inativo_vencido = Boolean(permitir_inativo_vencido);
   if (numero_apolice !== undefined) policy.numero_apolice = numero_apolice;
   if (ramo !== undefined) policy.ramo = ramo;
-  if (insurer_id !== undefined) policy.insurer_id = insurer_id;
+  // Trocar a apólice de seguradora só é permitido para ADM — uma SEGURADORA não pode "empurrar"
+  // uma apólice da própria carteira para outra seguradora.
+  if (insurer_id !== undefined && req.backoffice?.actor_type === 'INTERNAL_USER') policy.insurer_id = insurer_id;
   if (broker_id !== undefined) policy.broker_id = broker_id;
   if (vigencia_inicio !== undefined) policy.vigencia_inicio = vigencia_inicio;
   if (vigencia_fim !== undefined) policy.vigencia_fim = vigencia_fim;
@@ -149,12 +281,13 @@ router.put('/policies/:id', (req, res) => {
   return res.json({ status: 'sucesso', policy });
 });
 
-router.delete('/policies/:id', (req, res) => {
+router.delete('/policies/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const exists = dbStore.policies.some((p) => p.id === id);
   if (!exists) {
     return res.status(404).json({ status: 'erro', mensagem: 'Apólice não localizada.' });
   }
+  if (!policyPertenceAoAtor(req, res, id)) return;
   dbStore.policies = dbStore.policies.filter((p) => p.id !== id);
   // Remove também as variáveis (policyRules) atreladas a essa apólice
   dbStore.policyRules = dbStore.policyRules.filter((r) => r.policy_id !== id);
@@ -163,9 +296,14 @@ router.delete('/policies/:id', (req, res) => {
 });
 
 // --- 4. VARIÁVEIS DE NEGÓCIO DA APÓLICE (PolicyRule) — CRUD completo ---
-router.get('/policy-rules', (req, res) => res.json({ status: 'sucesso', rules: dbStore.policyRules }));
+// Sem consumidor no Portal da Seguradora hoje — administração interna, exclusiva de ADM.
+router.get('/policy-rules', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  return res.json({ status: 'sucesso', rules: dbStore.policyRules });
+});
 
-router.post('/policy-rules', (req, res) => {
+router.post('/policy-rules', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { policy_id, tipo_doc, tag_path, nome_variavel, obrigatoria, exemplo_preenchimento, instrucao_recuperacao } = req.body;
 
   if (!policy_id || !nome_variavel) {
@@ -188,7 +326,8 @@ router.post('/policy-rules', (req, res) => {
   return res.json({ status: 'sucesso', rule: newRule });
 });
 
-router.put('/policy-rules/:id', (req, res) => {
+router.put('/policy-rules/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const rule = dbStore.policyRules.find((r) => r.id === id);
   if (!rule) {
@@ -207,7 +346,8 @@ router.put('/policy-rules/:id', (req, res) => {
   return res.json({ status: 'sucesso', rule });
 });
 
-router.delete('/policy-rules/:id', (req, res) => {
+router.delete('/policy-rules/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   dbStore.policyRules = dbStore.policyRules.filter((r) => r.id !== id);
   dbStore.persist();
@@ -215,7 +355,9 @@ router.delete('/policy-rules/:id', (req, res) => {
 });
 
 // --- 5. REGRAS DE OBRIGATORIEDADE POR TIPO DE DOCUMENTO (DocumentRule — padrão Sefaz) ---
-router.get('/document-rules', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — administração interna, exclusiva de ADM.
+router.get('/document-rules', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { tipo_documento } = req.query;
   let items = dbStore.documentRules;
   if (tipo_documento) {
@@ -224,7 +366,8 @@ router.get('/document-rules', (req, res) => {
   return res.json({ status: 'sucesso', rules: items });
 });
 
-router.post('/document-rules', (req, res) => {
+router.post('/document-rules', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { tipo_documento, tag_path, nome_variavel, obrigatoria, observacao } = req.body;
 
   if (!tipo_documento || !tag_path || !nome_variavel) {
@@ -250,7 +393,8 @@ router.post('/document-rules', (req, res) => {
   return res.json({ status: 'sucesso', rule: newRule });
 });
 
-router.put('/document-rules/:id', (req, res) => {
+router.put('/document-rules/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const rule = dbStore.documentRules.find((r) => r.id === id);
   if (!rule) {
@@ -267,7 +411,8 @@ router.put('/document-rules/:id', (req, res) => {
   return res.json({ status: 'sucesso', rule });
 });
 
-router.delete('/document-rules/:id', (req, res) => {
+router.delete('/document-rules/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   // Permite excluir inclusive tags padrão Sefaz, caso o administrador deseje explicitamente.
   const exists = dbStore.documentRules.some((r) => r.id === id);
@@ -280,11 +425,14 @@ router.delete('/document-rules/:id', (req, res) => {
 });
 
 // --- 6. GESTÃO DE TEXTOS DE RETORNO EDITÁVEIS (response_templates) ---
-router.get('/templates', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — administração interna, exclusiva de ADM.
+router.get('/templates', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   return res.json({ status: 'sucesso', templates: dbStore.responseTemplates });
 });
 
-router.put('/templates/:id', (req, res) => {
+router.put('/templates/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const template = dbStore.responseTemplates.find((t) => t.id === id);
 
@@ -303,7 +451,9 @@ router.put('/templates/:id', (req, res) => {
 });
 
 // --- 7. GERADOR MOCK DE DOCUMENTOS FICTÍCIOS (Apenas Clientes 'teste') ---
-router.post('/mock/generate', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — ferramenta interna de testes, exclusiva de ADM.
+router.post('/mock/generate', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const {
     tenant_id,
     tipo_doc,
@@ -333,7 +483,9 @@ router.post('/mock/generate', (req, res) => {
 });
 
 // --- 8. IMPORTAÇÃO EM LOTE DE XMLs PARA UM TRANSPORTADOR (validar averbação/recusa) ---
-router.post('/importar-lote', upload.array('arquivos', 200), async (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — ferramenta interna de testes, exclusiva de ADM.
+router.post('/importar-lote', upload.array('arquivos', 200), async (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { tenant_id, ramo } = req.body;
   const files = req.files as Express.Multer.File[] | undefined;
 
@@ -374,7 +526,9 @@ router.post('/importar-lote', upload.array('arquivos', 200), async (req, res) =>
 });
 
 // --- 9. SIMULADOR DE CARGA EM LOTE MULTI-CLIENTE ---
-router.post('/simulador/executar', async (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — ferramenta interna de testes, exclusiva de ADM.
+router.post('/simulador/executar', async (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   try {
     const batchRun = await BatchRunnerService.executeBatch(req.body);
     return res.json({ status: 'sucesso', batchRun });
@@ -383,19 +537,26 @@ router.post('/simulador/executar', async (req, res) => {
   }
 });
 
-router.get('/simulador/historico', (req, res) => {
+router.get('/simulador/historico', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   return res.json({ status: 'sucesso', historico: dbStore.batchTestRuns });
 });
 
 // --- 10. EXPURGO AUTOMÁTICO DE DADOS DE TESTE ---
-router.post('/expurgo', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — ferramenta interna, exclusiva de ADM.
+router.post('/expurgo', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { dias } = req.body;
   const result = PurgeService.purgeTestData(Number(dias || 30));
   return res.json({ status: 'sucesso', result });
 });
 
 // --- 11. RELATÓRIO POR CLIENTE OU CONJUNTO DE CLIENTES ---
-router.get('/relatorio', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — administração interna, exclusiva de ADM (o
+// relatório não é escopado por insurer_id, então não pode ser aberto para SEGURADORA sem
+// filtragem — ver Backlog para essa decisão futura, se algum dia for exposto no portal).
+router.get('/relatorio', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { tenant_ids } = req.query;
 
   const ids = tenant_ids
@@ -437,7 +598,9 @@ router.get('/relatorio', (req, res) => {
 });
 
 // --- 12. DOCUMENTAÇÃO DA API (serve o Markdown de referência de cada endpoint) ---
-router.get('/docs', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — referência técnica interna, exclusiva de ADM.
+router.get('/docs', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   try {
     const docPath = path.join(__dirname, '../../docs/API_DOCUMENTATION.md');
     const content = fs.readFileSync(docPath, 'utf-8');
@@ -447,8 +610,11 @@ router.get('/docs', (req, res) => {
   }
 });
 
-// Dashboard Analytics
-router.get('/dashboard-stats', (req, res) => {
+// Dashboard Analytics — visão GLOBAL (todas as seguradoras somadas), uso interno ARCKATECH.
+// Distinto de /insurer-dashboard-stats (abaixo), que é escopado por insurer_id e é o que o
+// Portal da Seguradora de fato consome.
+router.get('/dashboard-stats', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const totalClientes = dbStore.tenants.length;
   const clientesTeste = dbStore.tenants.filter((t) => t.ambiente === 'teste').length;
   const clientesProd = dbStore.tenants.filter((t) => t.ambiente === 'producao').length;
@@ -551,9 +717,8 @@ async function criarEEnviarConvite(
 }
 
 // --- B. Cadastro de Cliente pela Seguradora (cria tenant + apólice, ou detecta conflito) ---
-router.post('/insurer-clients', async (req, res) => {
+router.post('/insurer-clients', async (req: BackofficeAuthenticatedRequest, res) => {
   const {
-    insurer_id,
     broker_id,
     co_broker_id,
     assessoria_id,
@@ -578,11 +743,13 @@ router.post('/insurer-clients', async (req, res) => {
     uf,
     cep
   } = req.body;
+  const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
+  if (!insurer_id) return;
 
-  if (!insurer_id || !broker_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
+  if (!broker_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'insurer_id, broker_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
+      mensagem: 'broker_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
     });
   }
 
@@ -681,13 +848,24 @@ router.post('/insurer-clients', async (req, res) => {
  * primeiro convite expirou (30 dias), foi perdido/caiu em spam, ou o e-mail de contato mudou.
  * O corpo aceita um `email` opcional para reenviar a um endereço diferente do cadastrado.
  */
-router.post('/insurer-clients/:tenantId/reenviar-convite', async (req, res) => {
+router.post('/insurer-clients/:tenantId/reenviar-convite', async (req: BackofficeAuthenticatedRequest, res) => {
   const { tenantId } = req.params;
   const { email } = req.body as { email?: string };
 
   const tenant = dbStore.tenants.find((t) => t.id === tenantId);
   if (!tenant) {
     return res.status(404).json({ status: 'erro', mensagem: 'Cliente não encontrado.' });
+  }
+  // Este tenant não tem insurer_id direto — pertencimento é verificado via as apólices que o
+  // ligam a uma seguradora (mesma lógica de GET /tenants acima).
+  const ator = req.backoffice;
+  if (ator?.actor_type === 'SEGURADORA') {
+    const pertence = dbStore.policies.some((p) => p.tenant_id === tenantId && p.insurer_id === ator.insurer_id);
+    if (!pertence) {
+      return res.status(403).json({ status: 'erro', mensagem: 'Este cliente não pertence à sua seguradora.' });
+    }
+  } else if (ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
   }
   if (tenant.conta_ativada) {
     return res.status(400).json({
@@ -701,10 +879,12 @@ router.post('/insurer-clients/:tenantId/reenviar-convite', async (req, res) => {
 });
 
 // --- C. Assumir Apólice em Conflito ---
-router.post('/insurer-clients/:tenantId/assume-policy', (req, res) => {
+router.post('/insurer-clients/:tenantId/assume-policy', (req: BackofficeAuthenticatedRequest, res) => {
   const { tenantId } = req.params;
-  const { insurer_id, broker_id, ramo, numero_apolice, lmi, vigencia_inicio, vigencia_fim, permitir_inativo_vencido, aceita_averbacao_como_destinatario } =
+  const { broker_id, ramo, numero_apolice, lmi, vigencia_inicio, vigencia_fim, permitir_inativo_vencido, aceita_averbacao_como_destinatario } =
     req.body;
+  const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
+  if (!insurer_id) return;
 
   const policy = dbStore.policies.find((p) => p.tenant_id === tenantId && p.ramo === ramo && p.status === 'ATIVA');
   if (!policy) {
@@ -727,18 +907,20 @@ router.post('/insurer-clients/:tenantId/assume-policy', (req, res) => {
 });
 
 // --- D. Coberturas Adicionais da Seguradora (insurer_coverages) ---
-router.get('/insurer-coverages', (req, res) => {
-  const { insurer_id } = req.query;
-  let items = dbStore.insurerCoverages;
-  if (insurer_id) items = items.filter((c) => c.insurer_id === insurer_id);
+router.get('/insurer-coverages', (req: BackofficeAuthenticatedRequest, res) => {
+  const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
+  if (!insurer_id) return;
+  const items = dbStore.insurerCoverages.filter((c) => c.insurer_id === insurer_id);
   return res.json({ status: 'sucesso', coverages: items });
 });
 
-router.post('/insurer-coverages', (req, res) => {
-  const { insurer_id, ramo, titulo, exemplo_preenchimento, obrigatoria, aplicar_todos_clientes, tenant_id, tipo_valor } = req.body;
+router.post('/insurer-coverages', (req: BackofficeAuthenticatedRequest, res) => {
+  const { ramo, titulo, exemplo_preenchimento, obrigatoria, aplicar_todos_clientes, tenant_id, tipo_valor } = req.body;
+  const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
+  if (!insurer_id) return;
 
-  if (!insurer_id || !titulo) {
-    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e titulo são obrigatórios.' });
+  if (!titulo) {
+    return res.status(400).json({ status: 'erro', mensagem: 'titulo é obrigatório.' });
   }
   if (aplicar_todos_clientes === false && !tenant_id) {
     return res.status(400).json({
@@ -765,11 +947,18 @@ router.post('/insurer-coverages', (req, res) => {
   return res.json({ status: 'sucesso', coverage: newCoverage });
 });
 
-router.put('/insurer-coverages/:id', (req, res) => {
+router.put('/insurer-coverages/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const coverage = dbStore.insurerCoverages.find((c) => c.id === id);
   if (!coverage) {
     return res.status(404).json({ status: 'erro', mensagem: 'Cobertura adicional não encontrada.' });
+  }
+  const ator = req.backoffice;
+  if (ator?.actor_type === 'SEGURADORA' && coverage.insurer_id !== ator.insurer_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta cobertura não pertence à sua seguradora.' });
+  }
+  if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
   }
 
   const { ramo, titulo, exemplo_preenchimento, obrigatoria, aplicar_todos_clientes, tenant_id, tipo_valor } = req.body;
@@ -785,15 +974,26 @@ router.put('/insurer-coverages/:id', (req, res) => {
   return res.json({ status: 'sucesso', coverage });
 });
 
-router.delete('/insurer-coverages/:id', (req, res) => {
+router.delete('/insurer-coverages/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
+  const coverage = dbStore.insurerCoverages.find((c) => c.id === id);
+  const ator = req.backoffice;
+  if (ator?.actor_type === 'SEGURADORA' && coverage && coverage.insurer_id !== ator.insurer_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta cobertura não pertence à sua seguradora.' });
+  }
+  if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  }
   dbStore.insurerCoverages = dbStore.insurerCoverages.filter((c) => c.id !== id);
   dbStore.persist();
   return res.json({ status: 'sucesso', mensagem: 'Cobertura adicional removida com sucesso.' });
 });
 
 // --- E. Manutenção em Massa de Apólices ---
-router.post('/policies/bulk-update', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — ferramenta interna, exclusiva de ADM (não filtra
+// por insurer_id, então não pode ser aberta para SEGURADORA sem checar cada policy_id antes).
+router.post('/policies/bulk-update', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { policy_ids, updates } = req.body;
 
   if (!Array.isArray(policy_ids) || policy_ids.length === 0) {
@@ -817,7 +1017,9 @@ router.post('/policies/bulk-update', (req, res) => {
 });
 
 // --- F. Perfis de Acesso (RBAC) ---
-router.get('/rbac-profiles', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — administração interna, exclusiva de ADM.
+router.get('/rbac-profiles', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { owner_type, owner_id } = req.query;
   let items = dbStore.rbacProfiles;
   if (owner_type) items = items.filter((p) => p.owner_type === owner_type);
@@ -825,7 +1027,8 @@ router.get('/rbac-profiles', (req, res) => {
   return res.json({ status: 'sucesso', profiles: items });
 });
 
-router.post('/rbac-profiles', (req, res) => {
+router.post('/rbac-profiles', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { owner_type, owner_id, nome_perfil, permissions } = req.body;
   if (!owner_type || !nome_perfil || !permissions) {
     return res.status(400).json({ status: 'erro', mensagem: 'owner_type, nome_perfil e permissions são obrigatórios.' });
@@ -844,7 +1047,8 @@ router.post('/rbac-profiles', (req, res) => {
   return res.json({ status: 'sucesso', profile: newProfile });
 });
 
-router.put('/rbac-profiles/:id', (req, res) => {
+router.put('/rbac-profiles/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const profile = dbStore.rbacProfiles.find((p) => p.id === id);
   if (!profile) {
@@ -857,7 +1061,8 @@ router.put('/rbac-profiles/:id', (req, res) => {
   return res.json({ status: 'sucesso', profile });
 });
 
-router.delete('/rbac-profiles/:id', (req, res) => {
+router.delete('/rbac-profiles/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   dbStore.rbacProfiles = dbStore.rbacProfiles.filter((p) => p.id !== id);
   dbStore.persist();
@@ -865,7 +1070,9 @@ router.delete('/rbac-profiles/:id', (req, res) => {
 });
 
 // --- G. Usuários Internos do Tenant (seguradora/corretora/transportador) ---
-router.get('/tenant-users', (req, res) => {
+// Sem consumidor no Portal da Seguradora hoje — administração interna, exclusiva de ADM.
+router.get('/tenant-users', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { tenant_id } = req.query;
   let items = dbStore.tenantUsers;
   if (tenant_id) items = items.filter((u) => u.tenant_id === tenant_id);
@@ -881,7 +1088,8 @@ function gerarSenhaTemporaria(): string {
   return crypto.randomBytes(9).toString('base64url');
 }
 
-router.post('/tenant-users', async (req, res) => {
+router.post('/tenant-users', async (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { tenant_id, nome, email, rbac_profile_id, is_admin_da_conta } = req.body;
   if (!tenant_id || !nome || !email) {
     return res.status(400).json({ status: 'erro', mensagem: 'tenant_id, nome e email são obrigatórios.' });
@@ -908,7 +1116,8 @@ router.post('/tenant-users', async (req, res) => {
   return res.json({ status: 'sucesso', user: userSemSenha, senha_temporaria: senhaTemporaria });
 });
 
-router.put('/tenant-users/:id', (req, res) => {
+router.put('/tenant-users/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const user = dbStore.tenantUsers.find((u) => u.id === id);
   if (!user) {
@@ -925,7 +1134,8 @@ router.put('/tenant-users/:id', (req, res) => {
   return res.json({ status: 'sucesso', user: userSemSenha });
 });
 
-router.delete('/tenant-users/:id', (req, res) => {
+router.delete('/tenant-users/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   dbStore.tenantUsers = dbStore.tenantUsers.filter((u) => u.id !== id);
   dbStore.persist();
@@ -933,20 +1143,35 @@ router.delete('/tenant-users/:id', (req, res) => {
 });
 
 // --- H. Delegação de Poder Seguradora → Corretora ---
-router.get('/delegation-permissions', (req, res) => {
-  const { insurer_id, broker_id } = req.query;
+// insurer_id aqui é filtro opcional para ADM (preserva o comportamento de antes: sem informar,
+// lista de todas as seguradoras) — só é obrigatório e forçado pelo token quando quem chama é
+// uma SEGURADORA.
+router.get('/delegation-permissions', (req: BackofficeAuthenticatedRequest, res) => {
+  const { broker_id } = req.query;
+  const ator = req.backoffice;
   let items = dbStore.delegationPermissions;
-  if (insurer_id) items = items.filter((d) => d.insurer_id === insurer_id);
+  if (ator?.actor_type === 'SEGURADORA') {
+    if (!ator.insurer_id) {
+      return res.status(403).json({ status: 'erro', mensagem: 'Seu usuário não está vinculado a nenhuma seguradora — sem acesso a esta área.' });
+    }
+    items = items.filter((d) => d.insurer_id === ator.insurer_id);
+  } else if (ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  } else if (req.query.insurer_id) {
+    items = items.filter((d) => d.insurer_id === req.query.insurer_id);
+  }
   if (broker_id) items = items.filter((d) => d.broker_id === broker_id);
   return res.json({ status: 'sucesso', permissions: items });
 });
 
-router.put('/delegation-permissions', (req, res) => {
-  const { insurer_id, broker_id, actions } = req.body;
-  if (!insurer_id || !broker_id || !Array.isArray(actions)) {
+router.put('/delegation-permissions', (req: BackofficeAuthenticatedRequest, res) => {
+  const { broker_id, actions } = req.body;
+  const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
+  if (!insurer_id) return;
+  if (!broker_id || !Array.isArray(actions)) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'insurer_id, broker_id e actions (lista de { action, requires_approval }) são obrigatórios.'
+      mensagem: 'broker_id e actions (lista de { action, requires_approval }) são obrigatórios.'
     });
   }
 
@@ -976,21 +1201,25 @@ router.put('/delegation-permissions', (req, res) => {
 
 // --- Exceções por Segurado (override da matriz de delegação para um tenant específico dentro
 // da carteira de uma corretora) — aba "Exceções por segurado" em Permissões e Autonomia. ---
-router.get('/delegation-exceptions', (req, res) => {
-  const { insurer_id, broker_id } = req.query;
-  if (!insurer_id || !broker_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e broker_id são obrigatórios.' });
+router.get('/delegation-exceptions', (req: BackofficeAuthenticatedRequest, res) => {
+  const { broker_id } = req.query;
+  const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
+  if (!insurer_id) return;
+  if (!broker_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'broker_id é obrigatório.' });
   }
   const items = dbStore.delegationExceptions.filter((e) => e.insurer_id === insurer_id && e.broker_id === broker_id);
   return res.json({ status: 'sucesso', exceptions: items });
 });
 
-router.put('/delegation-exceptions', (req, res) => {
-  const { insurer_id, broker_id, tenant_id, nivel } = req.body;
-  if (!insurer_id || !broker_id || !tenant_id || !nivel) {
+router.put('/delegation-exceptions', (req: BackofficeAuthenticatedRequest, res) => {
+  const { broker_id, tenant_id, nivel } = req.body;
+  const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
+  if (!insurer_id) return;
+  if (!broker_id || !tenant_id || !nivel) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'insurer_id, broker_id, tenant_id e nivel são obrigatórios.'
+      mensagem: 'broker_id, tenant_id e nivel são obrigatórios.'
     });
   }
   const niveisValidos: DelegationExceptionLevel[] = ['AUTONOMO', 'MEDIANTE_APROVACAO', 'BLOQUEADA'];
@@ -1017,11 +1246,18 @@ router.put('/delegation-exceptions', (req, res) => {
   return res.json({ status: 'sucesso', exception });
 });
 
-router.delete('/delegation-exceptions/:id', (req, res) => {
+router.delete('/delegation-exceptions/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
-  const exists = dbStore.delegationExceptions.some((e) => e.id === id);
-  if (!exists) {
+  const exception = dbStore.delegationExceptions.find((e) => e.id === id);
+  if (!exception) {
     return res.status(404).json({ status: 'erro', mensagem: 'Exceção não encontrada.' });
+  }
+  const ator = req.backoffice;
+  if (ator?.actor_type === 'SEGURADORA' && exception.insurer_id !== ator.insurer_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta exceção não pertence à sua seguradora.' });
+  }
+  if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
   }
   // Remover a exceção faz o segurado voltar a seguir a matriz geral (DelegationPermission).
   dbStore.delegationExceptions = dbStore.delegationExceptions.filter((e) => e.id !== id);
@@ -1030,21 +1266,40 @@ router.delete('/delegation-exceptions/:id', (req, res) => {
 });
 
 // --- I. Fila de Aprovação (ações da corretora sujeitas a requires_approval) ---
-router.get('/approval-requests', (req, res) => {
-  const { insurer_id, status } = req.query;
+// insurer_id é filtro opcional para ADM (preserva o comportamento de antes) e obrigatório,
+// forçado pelo token, para SEGURADORA — mesmo padrão de GET /delegation-permissions acima.
+router.get('/approval-requests', (req: BackofficeAuthenticatedRequest, res) => {
+  const { status } = req.query;
+  const ator = req.backoffice;
   let items = dbStore.approvalRequests;
-  if (insurer_id) items = items.filter((a) => a.insurer_id === insurer_id);
+  if (ator?.actor_type === 'SEGURADORA') {
+    if (!ator.insurer_id) {
+      return res.status(403).json({ status: 'erro', mensagem: 'Seu usuário não está vinculado a nenhuma seguradora — sem acesso a esta área.' });
+    }
+    items = items.filter((a) => a.insurer_id === ator.insurer_id);
+  } else if (ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  } else if (req.query.insurer_id) {
+    items = items.filter((a) => a.insurer_id === req.query.insurer_id);
+  }
   if (status) items = items.filter((a) => a.status === status);
   return res.json({ status: 'sucesso', requests: items });
 });
 
-router.post('/approval-requests/:id/resolve', (req, res) => {
+router.post('/approval-requests/:id/resolve', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const { status, resolved_by } = req.body;
 
   const request = dbStore.approvalRequests.find((a) => a.id === id);
   if (!request) {
     return res.status(404).json({ status: 'erro', mensagem: 'Solicitação de aprovação não encontrada.' });
+  }
+  const ator = req.backoffice;
+  if (ator?.actor_type === 'SEGURADORA' && request.insurer_id !== ator.insurer_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta solicitação não pertence à sua seguradora.' });
+  }
+  if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
   }
   if (status !== 'APROVADO' && status !== 'REJEITADO') {
     return res.status(400).json({ status: 'erro', mensagem: "status deve ser 'APROVADO' ou 'REJEITADO'." });
@@ -1079,19 +1334,27 @@ router.post('/approval-requests/:id/resolve', (req, res) => {
 });
 
 // --- J. Regra de Titularidade v2: Regra A (função no documento) ---
-router.get('/policy-titularity-rules', (req, res) => {
+// policy_id é obrigatório e checado contra a apólice quando quem chama é uma SEGURADORA
+// (policyPertenceAoAtor); ADM continua podendo listar tudo sem informar policy_id.
+router.get('/policy-titularity-rules', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
+  if (req.backoffice?.actor_type === 'SEGURADORA' || policy_id) {
+    if (!policyPertenceAoAtor(req, res, policy_id)) return;
+  } else if (req.backoffice?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  }
   let items = dbStore.policyTitularityRules;
   if (policy_id) items = items.filter((r) => r.policy_id === policy_id);
   return res.json({ status: 'sucesso', rules: items });
 });
 
-router.put('/policy-titularity-rules', (req, res) => {
+router.put('/policy-titularity-rules', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, funcoes } = req.body;
-  if (!policy_id || !Array.isArray(funcoes)) {
+  if (!policyPertenceAoAtor(req, res, policy_id)) return;
+  if (!Array.isArray(funcoes)) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'policy_id e funcoes (lista de { funcao, habilitada }) são obrigatórios.'
+      mensagem: 'funcoes (lista de { funcao, habilitada }) é obrigatório.'
     });
   }
 
@@ -1119,19 +1382,25 @@ router.put('/policy-titularity-rules', (req, res) => {
 });
 
 // --- K. Regra de Titularidade v2: Regra B (bypass por rota/produto) ---
-router.get('/policy-bypass-rules', (req, res) => {
+router.get('/policy-bypass-rules', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
+  if (req.backoffice?.actor_type === 'SEGURADORA' || policy_id) {
+    if (!policyPertenceAoAtor(req, res, policy_id)) return;
+  } else if (req.backoffice?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  }
   let items = dbStore.policyBypassRules;
   if (policy_id) items = items.filter((r) => r.policy_id === policy_id);
   return res.json({ status: 'sucesso', rules: items });
 });
 
-router.post('/policy-bypass-rules', (req, res) => {
+router.post('/policy-bypass-rules', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, rota_uf_origem, rota_uf_destino, produto_predominante } = req.body;
-  if (!policy_id || (!rota_uf_origem && !rota_uf_destino && !produto_predominante)) {
+  if (!policyPertenceAoAtor(req, res, policy_id)) return;
+  if (!rota_uf_origem && !rota_uf_destino && !produto_predominante) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'policy_id é obrigatório, e ao menos um de rota_uf_origem, rota_uf_destino ou produto_predominante deve ser informado.'
+      mensagem: 'Ao menos um de rota_uf_origem, rota_uf_destino ou produto_predominante deve ser informado.'
     });
   }
 
@@ -1147,16 +1416,24 @@ router.post('/policy-bypass-rules', (req, res) => {
   return res.json({ status: 'sucesso', rule: newRule });
 });
 
-router.delete('/policy-bypass-rules/:id', (req, res) => {
+router.delete('/policy-bypass-rules/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
+  const rule = dbStore.policyBypassRules.find((r) => r.id === id);
+  if (rule && !policyPertenceAoAtor(req, res, rule.policy_id)) return;
+  if (!rule && req.backoffice?.actor_type !== 'INTERNAL_USER' && req.backoffice?.actor_type !== 'SEGURADORA') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  }
   dbStore.policyBypassRules = dbStore.policyBypassRules.filter((r) => r.id !== id);
   dbStore.persist();
   return res.json({ status: 'sucesso', mensagem: 'Regra de bypass removida com sucesso.' });
 });
 
 // --- K. Solicitações de Regras de Negócio (visão da seguradora — aprovar/rejeitar o que o
-// transportador/embarcador pediu em POST /tenant/regras-solicitacoes) ---
-router.get('/regras-solicitacoes', (req, res) => {
+// transportador/embarcador pediu em POST /tenant/regras-solicitacoes). Sem consumidor no Portal
+// da Seguradora hoje, e BusinessRuleRequest não tem insurer_id no modelo — restrito a ADM até
+// esse campo existir (ver relatório de Fase 5 para essa pendência de escopo). ---
+router.get('/regras-solicitacoes', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { tenant_id, status } = req.query;
   let items = dbStore.businessRuleRequests;
   if (tenant_id) items = items.filter((r) => r.tenant_id === tenant_id);
@@ -1164,7 +1441,8 @@ router.get('/regras-solicitacoes', (req, res) => {
   return res.json({ status: 'sucesso', solicitacoes: items });
 });
 
-router.put('/regras-solicitacoes/:id', (req, res) => {
+router.put('/regras-solicitacoes/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const { status, comentario_seguradora } = req.body;
 
@@ -1189,21 +1467,20 @@ router.put('/regras-solicitacoes/:id', (req, res) => {
 // Veículo e Motorista, Prazos e Datas, Região Metropolitana, Valor da Averbação e Averbação
 // Esporádica. NÃO cobre Identificação do Segurado (Regra A/B) — ver policy-titularity-rules
 // e policy-bypass-rules acima, que continuam a fonte real usada pelo motor de averbação. ---
-router.get('/policy-business-settings', (req, res) => {
+router.get('/policy-business-settings', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
-  if (!policy_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'policy_id é obrigatório.' });
-  }
+  if (!policyPertenceAoAtor(req, res, policy_id)) return;
   const settings = dbStore.policyBusinessSettings.find((s) => s.policy_id === policy_id);
   return res.json({ status: 'sucesso', settings: settings ?? null });
 });
 
-router.put('/policy-business-settings', (req, res) => {
+router.put('/policy-business-settings', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, config } = req.body;
-  if (!policy_id || typeof config !== 'object' || config === null) {
+  if (!policyPertenceAoAtor(req, res, policy_id)) return;
+  if (typeof config !== 'object' || config === null) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'policy_id e config (objeto) são obrigatórios.'
+      mensagem: 'config (objeto) é obrigatório.'
     });
   }
 
@@ -1224,17 +1501,23 @@ router.put('/policy-business-settings', (req, res) => {
 });
 
 // --- M. Sublimites por Mercadoria (lista por apólice) ---
-router.get('/policy-sublimites', (req, res) => {
+router.get('/policy-sublimites', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
+  if (req.backoffice?.actor_type === 'SEGURADORA' || policy_id) {
+    if (!policyPertenceAoAtor(req, res, policy_id)) return;
+  } else if (req.backoffice?.actor_type !== 'INTERNAL_USER') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  }
   let items = dbStore.policySublimites;
   if (policy_id) items = items.filter((s) => s.policy_id === policy_id);
   return res.json({ status: 'sucesso', sublimites: items });
 });
 
-router.post('/policy-sublimites', (req, res) => {
+router.post('/policy-sublimites', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, tag, valor } = req.body;
-  if (!policy_id || !tag) {
-    return res.status(400).json({ status: 'erro', mensagem: 'policy_id e tag são obrigatórios.' });
+  if (!policyPertenceAoAtor(req, res, policy_id)) return;
+  if (!tag) {
+    return res.status(400).json({ status: 'erro', mensagem: 'tag é obrigatório.' });
   }
 
   const newSublimite: PolicySublimite = {
@@ -1249,12 +1532,13 @@ router.post('/policy-sublimites', (req, res) => {
   return res.json({ status: 'sucesso', sublimite: newSublimite });
 });
 
-router.put('/policy-sublimites/:id', (req, res) => {
+router.put('/policy-sublimites/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const sublimite = dbStore.policySublimites.find((s) => s.id === id);
   if (!sublimite) {
     return res.status(404).json({ status: 'erro', mensagem: 'Sublimite não encontrado.' });
   }
+  if (!policyPertenceAoAtor(req, res, sublimite.policy_id)) return;
 
   const { tag, valor } = req.body;
   if (tag !== undefined) sublimite.tag = tag;
@@ -1264,8 +1548,13 @@ router.put('/policy-sublimites/:id', (req, res) => {
   return res.json({ status: 'sucesso', sublimite });
 });
 
-router.delete('/policy-sublimites/:id', (req, res) => {
+router.delete('/policy-sublimites/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
+  const sublimite = dbStore.policySublimites.find((s) => s.id === id);
+  if (sublimite && !policyPertenceAoAtor(req, res, sublimite.policy_id)) return;
+  if (!sublimite && req.backoffice?.actor_type !== 'INTERNAL_USER' && req.backoffice?.actor_type !== 'SEGURADORA') {
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.' });
+  }
   dbStore.policySublimites = dbStore.policySublimites.filter((s) => s.id !== id);
   dbStore.persist();
   return res.json({ status: 'sucesso', mensagem: 'Sublimite removido com sucesso.' });
@@ -1275,21 +1564,20 @@ router.delete('/policy-sublimites/:id', (req, res) => {
 // apólice com valor R$ X". Distinto de InsurerCoverage, que é só a definição da cobertura.
 // desconta_lmi é persistido mas ainda NÃO é lido pelo AverbacaoService nesta rodada (ver
 // claude/Mapeamento_Portais_e_Personas.md no Project para o porquê). ---
-router.get('/policy-coverage-values', (req, res) => {
+router.get('/policy-coverage-values', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
-  if (!policy_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'policy_id é obrigatório.' });
-  }
+  if (!policyPertenceAoAtor(req, res, policy_id)) return;
   const items = dbStore.policyCoverageValues.filter((v) => v.policy_id === policy_id);
   return res.json({ status: 'sucesso', coverage_values: items });
 });
 
-router.post('/policy-coverage-values', (req, res) => {
+router.post('/policy-coverage-values', (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, insurer_coverage_id, valor, desconta_lmi } = req.body;
-  if (!policy_id || !insurer_coverage_id) {
+  if (!policyPertenceAoAtor(req, res, policy_id)) return;
+  if (!insurer_coverage_id) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'policy_id e insurer_coverage_id são obrigatórios.'
+      mensagem: 'insurer_coverage_id é obrigatório.'
     });
   }
   const policy = dbStore.policies.find((p) => p.id === policy_id);
@@ -1325,12 +1613,13 @@ router.post('/policy-coverage-values', (req, res) => {
   return res.json({ status: 'sucesso', coverage_value: newValue });
 });
 
-router.put('/policy-coverage-values/:id', (req, res) => {
+router.put('/policy-coverage-values/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const value = dbStore.policyCoverageValues.find((v) => v.id === id);
   if (!value) {
     return res.status(404).json({ status: 'erro', mensagem: 'Cobertura ativada não encontrada nesta apólice.' });
   }
+  if (!policyPertenceAoAtor(req, res, value.policy_id)) return;
   const { valor, desconta_lmi } = req.body;
   if (valor !== undefined) value.valor = Number(valor) || 0;
   if (desconta_lmi !== undefined) value.desconta_lmi = Boolean(desconta_lmi);
@@ -1340,12 +1629,13 @@ router.put('/policy-coverage-values/:id', (req, res) => {
   return res.json({ status: 'sucesso', coverage_value: value });
 });
 
-router.delete('/policy-coverage-values/:id', (req, res) => {
+router.delete('/policy-coverage-values/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
-  const exists = dbStore.policyCoverageValues.some((v) => v.id === id);
-  if (!exists) {
+  const value = dbStore.policyCoverageValues.find((v) => v.id === id);
+  if (!value) {
     return res.status(404).json({ status: 'erro', mensagem: 'Cobertura ativada não encontrada nesta apólice.' });
   }
+  if (!policyPertenceAoAtor(req, res, value.policy_id)) return;
   dbStore.policyCoverageValues = dbStore.policyCoverageValues.filter((v) => v.id !== id);
   dbStore.persist();
   return res.json({ status: 'sucesso', mensagem: 'Cobertura removida desta apólice com sucesso.' });
@@ -1360,11 +1650,9 @@ router.delete('/policy-coverage-values/:id', (req, res) => {
 // --- N. Dashboard da Seguradora — KPIs escopados por insurer_id (ver arckatechseguradora
 // src/routes/index.tsx). Distinto do /admin/dashboard-stats acima, que é visão GLOBAL
 // (uso interno ARCKATECH, sem escopo de seguradora). ---
-router.get('/insurer-dashboard-stats', (req, res) => {
-  const { insurer_id } = req.query;
-  if (!insurer_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
-  }
+router.get('/insurer-dashboard-stats', (req: BackofficeAuthenticatedRequest, res) => {
+  const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
+  if (!insurer_id) return;
 
   const policiesDaSeguradora = dbStore.policies.filter((p) => p.insurer_id === insurer_id);
   const tenantIds = new Set(policiesDaSeguradora.map((p) => p.tenant_id));
@@ -1415,11 +1703,10 @@ router.get('/insurer-dashboard-stats', (req, res) => {
 // --- O. Consulta de Averbações da Seguradora — todos os segurados da carteira daquele
 // insurer_id, com os mesmos filtros/paginação de tenant.ts GET /averbacoes (visão do
 // próprio transportador), mas aqui agregado pela seguradora. ---
-router.get('/insurer-averbacoes', (req, res) => {
-  const { insurer_id, status, tipo_documento, tenant_id, data_de, data_ate } = req.query;
-  if (!insurer_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
-  }
+router.get('/insurer-averbacoes', (req: BackofficeAuthenticatedRequest, res) => {
+  const { status, tipo_documento, tenant_id, data_de, data_ate } = req.query;
+  const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
+  if (!insurer_id) return;
 
   let policies = dbStore.policies.filter((p) => p.insurer_id === insurer_id);
   if (tenant_id) policies = policies.filter((p) => p.tenant_id === tenant_id);
