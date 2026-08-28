@@ -393,6 +393,52 @@ class DBStore {
         explicacao_nao_tecnica: 'O prazo de 24 horas para complementar esta informação já passou.',
         orientacao_correcao: 'Reenvie o documento (CT-e/NF-e/MDF-e) novamente para gerar uma nova pendência de complementação.',
         updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4013',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          "ERRO 4013: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o sublimite configurado para a mercadoria '[MERCADORIA]' (R$ [SUBLIMITE]).",
+        texto_customizado:
+          "ERRO 4013: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o sublimite configurado para a mercadoria '[MERCADORIA]' (R$ [SUBLIMITE]).",
+        placeholders: ['[VALOR_AVERBACAO]', '[MERCADORIA]', '[SUBLIMITE]'],
+        explicacao_nao_tecnica:
+          'O valor da carga deste documento é maior do que o limite específico contratado para este tipo de mercadoria.',
+        orientacao_correcao:
+          'Confirme o valor declarado no documento, ou fale com sua seguradora/corretora para avaliar um aumento do sublimite contratado para esta mercadoria.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4014',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          'ERRO 4014: O prazo máximo para aceite deste documento a partir de [DATA_BASE] (limite: [PRAZO_LIMITE]) já expirou.',
+        texto_customizado:
+          'ERRO 4014: O prazo máximo para aceite deste documento a partir de [DATA_BASE] (limite: [PRAZO_LIMITE]) já expirou.',
+        placeholders: ['[DATA_BASE]', '[PRAZO_LIMITE]'],
+        explicacao_nao_tecnica: 'Este documento foi enviado depois do prazo máximo aceito pela sua apólice.',
+        orientacao_correcao:
+          'Fale com sua seguradora/corretora para avaliar uma exceção, ou verifique se o documento correto foi enviado.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4015',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          'ERRO 4015: A averbação não respeita o prazo configurado para a Data de Embarque ([DATA_EMBARQUE]) — limite: [PRAZO_LIMITE].',
+        texto_customizado:
+          'ERRO 4015: A averbação não respeita o prazo configurado para a Data de Embarque ([DATA_EMBARQUE]) — limite: [PRAZO_LIMITE].',
+        placeholders: ['[DATA_EMBARQUE]', '[PRAZO_LIMITE]'],
+        explicacao_nao_tecnica: 'Este documento foi enviado fora do prazo aceito em relação à data de embarque informada.',
+        orientacao_correcao:
+          'Fale com sua seguradora/corretora para avaliar uma exceção, ou verifique se a data de embarque informada está correta.',
+        updated_at: new Date().toISOString()
       }
     ];
   }
