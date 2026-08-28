@@ -8,6 +8,7 @@ import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
 import internalRoutes from './routes/internal';
 import { internalApiKeyMiddleware } from './middleware/internalApiKeyMiddleware';
+import { backofficeOrInternalKeyMiddleware } from './middleware/backofficeOrInternalKeyMiddleware';
 
 dotenv.config();
 
@@ -32,10 +33,16 @@ app.get('/health', (req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/averbar', averbacaoRoutes);
 app.use('/api/v1/averbacoes', averbacaoRoutes);
-// Painéis internos (Seguradora, Corretora, ARCKATECH) — protegidos por chave de API
-// enquanto não existe login real por usuário. Ver middleware/internalApiKeyMiddleware.ts.
-app.use('/api/v1/admin', internalApiKeyMiddleware, adminRoutes);
-app.use('/api/v1/broker', internalApiKeyMiddleware, brokerRoutes);
+// Painéis internos (Seguradora, Corretora, ARCKATECH).
+// /admin e /broker — Fase 3 do item "Login real + RBAC" (Backlog, seção 4): agora aceitam login
+// real (Authorization: Bearer <token> de POST /auth/backoffice-login) OU a chave interna antiga
+// (x-internal-api-key), nessa ordem — ver middleware/backofficeOrInternalKeyMiddleware.ts para o
+// racional completo de por que a chave interna ainda é aceita (ponte até a Fase 4 terminar de
+// migrar admin.ts para nunca mais aceitar insurer_id/broker_id livres).
+app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminRoutes);
+app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
+// /internal (CRUD de InternalUser/RbacProfile etc.) segue só com a chave interna por enquanto —
+// fora do escopo desta fase (ver Backlog).
 app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
 // Portal do Transportador — segue sem a chave interna (é o público final), mas ainda
 // sem autenticação por usuário real; ver seção de gaps no doc de estado técnico.
