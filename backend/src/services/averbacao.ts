@@ -97,6 +97,100 @@ export class AverbacaoService {
     dbStore.persist();
   }
 
+  /** Faz o parse de "DD/MM/AAAA" (formato da variável DATA_EMBARQUE) para Date local. undefined se inválido. */
+  private static parseDataEmbarqueBR(value: string): Date | undefined {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value.trim());
+    if (!m) return undefined;
+    const [, d, mo, y] = m;
+    const date = new Date(Number(y), Number(mo) - 1, Number(d));
+    return isNaN(date.getTime()) ? undefined : date;
+  }
+
+  /**
+   * Checa os Blocos 1 e 2 de "Prazos e Datas" (Regras de Negócio da apólice — ver comentário no
+   * passo 9d de process()). Retorna null quando não há nada a bloquear (inclusive quando a
+   * seguradora nunca configurou nada nesta apólice, ou quando falta dado suficiente pra avaliar
+   * um prazo — nesse caso preferimos não bloquear a arriscar um falso positivo).
+   */
+  private static checkPrazos(
+    businessConfig: Record<string, any>,
+    tagsMap: Record<string, any>
+  ): { codigo: string; replacements: Record<string, string> } | null {
+    const dataEmbarqueRaw = tagsMap['DATA_EMBARQUE'];
+    const dataEmbarque =
+      typeof dataEmbarqueRaw === 'string' ? this.parseDataEmbarqueBR(dataEmbarqueRaw) : undefined;
+
+    if (dataEmbarque) {
+      // "Quando encontrada no XML, esta data tem prioridade sobre o Prazo de Emissão" — Bloco 2
+      // (Regra de Prazo de Embarque). Só aplica se a seguradora configurou algo diferente do
+      // padrão "nunca" (chave pode nem existir — nesse caso também não bloqueia).
+      const prazoEmbarque = businessConfig['regras:prazo-embarque'];
+      if (!prazoEmbarque || prazoEmbarque === 'nunca') return null;
+
+      const inicioDiaEmbarque = new Date(
+        dataEmbarque.getFullYear(),
+        dataEmbarque.getMonth(),
+        dataEmbarque.getDate()
+      );
+      const fimDiaEmbarque = new Date(inicioDiaEmbarque.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+      let limite: Date;
+      if (prazoEmbarque === 'antes') {
+        // "Deve averbar antes do embarque" -> até 23h59m59 do dia ANTERIOR ao embarque.
+        limite = new Date(inicioDiaEmbarque.getTime() - 1);
+      } else if (prazoEmbarque === 'dia') {
+        limite = fimDiaEmbarque;
+      } else if (prazoEmbarque === 'apos') {
+        const dias = Number(businessConfig['regras:dias-apos']);
+        const diasValidos = !isNaN(dias) && dias > 0 ? dias : 0;
+        limite = new Date(fimDiaEmbarque.getTime() + diasValidos * 24 * 60 * 60 * 1000);
+      } else {
+        return null;
+      }
+
+      if (Date.now() > limite.getTime()) {
+        return {
+          codigo: 'ERR-4015',
+          replacements: {
+            DATA_EMBARQUE: dataEmbarqueRaw,
+            PRAZO_LIMITE: limite.toLocaleString('pt-BR')
+          }
+        };
+      }
+      return null;
+    }
+
+    // Sem Data de Embarque no documento: cai no Bloco 1 (Prazo de Emissão) — só se a seguradora
+    // salvou explicitamente um prazo nesta apólice (a chave precisa EXISTIR no config; ver
+    // RuleEngineService.getBusinessConfig — nunca assumimos os 90 dias exibidos como padrão na
+    // tela para uma apólice que nunca configurou nada).
+    if (!('regras:prazo-valor' in businessConfig)) return null;
+
+    const campoBase = businessConfig['regras:prazo-campo'] === 'dhRecBto' ? 'dhRecBto' : 'dhEmi';
+    const dataBaseRaw = tagsMap[campoBase];
+    if (!dataBaseRaw) return null; // sem a data-base não dá pra avaliar o prazo — nunca bloqueia por isso
+
+    const dataBase = new Date(dataBaseRaw);
+    if (isNaN(dataBase.getTime())) return null;
+
+    const prazoValor = Number(businessConfig['regras:prazo-valor']);
+    if (isNaN(prazoValor) || prazoValor <= 0) return null;
+
+    const unidadeMs = businessConfig['regras:prazo-unidade'] === 'Horas' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    const limite = new Date(dataBase.getTime() + prazoValor * unidadeMs);
+
+    if (Date.now() > limite.getTime()) {
+      return {
+        codigo: 'ERR-4014',
+        replacements: {
+          DATA_BASE: dataBase.toLocaleString('pt-BR'),
+          PRAZO_LIMITE: limite.toLocaleString('pt-BR')
+        }
+      };
+    }
+    return null;
+  }
+
   /**
    * Processa a solicitação de averbação de um documento fiscal.
    */
@@ -337,6 +431,55 @@ export class AverbacaoService {
         VALOR_AVERBACAO: valorConsiderado.toFixed(2),
         LMI_APOLICE: policy.lmi.toFixed(2)
       });
+    }
+
+    // 9c. Sublimite por Mercadoria (aba "Sublimites por Mercadoria" da Ficha do Segurado) — achado
+    // da auditoria de 28/08: acima do LMI da apólice inteira, a seguradora pode cadastrar um teto
+    // menor para uma mercadoria específica, mas isso nunca era comparado com o valor da averbação
+    // aqui. Só aplica quando o produto predominante do documento (proPred, hoje só extraído de
+    // CT-e) bate EXATAMENTE (sem distinguir maiúsculas/acentos) com a palavra-chave cadastrada —
+    // optamos por correspondência exata, não por substring, para não recusar uma averbação por
+    // coincidência de texto livre; correspondência mais ampla (ex: por catálogo de produtos) fica
+    // para uma iteração futura combinada com o produto.
+    if (parsedDoc.produtoPredominante) {
+      const normalizeProduto = (v: string) =>
+        v
+          .normalize('NFD')
+          .replace(/[̀-ͯ]/g, '')
+          .trim()
+          .toLowerCase();
+      const produtoNormalizado = normalizeProduto(parsedDoc.produtoPredominante);
+      const sublimite = dbStore.policySublimites.find(
+        (s) => s.policy_id === policy.id && normalizeProduto(s.tag) === produtoNormalizado
+      );
+      if (sublimite) {
+        const valorSublimite = RuleEngineService.parseMoneyBR(sublimite.valor);
+        if (!isNaN(valorSublimite) && valorConsiderado > valorSublimite) {
+          const replacements = {
+            VALOR_AVERBACAO: valorConsiderado.toFixed(2),
+            MERCADORIA: sublimite.tag,
+            SUBLIMITE: valorSublimite.toFixed(2)
+          };
+          const fmt = ResponseEngine.formatResponse('ERR-4013', replacements);
+          this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+          return this.erro('ERR-4013', replacements);
+        }
+      }
+    }
+
+    // 9d. Prazos e Datas (aba Regras de Negócio da Ficha do Segurado) — Bloco "Prazo de Emissão" e
+    // "Regra de Prazo de Embarque". Achado da auditoria de 28/08: também salvos e exibidos, nunca
+    // checados. Só aplicados quando a seguradora salvou explicitamente essa configuração NESTA
+    // apólice (ver comentário de getBusinessConfig em ruleEngine.ts) — nenhuma apólice que nunca
+    // abriu esta aba passa a ser bloqueada por um prazo "padrão" inventado por nós. O Bloco "Prazo
+    // de Cancelamento" NÃO foi implementado nesta rodada — o sistema ainda não tem nenhum fluxo de
+    // cancelamento de averbação para aplicar esse prazo contra (ver achado registrado no backlog).
+    const businessConfig = RuleEngineService.getBusinessConfig(policy);
+    const prazoErro = this.checkPrazos(businessConfig, parsedDoc.tagsMap);
+    if (prazoErro) {
+      const fmt = ResponseEngine.formatResponse(prazoErro.codigo, prazoErro.replacements);
+      this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+      return this.erro(prazoErro.codigo, prazoErro.replacements);
     }
 
     // 10. Tratamento de Ambiente Sefaz (tpAmb) — homologação nunca tem validade jurídica real
