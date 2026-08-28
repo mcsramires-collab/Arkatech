@@ -190,4 +190,131 @@ router.post('/portal-login', async (req: Request, res: Response) => {
   });
 });
 
+/**
+ * POST /api/v1/auth/backoffice-login
+ * Login por PESSOA (email + senha) para os painéis internos — Seguradora, Corretora e a própria
+ * Arckatech (ADM/Agente). É o equivalente de /portal-login (Portal do Segurado), mas para os
+ * três outros públicos, cobrindo os tipos que já existem em types/index.ts (InternalUser,
+ * TenantUser com tenant.role SEGURADORA/CORRETORA) e que hoje não têm nenhuma rota de login.
+ *
+ * ⚠️ Este endpoint funciona de ponta a ponta (emite um JWT real, validável por
+ * backofficeAuthMiddleware), mas ainda NÃO está exigido em nenhuma rota de /admin ou /broker —
+ * ver o comentário em authMiddleware.ts sobre por que isso precisa esperar as telas de login
+ * reais nos dois portais (Backlog: "Login real + RBAC").
+ *
+ * Busca primeiro em InternalUser (ADM/Agente Arckatech); se não achar, busca em TenantUser cujo
+ * Tenant tenha role SEGURADORA ou CORRETORA (deliberadamente exclui TRANSPORTADOR — esse público
+ * já loga por /portal-login). Para SEGURADORA/CORRETORA, resolve o Insurer/Broker vinculado ao
+ * Tenant (via Insurer.tenant_id / Broker.tenant_id) para carregar insurer_id/broker_id no token —
+ * é esse id, não o tenant_id, que RbacProfile.owner_id referencia (ver types/index.ts).
+ */
+router.post('/backoffice-login', async (req: Request, res: Response) => {
+  const { email, senha } = req.body;
+
+  if (!email || !senha) {
+    return res.status(400).json({
+      status: 'erro',
+      codigo: 'ERR-4001',
+      mensagem: 'email e senha são obrigatórios.'
+    });
+  }
+
+  const emailNormalizado = String(email).trim().toLowerCase();
+
+  const credenciaisInvalidas = () =>
+    res.status(401).json({
+      status: 'erro',
+      codigo: 'ERR-4001',
+      mensagem: 'E-mail ou senha inválidos.'
+    });
+
+  let jwtSecret: string;
+  try {
+    jwtSecret = getJwtSecret();
+  } catch (err) {
+    return res.status(500).json({
+      status: 'erro',
+      codigo: 'ERR-5000',
+      mensagem: 'Erro interno ao emitir o token. Contate o suporte da Arckatech.'
+    });
+  }
+
+  // 1) InternalUser (ADM/Agente Arckatech)
+  const internalCandidato = dbStore.internalUsers.find(
+    (u) => u.email.trim().toLowerCase() === emailNormalizado && u.status === 'ATIVO'
+  );
+  if (internalCandidato) {
+    if (!(await bcrypt.compare(senha, internalCandidato.password_hash))) {
+      return credenciaisInvalidas();
+    }
+
+    const payload = {
+      actor_type: 'INTERNAL_USER' as const,
+      user_id: internalCandidato.id,
+      nome: internalCandidato.nome,
+      email: internalCandidato.email,
+      role: internalCandidato.role,
+      rbac_profile_id: internalCandidato.rbac_profile_id
+    };
+    const expiresInSeconds = 8 * 3600;
+    const token = jwt.sign(payload, jwtSecret, { expiresIn: expiresInSeconds });
+
+    return res.json({
+      status: 'sucesso',
+      usuario: { nome: internalCandidato.nome, email: internalCandidato.email, tipo: 'ARCKATECH', papel: internalCandidato.role },
+      token_type: 'Bearer',
+      access_token: token,
+      expires_in: expiresInSeconds
+    });
+  }
+
+  // 2) TenantUser de Seguradora/Corretora (nunca TRANSPORTADOR — esse é /portal-login)
+  const tenantCandidatos = dbStore.tenantUsers.filter(
+    (u) => u.email.trim().toLowerCase() === emailNormalizado && u.status === 'ATIVO'
+  );
+
+  for (const candidato of tenantCandidatos) {
+    const tenant = dbStore.tenants.find((t) => t.id === candidato.tenant_id);
+    if (!tenant || (tenant.role !== 'SEGURADORA' && tenant.role !== 'CORRETORA')) continue;
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await bcrypt.compare(senha, candidato.password_hash))) continue;
+
+    const isSeguradora = tenant.role === 'SEGURADORA';
+    const insurer = isSeguradora ? dbStore.insurers.find((i) => i.tenant_id === tenant.id) : undefined;
+    const broker = !isSeguradora ? dbStore.brokers.find((b) => b.tenant_id === tenant.id) : undefined;
+
+    const payload = {
+      actor_type: (isSeguradora ? 'SEGURADORA' : 'CORRETORA') as 'SEGURADORA' | 'CORRETORA',
+      user_id: candidato.id,
+      nome: candidato.nome,
+      email: candidato.email,
+      role: tenant.role,
+      rbac_profile_id: candidato.rbac_profile_id,
+      tenant_id: tenant.id,
+      insurer_id: insurer?.id,
+      broker_id: broker?.id
+    };
+    const durationHours = tenant.token_duration_hours || 8;
+    const expiresInSeconds = durationHours * 3600;
+    const token = jwt.sign(payload, jwtSecret, { expiresIn: expiresInSeconds });
+
+    return res.json({
+      status: 'sucesso',
+      usuario: {
+        nome: candidato.nome,
+        email: candidato.email,
+        tipo: tenant.role,
+        razao_social: tenant.razao_social,
+        insurer_id: insurer?.id,
+        broker_id: broker?.id
+      },
+      token_type: 'Bearer',
+      access_token: token,
+      expires_in: expiresInSeconds
+    });
+  }
+
+  return credenciaisInvalidas();
+});
+
 export default router;
