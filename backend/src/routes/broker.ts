@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { Tenant, Policy, DelegationAction } from '../types';
 import { resolveRequiresApproval, criarApprovalRequest, aplicarAcaoDelegada } from '../services/delegatedActions';
+import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -10,14 +11,60 @@ const router = Router();
  * Todas as rotas aqui são escopadas por broker_id (a corretora) e, opcionalmente,
  * insurer_id (para restringir à carteira de uma seguradora específica). Uma corretora
  * NUNCA enxerga a carteira de outra corretora, mesmo que atendam à mesma seguradora.
+ *
+ * Fase 4 do item "Login real + RBAC" (Backlog, seção 4): antes, `broker_id` vinha sempre livre
+ * em query/body — qualquer chamador com a chave interna (`x-internal-api-key`, compartilhada por
+ * todo o backoffice) podia pedir a carteira de QUALQUER corretora só informando o `broker_id`
+ * dela. Como nenhum frontend consome estas rotas hoje (o Portal da Corretora ainda não existe —
+ * ver Backlog), essa migração pôde ser feita de uma vez, sem risco de quebrar tráfego real: agora
+ * `resolveBrokerId()` abaixo SEMPRE deriva o `broker_id` da identidade autenticada
+ * (`req.backoffice`, populado por `backofficeOrInternalKeyMiddleware`) quando quem chama é uma
+ * CORRETORA — o valor enviado em query/body para esse campo é ignorado nesse caso. ADM da
+ * Arckatech (login real ou a chave interna, tratada como ADM sintético) continua podendo informar
+ * `broker_id` livremente, para dar suporte/gerenciar qualquer carteira.
  */
+function resolveBrokerId(
+  req: BackofficeAuthenticatedRequest,
+  res: Response,
+  brokerIdDaRequisicao: unknown
+): string | null {
+  const ator = req.backoffice;
+  if (!ator) {
+    res.status(401).json({ status: 'erro', mensagem: 'Autenticação de backoffice ausente.' });
+    return null;
+  }
+
+  if (ator.actor_type === 'CORRETORA') {
+    if (!ator.broker_id) {
+      res.status(403).json({
+        status: 'erro',
+        mensagem: 'Seu usuário não está vinculado a nenhuma corretora — sem acesso a esta área.'
+      });
+      return null;
+    }
+    return ator.broker_id;
+  }
+
+  if (ator.actor_type === 'INTERNAL_USER') {
+    if (!brokerIdDaRequisicao || typeof brokerIdDaRequisicao !== 'string') {
+      res.status(400).json({ status: 'erro', mensagem: 'broker_id é obrigatório.' });
+      return null;
+    }
+    return brokerIdDaRequisicao;
+  }
+
+  res.status(403).json({
+    status: 'erro',
+    mensagem: 'Esta área é exclusiva de corretoras e da administração Arckatech.'
+  });
+  return null;
+}
 
 // --- Carteira de Clientes da Corretora ---
-router.get('/clients', (req, res) => {
-  const { broker_id, insurer_id } = req.query;
-  if (!broker_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'broker_id é obrigatório.' });
-  }
+router.get('/clients', (req: BackofficeAuthenticatedRequest, res) => {
+  const { insurer_id } = req.query;
+  const broker_id = resolveBrokerId(req, res, req.query.broker_id);
+  if (!broker_id) return;
 
   let policies = dbStore.policies.filter((p) => p.broker_id === broker_id);
   if (insurer_id) policies = policies.filter((p) => p.insurer_id === insurer_id);
@@ -33,11 +80,10 @@ router.get('/clients', (req, res) => {
 });
 
 // --- Averbações da Carteira (foco em recusas/pendências) ---
-router.get('/averbacoes', (req, res) => {
-  const { broker_id, insurer_id, apenas_recusadas } = req.query;
-  if (!broker_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'broker_id é obrigatório.' });
-  }
+router.get('/averbacoes', (req: BackofficeAuthenticatedRequest, res) => {
+  const { insurer_id, apenas_recusadas } = req.query;
+  const broker_id = resolveBrokerId(req, res, req.query.broker_id);
+  if (!broker_id) return;
 
   let policies = dbStore.policies.filter((p) => p.broker_id === broker_id);
   if (insurer_id) policies = policies.filter((p) => p.insurer_id === insurer_id);
@@ -52,10 +98,9 @@ router.get('/averbacoes', (req, res) => {
 });
 
 // --- Criar Cliente em Nome da Seguradora (sujeito à matriz de delegação) ---
-router.post('/clients', (req, res) => {
+router.post('/clients', (req: BackofficeAuthenticatedRequest, res) => {
   const {
     insurer_id,
-    broker_id,
     co_broker_id,
     assessoria_id,
     cnpj,
@@ -73,11 +118,13 @@ router.post('/clients', (req, res) => {
     contato_telefone_fixo,
     contato_celular
   } = req.body;
+  const broker_id = resolveBrokerId(req, res, req.body.broker_id);
+  if (!broker_id) return;
 
-  if (!insurer_id || !broker_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
+  if (!insurer_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'insurer_id, broker_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
+      mensagem: 'insurer_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
     });
   }
 
@@ -235,12 +282,13 @@ function responderAcaoDelegada(
 }
 
 // --- Editar Cliente (segurado) já existente na carteira ---
-router.put('/clients/:tenantId', (req, res) => {
+router.put('/clients/:tenantId', (req: BackofficeAuthenticatedRequest, res) => {
   const { tenantId } = req.params;
-  const { insurer_id, broker_id, razao_social, contato_nome, contato_email, contato_telefone_fixo, contato_celular } =
-    req.body;
-  if (!insurer_id || !broker_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e broker_id são obrigatórios.' });
+  const { insurer_id, razao_social, contato_nome, contato_email, contato_telefone_fixo, contato_celular } = req.body;
+  const broker_id = resolveBrokerId(req, res, req.body.broker_id);
+  if (!broker_id) return;
+  if (!insurer_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
   }
 
   return responderAcaoDelegada(res, insurer_id, broker_id, tenantId, 'EDITAR_CLIENTE', {
@@ -254,10 +302,9 @@ router.put('/clients/:tenantId', (req, res) => {
 });
 
 // --- Nova apólice para um segurado JÁ existente na carteira ---
-router.post('/policies', (req, res) => {
+router.post('/policies', (req: BackofficeAuthenticatedRequest, res) => {
   const {
     insurer_id,
-    broker_id,
     tenant_id,
     co_broker_id,
     assessoria_id,
@@ -269,11 +316,13 @@ router.post('/policies', (req, res) => {
     permitir_inativo_vencido,
     aceita_averbacao_como_destinatario
   } = req.body;
+  const broker_id = resolveBrokerId(req, res, req.body.broker_id);
+  if (!broker_id) return;
 
-  if (!insurer_id || !broker_id || !tenant_id || !ramo || !numero_apolice) {
+  if (!insurer_id || !tenant_id || !ramo || !numero_apolice) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'insurer_id, broker_id, tenant_id, ramo e numero_apolice são obrigatórios.'
+      mensagem: 'insurer_id, tenant_id, ramo e numero_apolice são obrigatórios.'
     });
   }
 
@@ -292,12 +341,14 @@ router.post('/policies', (req, res) => {
 });
 
 // --- Editar apólice já existente na carteira da corretora ---
-router.put('/policies/:id', (req, res) => {
+router.put('/policies/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
-  const { insurer_id, broker_id, status, permitir_inativo_vencido, numero_apolice, vigencia_inicio, vigencia_fim, lmi } =
+  const { insurer_id, status, permitir_inativo_vencido, numero_apolice, vigencia_inicio, vigencia_fim, lmi } =
     req.body;
-  if (!insurer_id || !broker_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e broker_id são obrigatórios.' });
+  const broker_id = resolveBrokerId(req, res, req.body.broker_id);
+  if (!broker_id) return;
+  if (!insurer_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
   }
 
   const policy = dbStore.policies.find((p) => p.id === id);
@@ -320,12 +371,14 @@ router.put('/policies/:id', (req, res) => {
 });
 
 // --- Ativar Cobertura Adicional (com valor real) numa apólice da carteira ---
-router.post('/coverages', (req, res) => {
-  const { insurer_id, broker_id, policy_id, insurer_coverage_id, valor, desconta_lmi } = req.body;
-  if (!insurer_id || !broker_id || !policy_id || !insurer_coverage_id) {
+router.post('/coverages', (req: BackofficeAuthenticatedRequest, res) => {
+  const { insurer_id, policy_id, insurer_coverage_id, valor, desconta_lmi } = req.body;
+  const broker_id = resolveBrokerId(req, res, req.body.broker_id);
+  if (!broker_id) return;
+  if (!insurer_id || !policy_id || !insurer_coverage_id) {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'insurer_id, broker_id, policy_id e insurer_coverage_id são obrigatórios.'
+      mensagem: 'insurer_id, policy_id e insurer_coverage_id são obrigatórios.'
     });
   }
 
@@ -334,7 +387,7 @@ router.post('/coverages', (req, res) => {
     return res.status(404).json({ status: 'erro', mensagem: 'Apólice não encontrada.' });
   }
   if (policy.broker_id !== broker_id) {
-    return res.status(403).json({ status: 'erro', mensagem: 'Esta apólice não pertence à carteira desta corretora.' });
+    return res.status(403).json({ status: 'erro', mensagem: 'Esta cobertura não pertence à carteira desta corretora.' });
   }
 
   return responderAcaoDelegada(res, insurer_id, broker_id, policy.tenant_id, 'CRIAR_COBERTURA_ADICIONAL', {
@@ -346,11 +399,13 @@ router.post('/coverages', (req, res) => {
 });
 
 // --- Editar valor de uma Cobertura Adicional já ativada numa apólice da carteira ---
-router.put('/coverages/:id', (req, res) => {
+router.put('/coverages/:id', (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
-  const { insurer_id, broker_id, valor, desconta_lmi } = req.body;
-  if (!insurer_id || !broker_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id e broker_id são obrigatórios.' });
+  const { insurer_id, valor, desconta_lmi } = req.body;
+  const broker_id = resolveBrokerId(req, res, req.body.broker_id);
+  if (!broker_id) return;
+  if (!insurer_id) {
+    return res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
   }
 
   const coverageValue = dbStore.policyCoverageValues.find((v) => v.id === id);
@@ -370,11 +425,10 @@ router.put('/coverages/:id', (req, res) => {
 });
 
 // --- Relatório escopado à carteira da corretora ---
-router.get('/relatorio', (req, res) => {
-  const { broker_id, insurer_id } = req.query;
-  if (!broker_id) {
-    return res.status(400).json({ status: 'erro', mensagem: 'broker_id é obrigatório.' });
-  }
+router.get('/relatorio', (req: BackofficeAuthenticatedRequest, res) => {
+  const { insurer_id } = req.query;
+  const broker_id = resolveBrokerId(req, res, req.query.broker_id);
+  if (!broker_id) return;
 
   let policies = dbStore.policies.filter((p) => p.broker_id === broker_id);
   if (insurer_id) policies = policies.filter((p) => p.insurer_id === insurer_id);
