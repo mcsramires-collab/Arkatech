@@ -147,6 +147,9 @@ export class XMLParserService {
         tagsMap['vCarga'] = valorCarga;
         tagsMap['nCT'] = numeroDocumento;
         tagsMap['dhEmi'] = cteNode.ide?.dhEmi;
+        // Data de autorização Sefaz — alternativa a dhEmi como "campo base" do Prazo de Emissão
+        // (aba Regras de Negócio da Ficha do Segurado, ver services/averbacao.ts checkPrazos()).
+        tagsMap['dhRecBto'] = protNode?.dhRecbto;
         tagsMap['CFOP'] = cteNode.ide?.CFOP;
         tagsMap['cUF'] = cteNode.ide?.cUF;
         obsText = cteNode.compl?.xObs || '';
@@ -171,6 +174,7 @@ export class XMLParserService {
         tagsMap['vNF'] = Number(nfeNode.total?.ICMSTot?.vNF || valorCarga);
         tagsMap['nNF'] = numeroDocumento;
         tagsMap['dhEmi'] = nfeNode.ide?.dhEmi;
+        tagsMap['dhRecBto'] = protNode?.dhRecbto;
         obsText = nfeNode.infAdic?.infCpl || '';
         obsContRaw = nfeNode.infAdic?.obsCont;
         tagsMap['infCpl'] = obsText;
@@ -207,6 +211,7 @@ export class XMLParserService {
 
         tagsMap['nMDF'] = numeroDocumento;
         tagsMap['dhEmi'] = mdfeNode.ide?.dhEmi;
+        tagsMap['dhRecBto'] = protNode?.dhRecbto;
         tagsMap['vCarga'] = valorCarga;
         tagsMap['UFIni'] = mdfeNode.ide?.UFIni;
         tagsMap['UFFim'] = mdfeNode.ide?.UFFim;
