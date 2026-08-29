@@ -1899,8 +1899,19 @@ router.get('/insurer-averbacoes', requirePermission('relatorios', 'ver'), (req: 
 // modelagem própria: é o mesmo cadastro de Broker, e só passa a aparecer na listagem de
 // "Assessorias" do portal quando estiver referenciada em Policy.assessoria_id de alguma
 // apólice (ver listarAssessoriasComResumo no frontend). Criar uma Assessoria nova aqui
-// cria um Broker "solto", que só some da lista de "sem uso" quando vinculado a uma apólice. ---
-router.post('/brokers', (req, res) => {
+// cria um Broker "solto", que só some da lista de "sem uso" quando vinculado a uma apólice.
+//
+// Decisão de escopo (Backlog, seção 2 — "POST/PUT/DELETE /admin/brokers deve ser escopado por
+// seguradora?"), resolvida com o usuário nesta sessão: Broker CONTINUA global — visível a todas
+// as seguradoras, exatamente como hoje (a tela "Corretora Líder/Cocorretora" do Portal da
+// Seguradora depende disso para listar opções via GET /brokers, que fica aberto a qualquer ator
+// autenticado, sem mudança). O que muda é só a ESCRITA: criar/editar/excluir uma corretora passa
+// a ser exclusivo da administração Arckatech (mesmo padrão de `apenasInternalUser` já usado em
+// `PUT /tenants/:id` e nas demais ~15 rotas administrativas sem consumidor real no frontend hoje)
+// — uma SEGURADORA ou CORRETORA autenticada não pode mais criar/editar/excluir Broker nenhum.
+// Não muda o modelo de dados (Broker continua sem insurer_id) nem a tela de seleção do frontend. ---
+router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const {
     cnpj,
     razao_social,
@@ -1932,7 +1943,8 @@ router.post('/brokers', (req, res) => {
   return res.json({ status: 'sucesso', broker: newBroker });
 });
 
-router.put('/brokers/:id', (req, res) => {
+router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const broker = dbStore.brokers.find((b) => b.id === id);
   if (!broker) {
@@ -1963,7 +1975,8 @@ router.put('/brokers/:id', (req, res) => {
   return res.json({ status: 'sucesso', broker });
 });
 
-router.delete('/brokers/:id', (req, res) => {
+router.delete('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const broker = dbStore.brokers.find((b) => b.id === id);
   if (!broker) {
