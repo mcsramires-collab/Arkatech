@@ -1,9 +1,11 @@
 import { Router, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { ResponseEngine } from '../services/responseEngine';
 import { getJwtSecret } from '../utils/jwtSecret';
+import { backofficeAuthMiddleware, BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -254,7 +256,10 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
       nome: internalCandidato.nome,
       email: internalCandidato.email,
       role: internalCandidato.role,
-      rbac_profile_id: internalCandidato.rbac_profile_id
+      rbac_profile_id: internalCandidato.rbac_profile_id,
+      // Fase 5 (item 3) — identificador único deste token específico, usado só para revogação
+      // (ver POST /auth/backoffice-logout abaixo e RevokedToken em types/index.ts).
+      jti: uuidv4()
     };
     const expiresInSeconds = 8 * 3600;
     const token = jwt.sign(payload, jwtSecret, { expiresIn: expiresInSeconds });
@@ -292,7 +297,9 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
       rbac_profile_id: candidato.rbac_profile_id,
       tenant_id: tenant.id,
       insurer_id: insurer?.id,
-      broker_id: broker?.id
+      broker_id: broker?.id,
+      // Fase 5 (item 3) — mesmo propósito do branch INTERNAL_USER acima.
+      jti: uuidv4()
     };
     const durationHours = tenant.token_duration_hours || 8;
     const expiresInSeconds = durationHours * 3600;
@@ -315,6 +322,30 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
   }
 
   return credenciaisInvalidas();
+});
+
+/**
+ * POST /api/v1/auth/backoffice-logout
+ * Fase 5 (item 3) do "Login real + RBAC" (Backlog, seção 4) — logout que de fato invalida o
+ * token no servidor, não só localmente. Exige `backofficeAuthMiddleware` (o token apresentado
+ * precisa ser válido, não vencido e ainda não revogado) e revoga só ELE MESMO — `jti` do próprio
+ * Bearer usado nesta chamada, nunca um `jti` informado pelo corpo da requisição (evitaria alguém
+ * derrubar a sessão de outra pessoa só adivinhando/roubando um `jti` alheio sem o token completo).
+ *
+ * `req.backoffice.exp` é o claim `exp` do JWT em epoch SEGUNDOS (padrão do próprio token) — como
+ * `RevokedToken.expires_at` é epoch MILISSEGUNDOS (mesma unidade usada em todo o resto do
+ * backend, ex.: `Tenant.token_duration_max_hours`/sessão do frontend), a conversão é `* 1000`.
+ *
+ * Continua sendo uma revogação pontual (só este token) — não é "sair de todos os dispositivos"
+ * (cada login gera um `jti` novo; logar em dois lugares e deslogar de um não afeta o outro). Essa
+ * ideia mais ampla está mapeada, não implementada, no desenho da opção "b" no Backlog.
+ */
+router.post('/backoffice-logout', backofficeAuthMiddleware, (req: BackofficeAuthenticatedRequest, res: Response) => {
+  const ator = req.backoffice!; // garantido por backofficeAuthMiddleware
+  if (ator.jti && ator.exp) {
+    dbStore.revokeToken(ator.jti, ator.exp * 1000, ator.user_id, 'logout');
+  }
+  return res.json({ status: 'sucesso', mensagem: 'Sessão encerrada — o token usado não é mais válido.' });
 });
 
 export default router;

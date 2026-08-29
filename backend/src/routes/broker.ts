@@ -4,8 +4,18 @@ import { dbStore } from '../services/dbStore';
 import { Tenant, Policy, DelegationAction } from '../types';
 import { resolveRequiresApproval, criarApprovalRequest, aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
+import { requirePermission } from '../middleware/rbacMiddleware';
 
 const router = Router();
+
+/**
+ * "requirePermission() por módulo", item 2 combinado com o usuário (Backlog, seção 4) — mesmo
+ * padrão aplicado em admin.ts. Sem consumidor real hoje (Portal da Corretora não existe — ver
+ * Backlog), mas ligado por consistência: quando o portal existir, o RbacProfile de uma CORRETORA
+ * (ex.: `perfilAnalistaCorretora` do seed — apolices:ver, clientes:editar, coberturas:ver,
+ * relatorios:ver, usuarios/delegacao_corretora:sem_acesso) já vale de verdade, sem precisar de
+ * mais uma rodada de trabalho nesta rota nem risco de esquecer.
+ */
 
 /**
  * Todas as rotas aqui são escopadas por broker_id (a corretora) e, opcionalmente,
@@ -61,7 +71,7 @@ function resolveBrokerId(
 }
 
 // --- Carteira de Clientes da Corretora ---
-router.get('/clients', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/clients', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { insurer_id } = req.query;
   const broker_id = resolveBrokerId(req, res, req.query.broker_id);
   if (!broker_id) return;
@@ -80,7 +90,7 @@ router.get('/clients', (req: BackofficeAuthenticatedRequest, res) => {
 });
 
 // --- Averbações da Carteira (foco em recusas/pendências) ---
-router.get('/averbacoes', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/averbacoes', requirePermission('relatorios', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { insurer_id, apenas_recusadas } = req.query;
   const broker_id = resolveBrokerId(req, res, req.query.broker_id);
   if (!broker_id) return;
@@ -98,7 +108,7 @@ router.get('/averbacoes', (req: BackofficeAuthenticatedRequest, res) => {
 });
 
 // --- Criar Cliente em Nome da Seguradora (sujeito à matriz de delegação) ---
-router.post('/clients', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/clients', requirePermission('clientes', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const {
     insurer_id,
     co_broker_id,
@@ -282,7 +292,7 @@ function responderAcaoDelegada(
 }
 
 // --- Editar Cliente (segurado) já existente na carteira ---
-router.put('/clients/:tenantId', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/clients/:tenantId', requirePermission('clientes', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { tenantId } = req.params;
   const { insurer_id, razao_social, contato_nome, contato_email, contato_telefone_fixo, contato_celular } = req.body;
   const broker_id = resolveBrokerId(req, res, req.body.broker_id);
@@ -302,7 +312,7 @@ router.put('/clients/:tenantId', (req: BackofficeAuthenticatedRequest, res) => {
 });
 
 // --- Nova apólice para um segurado JÁ existente na carteira ---
-router.post('/policies', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/policies', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const {
     insurer_id,
     tenant_id,
@@ -341,7 +351,7 @@ router.post('/policies', (req: BackofficeAuthenticatedRequest, res) => {
 });
 
 // --- Editar apólice já existente na carteira da corretora ---
-router.put('/policies/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/policies/:id', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const { insurer_id, status, permitir_inativo_vencido, numero_apolice, vigencia_inicio, vigencia_fim, lmi } =
     req.body;
@@ -371,7 +381,7 @@ router.put('/policies/:id', (req: BackofficeAuthenticatedRequest, res) => {
 });
 
 // --- Ativar Cobertura Adicional (com valor real) numa apólice da carteira ---
-router.post('/coverages', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/coverages', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { insurer_id, policy_id, insurer_coverage_id, valor, desconta_lmi } = req.body;
   const broker_id = resolveBrokerId(req, res, req.body.broker_id);
   if (!broker_id) return;
@@ -399,7 +409,7 @@ router.post('/coverages', (req: BackofficeAuthenticatedRequest, res) => {
 });
 
 // --- Editar valor de uma Cobertura Adicional já ativada numa apólice da carteira ---
-router.put('/coverages/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/coverages/:id', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const { insurer_id, valor, desconta_lmi } = req.body;
   const broker_id = resolveBrokerId(req, res, req.body.broker_id);
@@ -425,7 +435,7 @@ router.put('/coverages/:id', (req: BackofficeAuthenticatedRequest, res) => {
 });
 
 // --- Relatório escopado à carteira da corretora ---
-router.get('/relatorio', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/relatorio', requirePermission('relatorios', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { insurer_id } = req.query;
   const broker_id = resolveBrokerId(req, res, req.query.broker_id);
   if (!broker_id) return;

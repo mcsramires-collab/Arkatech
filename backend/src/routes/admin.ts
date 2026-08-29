@@ -14,6 +14,7 @@ import { AverbacaoService } from '../services/averbacao';
 import { sendActivationInviteEmail } from '../services/emailService';
 import { aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
+import { requirePermission } from '../middleware/rbacMiddleware';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -33,6 +34,45 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
  * (ver `apenasInternalUser` abaixo) — fecha o acesso de uma SEGURADORA/CORRETORA autenticada a
  * ferramentas de administração que nunca foram pensadas para esse público, sem risco de quebrar
  * nada (nenhum tráfego real passava por ali com outro ator).
+ */
+/**
+ * "requirePermission() por módulo", item 2 da lista de próximos passos combinada com o usuário
+ * (Backlog, seção 4) — até aqui, `resolveInsurerId`/`policyPertenceAoAtor`/`apenasInternalUser`
+ * (Fase 4, acima) resolviam só IDENTIDADE (quem é o ator, o que ele pode enxergar por
+ * carteira/apólice) — nunca NÍVEL de permissão. Um usuário de SEGURADORA com um RbacProfile
+ * "só visualização" conseguia fazer POST/PUT/DELETE normalmente, contanto que a apólice/seguradora
+ * fosse a dele. `requirePermission(modulo, nivel)` (já existia pronto desde a Fase 1, nunca ligado
+ * a nenhuma rota) fecha essa lacuna.
+ *
+ * Onde foi ligado nesta rodada — rotas com consumidor real hoje no Portal da Seguradora/Corretora
+ * (as mesmas que já usam `resolveInsurerId`/`policyPertenceAoAtor` acima), mapeadas para os 6
+ * módulos de `RbacProfile.permissions` (ver rbacMiddleware.ts): `/policies` e as sub-rotas
+ * escopadas por `policy_id` que não são valor-de-cobertura → `apolices`; `/insurer-coverages` e
+ * `/policy-coverage-values` → `coberturas`; `/tenants` (GET) e `/insurer-clients` → `clientes`;
+ * `/insurer-dashboard-stats` e `/insurer-averbacoes` → `relatorios`; `/delegation-permissions`,
+ * `/delegation-exceptions` e `/approval-requests` → `delegacao_corretora`; `/tenant-users` →
+ * `usuarios` (além do `apenasInternalUser` que já tinha).
+ *
+ * Onde NÃO foi ligado, de propósito: `/rbac-profiles` (gerenciar os próprios perfis de permissão
+ * é mais sensível que qualquer nível de "usuarios" existente — fica exclusivo de ADM/AGENTE via
+ * `apenasInternalUser`, sem mapeamento de módulo novo, até existir uma decisão explícita sobre
+ * isso); `/brokers` (POST/PUT/DELETE — decisão de escopo já em aberto no Backlog, ver seção 2:
+ * `Broker` é uma entidade global sem `insurer_id`, então nenhum dos 6 módulos existentes cobre
+ * "gerenciar corretoras globalmente" de forma correta); `/tenants/me`,
+ * `/tenants/me/session-duration`, `/tenants/lookup` (autoatendimento/consulta pública, não são
+ * recursos de um "módulo" no sentido de RbacProfile); e as demais rotas já exclusivas de
+ * `apenasInternalUser` sem consumidor real no frontend (`/policy-rules`, `/document-rules`,
+ * `/templates`, `/mock/generate`, `/importar-lote`, `/simulador`, `/expurgo`, `/relatorio`,
+ * `/docs`, `/dashboard-stats` global, `/regras-solicitacoes`) — continuam ADM/AGENTE-only como já
+ * estavam; não têm um módulo de RbacProfile que faça sentido para elas hoje.
+ *
+ * `requirePermission` é aplicado como middleware de rota (roda ANTES do handler, e portanto antes
+ * de `resolveInsurerId`/`policyPertenceAoAtor` dentro dele) — ADM sempre passa (bypass já
+ * embutido no helper); AGENTE/SEGURADORA/CORRETORA precisam do nível mínimo no módulo. Isso é uma
+ * mudança de comportamento real para o usuário de teste AGENTE (`perfilAgenteSuporte`, seed): ele
+ * já tinha só "ver" nesses módulos por desenho do perfil, mas como nada checava o RbacProfile até
+ * agora, ele conseguia editar/excluir livremente por ser INTERNAL_USER — agora fica de fato restrito
+ * a leitura, como o perfil sempre disse que deveria ser.
  */
 function resolveInsurerId(
   req: BackofficeAuthenticatedRequest,
@@ -125,7 +165,7 @@ const DEFAULT_TOKEN_DURATION_MAX_HOURS = 24;
 // GET fica aberto para SEGURADORA (filtrado à carteira dela, via as apólices que a vinculam a um
 // tenant — Tenant não tem insurer_id direto) além de ADM — é o que back listarSegurados() no
 // Portal da Seguradora consome. POST/PUT (acima) seguem exclusivos de ADM.
-router.get('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/tenants', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const ator = req.backoffice;
   if (ator?.actor_type === 'SEGURADORA') {
     if (!ator.insurer_id) {
@@ -300,7 +340,7 @@ router.get('/brokers', (req, res) => res.json({ status: 'sucesso', brokers: dbSt
 // Antes desta rodada, GET/POST/PUT/DELETE aqui não tinham NENHUM filtro por insurer_id — era o
 // maior gap de isolamento entre seguradoras do sistema (uma SEGURADORA autenticada enxergava e
 // editava apólices de qualquer outra). Ver claude/Backlog_Proximos_Passos.md no Project.
-router.get('/policies', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/policies', requirePermission('apolices', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const ator = req.backoffice;
   if (ator?.actor_type === 'SEGURADORA') {
     if (!ator.insurer_id) {
@@ -314,7 +354,7 @@ router.get('/policies', (req: BackofficeAuthenticatedRequest, res) => {
   return res.json({ status: 'sucesso', policies: dbStore.policies });
 });
 
-router.post('/policies', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/policies', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { numero_apolice, ramo, tenant_id, broker_id, co_broker_id, assessoria_id, permitir_inativo_vencido, status, vigencia_inicio, vigencia_fim, lmi, aceita_averbacao_como_destinatario } = req.body;
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
@@ -348,7 +388,7 @@ router.post('/policies', (req: BackofficeAuthenticatedRequest, res) => {
   return res.json({ status: 'sucesso', policy: newPolicy });
 });
 
-router.put('/policies/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/policies/:id', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const policy = dbStore.policies.find((p) => p.id === id);
 
@@ -374,7 +414,7 @@ router.put('/policies/:id', (req: BackofficeAuthenticatedRequest, res) => {
   return res.json({ status: 'sucesso', policy });
 });
 
-router.delete('/policies/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.delete('/policies/:id', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const exists = dbStore.policies.some((p) => p.id === id);
   if (!exists) {
@@ -810,7 +850,7 @@ async function criarEEnviarConvite(
 }
 
 // --- B. Cadastro de Cliente pela Seguradora (cria tenant + apólice, ou detecta conflito) ---
-router.post('/insurer-clients', async (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (req: BackofficeAuthenticatedRequest, res) => {
   const {
     broker_id,
     co_broker_id,
@@ -941,7 +981,7 @@ router.post('/insurer-clients', async (req: BackofficeAuthenticatedRequest, res)
  * primeiro convite expirou (30 dias), foi perdido/caiu em spam, ou o e-mail de contato mudou.
  * O corpo aceita um `email` opcional para reenviar a um endereço diferente do cadastrado.
  */
-router.post('/insurer-clients/:tenantId/reenviar-convite', async (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/insurer-clients/:tenantId/reenviar-convite', requirePermission('clientes', 'editar'), async (req: BackofficeAuthenticatedRequest, res) => {
   const { tenantId } = req.params;
   const { email } = req.body as { email?: string };
 
@@ -972,7 +1012,7 @@ router.post('/insurer-clients/:tenantId/reenviar-convite', async (req: Backoffic
 });
 
 // --- C. Assumir Apólice em Conflito ---
-router.post('/insurer-clients/:tenantId/assume-policy', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/insurer-clients/:tenantId/assume-policy', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { tenantId } = req.params;
   const { broker_id, ramo, numero_apolice, lmi, vigencia_inicio, vigencia_fim, permitir_inativo_vencido, aceita_averbacao_como_destinatario } =
     req.body;
@@ -1000,14 +1040,14 @@ router.post('/insurer-clients/:tenantId/assume-policy', (req: BackofficeAuthenti
 });
 
 // --- D. Coberturas Adicionais da Seguradora (insurer_coverages) ---
-router.get('/insurer-coverages', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/insurer-coverages', requirePermission('coberturas', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
   if (!insurer_id) return;
   const items = dbStore.insurerCoverages.filter((c) => c.insurer_id === insurer_id);
   return res.json({ status: 'sucesso', coverages: items });
 });
 
-router.post('/insurer-coverages', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/insurer-coverages', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { ramo, titulo, exemplo_preenchimento, obrigatoria, aplicar_todos_clientes, tenant_id, tipo_valor } = req.body;
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
@@ -1040,7 +1080,7 @@ router.post('/insurer-coverages', (req: BackofficeAuthenticatedRequest, res) => 
   return res.json({ status: 'sucesso', coverage: newCoverage });
 });
 
-router.put('/insurer-coverages/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/insurer-coverages/:id', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const coverage = dbStore.insurerCoverages.find((c) => c.id === id);
   if (!coverage) {
@@ -1067,7 +1107,7 @@ router.put('/insurer-coverages/:id', (req: BackofficeAuthenticatedRequest, res) 
   return res.json({ status: 'sucesso', coverage });
 });
 
-router.delete('/insurer-coverages/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.delete('/insurer-coverages/:id', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const coverage = dbStore.insurerCoverages.find((c) => c.id === id);
   const ator = req.backoffice;
@@ -1085,7 +1125,7 @@ router.delete('/insurer-coverages/:id', (req: BackofficeAuthenticatedRequest, re
 // --- E. Manutenção em Massa de Apólices ---
 // Sem consumidor no Portal da Seguradora hoje — ferramenta interna, exclusiva de ADM (não filtra
 // por insurer_id, então não pode ser aberta para SEGURADORA sem checar cada policy_id antes).
-router.post('/policies/bulk-update', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/policies/bulk-update', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const { policy_ids, updates } = req.body;
 
@@ -1164,7 +1204,7 @@ router.delete('/rbac-profiles/:id', (req: BackofficeAuthenticatedRequest, res) =
 
 // --- G. Usuários Internos do Tenant (seguradora/corretora/transportador) ---
 // Sem consumidor no Portal da Seguradora hoje — administração interna, exclusiva de ADM.
-router.get('/tenant-users', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/tenant-users', requirePermission('usuarios', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const { tenant_id } = req.query;
   let items = dbStore.tenantUsers;
@@ -1181,7 +1221,7 @@ function gerarSenhaTemporaria(): string {
   return crypto.randomBytes(9).toString('base64url');
 }
 
-router.post('/tenant-users', async (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/tenant-users', requirePermission('usuarios', 'editar'), async (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const { tenant_id, nome, email, rbac_profile_id, is_admin_da_conta } = req.body;
   if (!tenant_id || !nome || !email) {
@@ -1209,7 +1249,7 @@ router.post('/tenant-users', async (req: BackofficeAuthenticatedRequest, res) =>
   return res.json({ status: 'sucesso', user: userSemSenha, senha_temporaria: senhaTemporaria });
 });
 
-router.put('/tenant-users/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/tenant-users/:id', requirePermission('usuarios', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   const user = dbStore.tenantUsers.find((u) => u.id === id);
@@ -1227,7 +1267,7 @@ router.put('/tenant-users/:id', (req: BackofficeAuthenticatedRequest, res) => {
   return res.json({ status: 'sucesso', user: userSemSenha });
 });
 
-router.delete('/tenant-users/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.delete('/tenant-users/:id', requirePermission('usuarios', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
   dbStore.tenantUsers = dbStore.tenantUsers.filter((u) => u.id !== id);
@@ -1239,7 +1279,7 @@ router.delete('/tenant-users/:id', (req: BackofficeAuthenticatedRequest, res) =>
 // insurer_id aqui é filtro opcional para ADM (preserva o comportamento de antes: sem informar,
 // lista de todas as seguradoras) — só é obrigatório e forçado pelo token quando quem chama é
 // uma SEGURADORA.
-router.get('/delegation-permissions', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/delegation-permissions', requirePermission('delegacao_corretora', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { broker_id } = req.query;
   const ator = req.backoffice;
   let items = dbStore.delegationPermissions;
@@ -1257,7 +1297,7 @@ router.get('/delegation-permissions', (req: BackofficeAuthenticatedRequest, res)
   return res.json({ status: 'sucesso', permissions: items });
 });
 
-router.put('/delegation-permissions', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/delegation-permissions', requirePermission('delegacao_corretora', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { broker_id, actions } = req.body;
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
@@ -1294,7 +1334,7 @@ router.put('/delegation-permissions', (req: BackofficeAuthenticatedRequest, res)
 
 // --- Exceções por Segurado (override da matriz de delegação para um tenant específico dentro
 // da carteira de uma corretora) — aba "Exceções por segurado" em Permissões e Autonomia. ---
-router.get('/delegation-exceptions', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/delegation-exceptions', requirePermission('delegacao_corretora', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { broker_id } = req.query;
   const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
   if (!insurer_id) return;
@@ -1305,7 +1345,7 @@ router.get('/delegation-exceptions', (req: BackofficeAuthenticatedRequest, res) 
   return res.json({ status: 'sucesso', exceptions: items });
 });
 
-router.put('/delegation-exceptions', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/delegation-exceptions', requirePermission('delegacao_corretora', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { broker_id, tenant_id, nivel } = req.body;
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
@@ -1339,7 +1379,7 @@ router.put('/delegation-exceptions', (req: BackofficeAuthenticatedRequest, res) 
   return res.json({ status: 'sucesso', exception });
 });
 
-router.delete('/delegation-exceptions/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.delete('/delegation-exceptions/:id', requirePermission('delegacao_corretora', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const exception = dbStore.delegationExceptions.find((e) => e.id === id);
   if (!exception) {
@@ -1361,7 +1401,7 @@ router.delete('/delegation-exceptions/:id', (req: BackofficeAuthenticatedRequest
 // --- I. Fila de Aprovação (ações da corretora sujeitas a requires_approval) ---
 // insurer_id é filtro opcional para ADM (preserva o comportamento de antes) e obrigatório,
 // forçado pelo token, para SEGURADORA — mesmo padrão de GET /delegation-permissions acima.
-router.get('/approval-requests', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/approval-requests', requirePermission('delegacao_corretora', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { status } = req.query;
   const ator = req.backoffice;
   let items = dbStore.approvalRequests;
@@ -1379,7 +1419,7 @@ router.get('/approval-requests', (req: BackofficeAuthenticatedRequest, res) => {
   return res.json({ status: 'sucesso', requests: items });
 });
 
-router.post('/approval-requests/:id/resolve', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/approval-requests/:id/resolve', requirePermission('delegacao_corretora', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const { status, resolved_by } = req.body;
 
@@ -1429,7 +1469,7 @@ router.post('/approval-requests/:id/resolve', (req: BackofficeAuthenticatedReque
 // --- J. Regra de Titularidade v2: Regra A (função no documento) ---
 // policy_id é obrigatório e checado contra a apólice quando quem chama é uma SEGURADORA
 // (policyPertenceAoAtor); ADM continua podendo listar tudo sem informar policy_id.
-router.get('/policy-titularity-rules', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/policy-titularity-rules', requirePermission('apolices', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
   if (req.backoffice?.actor_type === 'SEGURADORA' || policy_id) {
     if (!policyPertenceAoAtor(req, res, policy_id)) return;
@@ -1441,7 +1481,7 @@ router.get('/policy-titularity-rules', (req: BackofficeAuthenticatedRequest, res
   return res.json({ status: 'sucesso', rules: items });
 });
 
-router.put('/policy-titularity-rules', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/policy-titularity-rules', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, funcoes } = req.body;
   if (!policyPertenceAoAtor(req, res, policy_id)) return;
   if (!Array.isArray(funcoes)) {
@@ -1475,7 +1515,7 @@ router.put('/policy-titularity-rules', (req: BackofficeAuthenticatedRequest, res
 });
 
 // --- K. Regra de Titularidade v2: Regra B (bypass por rota/produto) ---
-router.get('/policy-bypass-rules', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/policy-bypass-rules', requirePermission('apolices', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
   if (req.backoffice?.actor_type === 'SEGURADORA' || policy_id) {
     if (!policyPertenceAoAtor(req, res, policy_id)) return;
@@ -1487,7 +1527,7 @@ router.get('/policy-bypass-rules', (req: BackofficeAuthenticatedRequest, res) =>
   return res.json({ status: 'sucesso', rules: items });
 });
 
-router.post('/policy-bypass-rules', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/policy-bypass-rules', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, rota_uf_origem, rota_uf_destino, produto_predominante } = req.body;
   if (!policyPertenceAoAtor(req, res, policy_id)) return;
   if (!rota_uf_origem && !rota_uf_destino && !produto_predominante) {
@@ -1509,7 +1549,7 @@ router.post('/policy-bypass-rules', (req: BackofficeAuthenticatedRequest, res) =
   return res.json({ status: 'sucesso', rule: newRule });
 });
 
-router.delete('/policy-bypass-rules/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.delete('/policy-bypass-rules/:id', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const rule = dbStore.policyBypassRules.find((r) => r.id === id);
   if (rule && !policyPertenceAoAtor(req, res, rule.policy_id)) return;
@@ -1560,14 +1600,14 @@ router.put('/regras-solicitacoes/:id', (req: BackofficeAuthenticatedRequest, res
 // Veículo e Motorista, Prazos e Datas, Região Metropolitana, Valor da Averbação e Averbação
 // Esporádica. NÃO cobre Identificação do Segurado (Regra A/B) — ver policy-titularity-rules
 // e policy-bypass-rules acima, que continuam a fonte real usada pelo motor de averbação. ---
-router.get('/policy-business-settings', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/policy-business-settings', requirePermission('apolices', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
   if (!policyPertenceAoAtor(req, res, policy_id)) return;
   const settings = dbStore.policyBusinessSettings.find((s) => s.policy_id === policy_id);
   return res.json({ status: 'sucesso', settings: settings ?? null });
 });
 
-router.put('/policy-business-settings', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/policy-business-settings', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, config } = req.body;
   if (!policyPertenceAoAtor(req, res, policy_id)) return;
   if (typeof config !== 'object' || config === null) {
@@ -1594,7 +1634,7 @@ router.put('/policy-business-settings', (req: BackofficeAuthenticatedRequest, re
 });
 
 // --- M. Sublimites por Mercadoria (lista por apólice) ---
-router.get('/policy-sublimites', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/policy-sublimites', requirePermission('apolices', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
   if (req.backoffice?.actor_type === 'SEGURADORA' || policy_id) {
     if (!policyPertenceAoAtor(req, res, policy_id)) return;
@@ -1606,7 +1646,7 @@ router.get('/policy-sublimites', (req: BackofficeAuthenticatedRequest, res) => {
   return res.json({ status: 'sucesso', sublimites: items });
 });
 
-router.post('/policy-sublimites', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/policy-sublimites', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, tag, valor } = req.body;
   if (!policyPertenceAoAtor(req, res, policy_id)) return;
   if (!tag) {
@@ -1625,7 +1665,7 @@ router.post('/policy-sublimites', (req: BackofficeAuthenticatedRequest, res) => 
   return res.json({ status: 'sucesso', sublimite: newSublimite });
 });
 
-router.put('/policy-sublimites/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/policy-sublimites/:id', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const sublimite = dbStore.policySublimites.find((s) => s.id === id);
   if (!sublimite) {
@@ -1641,7 +1681,7 @@ router.put('/policy-sublimites/:id', (req: BackofficeAuthenticatedRequest, res) 
   return res.json({ status: 'sucesso', sublimite });
 });
 
-router.delete('/policy-sublimites/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.delete('/policy-sublimites/:id', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const sublimite = dbStore.policySublimites.find((s) => s.id === id);
   if (sublimite && !policyPertenceAoAtor(req, res, sublimite.policy_id)) return;
@@ -1657,14 +1697,14 @@ router.delete('/policy-sublimites/:id', (req: BackofficeAuthenticatedRequest, re
 // apólice com valor R$ X". Distinto de InsurerCoverage, que é só a definição da cobertura.
 // desconta_lmi é persistido mas ainda NÃO é lido pelo AverbacaoService nesta rodada (ver
 // claude/Mapeamento_Portais_e_Personas.md no Project para o porquê). ---
-router.get('/policy-coverage-values', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/policy-coverage-values', requirePermission('coberturas', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
   if (!policyPertenceAoAtor(req, res, policy_id)) return;
   const items = dbStore.policyCoverageValues.filter((v) => v.policy_id === policy_id);
   return res.json({ status: 'sucesso', coverage_values: items });
 });
 
-router.post('/policy-coverage-values', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/policy-coverage-values', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id, insurer_coverage_id, valor, desconta_lmi } = req.body;
   if (!policyPertenceAoAtor(req, res, policy_id)) return;
   if (!insurer_coverage_id) {
@@ -1706,7 +1746,7 @@ router.post('/policy-coverage-values', (req: BackofficeAuthenticatedRequest, res
   return res.json({ status: 'sucesso', coverage_value: newValue });
 });
 
-router.put('/policy-coverage-values/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.put('/policy-coverage-values/:id', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const value = dbStore.policyCoverageValues.find((v) => v.id === id);
   if (!value) {
@@ -1722,7 +1762,7 @@ router.put('/policy-coverage-values/:id', (req: BackofficeAuthenticatedRequest, 
   return res.json({ status: 'sucesso', coverage_value: value });
 });
 
-router.delete('/policy-coverage-values/:id', (req: BackofficeAuthenticatedRequest, res) => {
+router.delete('/policy-coverage-values/:id', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const value = dbStore.policyCoverageValues.find((v) => v.id === id);
   if (!value) {
@@ -1743,7 +1783,7 @@ router.delete('/policy-coverage-values/:id', (req: BackofficeAuthenticatedReques
 // --- N. Dashboard da Seguradora — KPIs escopados por insurer_id (ver arckatechseguradora
 // src/routes/index.tsx). Distinto do /admin/dashboard-stats acima, que é visão GLOBAL
 // (uso interno ARCKATECH, sem escopo de seguradora). ---
-router.get('/insurer-dashboard-stats', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/insurer-dashboard-stats', requirePermission('relatorios', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
   if (!insurer_id) return;
 
@@ -1796,7 +1836,7 @@ router.get('/insurer-dashboard-stats', (req: BackofficeAuthenticatedRequest, res
 // --- O. Consulta de Averbações da Seguradora — todos os segurados da carteira daquele
 // insurer_id, com os mesmos filtros/paginação de tenant.ts GET /averbacoes (visão do
 // próprio transportador), mas aqui agregado pela seguradora. ---
-router.get('/insurer-averbacoes', (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/insurer-averbacoes', requirePermission('relatorios', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { status, tipo_documento, tenant_id, data_de, data_ate } = req.query;
   const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
   if (!insurer_id) return;
