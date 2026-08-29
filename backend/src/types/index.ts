@@ -23,6 +23,14 @@ export interface Tenant {
   client_secret_hash: string;
   role: UserRole;
   token_duration_hours: number;
+  /**
+   * Teto (em horas) até onde a própria seguradora/corretora pode ajustar seu
+   * `token_duration_hours` via `PUT /admin/tenants/me/session-duration` — Fase 5 do item "Login
+   * real + RBAC" (Backlog, seção 4). Só a administração Arckatech pode alterar este campo (ver
+   * `PUT /admin/tenants/:id`). Opcional: quando ausente, vale `DEFAULT_TOKEN_DURATION_MAX_HOURS`
+   * (ver `routes/admin.ts`) — evitou precisar tocar em todo tenant já semeado.
+   */
+  token_duration_max_hours?: number;
   created_at: string;
   // Contato do cliente (usado no cadastro pela seguradora)
   contato_nome?: string;

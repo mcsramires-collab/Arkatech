@@ -113,6 +113,14 @@ function apenasInternalUser(req: BackofficeAuthenticatedRequest, res: Response):
   return false;
 }
 
+/**
+ * Fase 5 do item "Login real + RBAC" (Backlog, seção 4) — teto padrão de `token_duration_hours`
+ * para tenants que nunca tiveram `token_duration_max_hours` customizado por um ADM (ver
+ * `Tenant.token_duration_max_hours` em types/index.ts). Usado por `PUT
+ * /tenants/me/session-duration` abaixo.
+ */
+const DEFAULT_TOKEN_DURATION_MAX_HOURS = 24;
+
 // --- 1. GESTÃO DE CLIENTES / TENANTS (com flag ambiente: teste vs producao) ---
 // GET fica aberto para SEGURADORA (filtrado à carteira dela, via as apólices que a vinculam a um
 // tenant — Tenant não tem insurer_id direto) além de ADM — é o que back listarSegurados() no
@@ -134,7 +142,7 @@ router.get('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
 
 router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
-  const { cnpj, razao_social, ambiente, status, role, token_duration_hours } = req.body;
+  const { cnpj, razao_social, ambiente, status, role, token_duration_hours, token_duration_max_hours } = req.body;
 
   if (!cnpj || !razao_social) {
     return res.status(400).json({ status: 'erro', mensagem: 'CNPJ e Razão Social são obrigatórios.' });
@@ -152,6 +160,7 @@ router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
     client_secret_hash: `secret_${cleanCnpj}`,
     role: role || 'TRANSPORTADOR',
     token_duration_hours: Number(token_duration_hours || 8),
+    ...(token_duration_max_hours ? { token_duration_max_hours: Number(token_duration_max_hours) } : {}),
     created_at: new Date().toISOString()
   };
 
@@ -175,6 +184,7 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
     ambiente,
     razao_social,
     token_duration_hours,
+    token_duration_max_hours,
     nome_fantasia,
     logradouro,
     numero_endereco,
@@ -187,6 +197,16 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
   if (ambiente) tenant.ambiente = ambiente;
   if (razao_social) tenant.razao_social = razao_social;
   if (token_duration_hours) tenant.token_duration_hours = Number(token_duration_hours);
+  // Fase 5 do item "Login real + RBAC" (Backlog, seção 4) — só ADM pode alterar o teto (ver
+  // POST/PUT abaixo, /tenants/me/session-duration, para o autoatendimento da própria
+  // seguradora/corretora). Se o novo teto ficar abaixo da duração atual, a duração é reduzida
+  // junto — nunca deixamos `token_duration_hours` > `token_duration_max_hours`.
+  if (token_duration_max_hours) {
+    tenant.token_duration_max_hours = Number(token_duration_max_hours);
+    if (tenant.token_duration_hours > tenant.token_duration_max_hours) {
+      tenant.token_duration_hours = tenant.token_duration_max_hours;
+    }
+  }
   if (nome_fantasia !== undefined) tenant.nome_fantasia = nome_fantasia;
   if (logradouro !== undefined) tenant.logradouro = logradouro;
   if (numero_endereco !== undefined) tenant.numero_endereco = numero_endereco;
@@ -197,6 +217,79 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
 
   dbStore.persist();
   return res.json({ status: 'sucesso', tenant });
+});
+
+/**
+ * GET /tenants/me — a própria seguradora/corretora consulta o registro do seu Tenant (inclui
+ * `token_duration_hours`/`token_duration_max_hours`) — Fase 5 do item "Login real + RBAC"
+ * (Backlog, seção 4). Distinto de `GET /tenants`, que lista os TENANTS CLIENTE (Transportador)
+ * vinculados à carteira — o Tenant da própria seguradora/corretora nunca aparece ali.
+ */
+router.get('/tenants/me', (req: BackofficeAuthenticatedRequest, res) => {
+  const ator = req.backoffice;
+  if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'CORRETORA') {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Esta área é exclusiva de seguradoras e corretoras autenticadas por login real.'
+    });
+  }
+  if (!ator.tenant_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Seu usuário não está vinculado a nenhuma empresa.' });
+  }
+  const tenant = dbStore.tenants.find((t) => t.id === ator.tenant_id);
+  if (!tenant) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Empresa não localizada.' });
+  }
+  return res.json({
+    status: 'sucesso',
+    tenant: {
+      ...tenant,
+      token_duration_max_hours: tenant.token_duration_max_hours ?? DEFAULT_TOKEN_DURATION_MAX_HOURS
+    }
+  });
+});
+
+/**
+ * PUT /tenants/me/session-duration — autoatendimento: a própria seguradora/corretora ajusta a
+ * duração da SUA sessão (`token_duration_hours`), respeitando o teto que a administração
+ * Arckatech definiu (`token_duration_max_hours`, default `DEFAULT_TOKEN_DURATION_MAX_HOURS`
+ * quando nunca customizado). Fase 5 do item "Login real + RBAC" (Backlog, seção 4) — decisão do
+ * usuário: "ADM define um teto, cada um ajusta dentro dele". Só afeta logins futuros — não existe
+ * hoje nenhum mecanismo para encurtar/estender uma sessão já emitida (JWT stateless, sem estado
+ * de sessão no servidor — ver discussão de revogação na mesma seção do Backlog).
+ */
+router.put('/tenants/me/session-duration', (req: BackofficeAuthenticatedRequest, res) => {
+  const ator = req.backoffice;
+  if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'CORRETORA') {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Esta área é exclusiva de seguradoras e corretoras autenticadas por login real.'
+    });
+  }
+  if (!ator.tenant_id) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Seu usuário não está vinculado a nenhuma empresa.' });
+  }
+  const tenant = dbStore.tenants.find((t) => t.id === ator.tenant_id);
+  if (!tenant) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Empresa não localizada.' });
+  }
+
+  const { token_duration_hours } = req.body;
+  const horas = Number(token_duration_hours);
+  const teto = tenant.token_duration_max_hours ?? DEFAULT_TOKEN_DURATION_MAX_HOURS;
+  if (!token_duration_hours || !Number.isFinite(horas) || horas <= 0) {
+    return res.status(400).json({ status: 'erro', mensagem: 'token_duration_hours é obrigatório e precisa ser um número maior que zero.' });
+  }
+  if (horas > teto) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: `A duração máxima permitida para sua empresa é de ${teto}h. Fale com a administração Arckatech para aumentar esse limite.`
+    });
+  }
+
+  tenant.token_duration_hours = horas;
+  dbStore.persist();
+  return res.json({ status: 'sucesso', tenant: { ...tenant, token_duration_max_hours: teto } });
 });
 
 // --- 2. GESTÃO DE SEGURADORAS & CORRETORAS ---
