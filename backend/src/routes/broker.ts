@@ -70,13 +70,24 @@ function resolveBrokerId(
   return null;
 }
 
+/**
+ * Uma apólice pertence à carteira de um Broker quando ele é a Corretora Líder OU a Co-corretora
+ * OU a Assessoria dela — os três papéis são o mesmo tipo `Broker`, só mudando em qual campo da
+ * `Policy` aparecem (ver types/index.ts). Até esta sessão, todo filtro aqui olhava só para
+ * `broker_id` (líder): uma co-corretora ou assessoria com login próprio (ver `tenant_id` em
+ * `PUT /admin/brokers/:id`) enxergaria a carteira vazia. Backlog, seção 4, "Portal da Corretora".
+ */
+function pertenceACarteira(policy: Policy, brokerId: string): boolean {
+  return policy.broker_id === brokerId || policy.co_broker_id === brokerId || policy.assessoria_id === brokerId;
+}
+
 // --- Carteira de Clientes da Corretora ---
 router.get('/clients', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { insurer_id } = req.query;
   const broker_id = resolveBrokerId(req, res, req.query.broker_id);
   if (!broker_id) return;
 
-  let policies = dbStore.policies.filter((p) => p.broker_id === broker_id);
+  let policies = dbStore.policies.filter((p) => pertenceACarteira(p, broker_id));
   if (insurer_id) policies = policies.filter((p) => p.insurer_id === insurer_id);
 
   const tenantIds = Array.from(new Set(policies.map((p) => p.tenant_id)));
@@ -95,7 +106,7 @@ router.get('/averbacoes', requirePermission('relatorios', 'ver'), (req: Backoffi
   const broker_id = resolveBrokerId(req, res, req.query.broker_id);
   if (!broker_id) return;
 
-  let policies = dbStore.policies.filter((p) => p.broker_id === broker_id);
+  let policies = dbStore.policies.filter((p) => pertenceACarteira(p, broker_id));
   if (insurer_id) policies = policies.filter((p) => p.insurer_id === insurer_id);
   const policyIds = new Set(policies.map((p) => p.id));
 
@@ -301,6 +312,18 @@ router.put('/clients/:tenantId', requirePermission('clientes', 'editar'), (req: 
     return res.status(400).json({ status: 'erro', mensagem: 'insurer_id é obrigatório.' });
   }
 
+  // Achado nesta sessão (Backlog, seção 4, "Portal da Corretora"): esta rota nunca checou se
+  // `tenantId` de fato pertence à carteira de quem chamou — só a matriz de aprovação era
+  // consultada. Sem consumidor de frontend até agora isso nunca foi explorável, mas precisa ser
+  // fechado antes do Portal da Corretora existir de verdade (mesmo padrão de ownership check já
+  // usado em PUT /policies/:id, POST /coverages e PUT /coverages/:id logo abaixo).
+  const pertenceAEstaCarteira = dbStore.policies.some(
+    (p) => p.tenant_id === tenantId && pertenceACarteira(p, broker_id)
+  );
+  if (!pertenceAEstaCarteira) {
+    return res.status(403).json({ status: 'erro', mensagem: 'Este segurado não pertence à carteira desta corretora.' });
+  }
+
   return responderAcaoDelegada(res, insurer_id, broker_id, tenantId, 'EDITAR_CLIENTE', {
     tenant_id: tenantId,
     razao_social,
@@ -365,7 +388,7 @@ router.put('/policies/:id', requirePermission('apolices', 'editar'), (req: Backo
   if (!policy) {
     return res.status(404).json({ status: 'erro', mensagem: 'Apólice não encontrada.' });
   }
-  if (policy.broker_id !== broker_id) {
+  if (!pertenceACarteira(policy, broker_id)) {
     return res.status(403).json({ status: 'erro', mensagem: 'Esta apólice não pertence à carteira desta corretora.' });
   }
 
@@ -396,7 +419,7 @@ router.post('/coverages', requirePermission('coberturas', 'editar'), (req: Backo
   if (!policy) {
     return res.status(404).json({ status: 'erro', mensagem: 'Apólice não encontrada.' });
   }
-  if (policy.broker_id !== broker_id) {
+  if (!pertenceACarteira(policy, broker_id)) {
     return res.status(403).json({ status: 'erro', mensagem: 'Esta cobertura não pertence à carteira desta corretora.' });
   }
 
@@ -423,7 +446,7 @@ router.put('/coverages/:id', requirePermission('coberturas', 'editar'), (req: Ba
     return res.status(404).json({ status: 'erro', mensagem: 'Cobertura ativada não encontrada.' });
   }
   const policy = dbStore.policies.find((p) => p.id === coverageValue.policy_id);
-  if (!policy || policy.broker_id !== broker_id) {
+  if (!policy || !pertenceACarteira(policy, broker_id)) {
     return res.status(403).json({ status: 'erro', mensagem: 'Esta cobertura não pertence à carteira desta corretora.' });
   }
 
@@ -440,7 +463,7 @@ router.get('/relatorio', requirePermission('relatorios', 'ver'), (req: Backoffic
   const broker_id = resolveBrokerId(req, res, req.query.broker_id);
   if (!broker_id) return;
 
-  let policies = dbStore.policies.filter((p) => p.broker_id === broker_id);
+  let policies = dbStore.policies.filter((p) => pertenceACarteira(p, broker_id));
   if (insurer_id) policies = policies.filter((p) => p.insurer_id === insurer_id);
   const tenantIds = Array.from(new Set(policies.map((p) => p.tenant_id)));
 

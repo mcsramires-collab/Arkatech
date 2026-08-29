@@ -1957,8 +1957,43 @@ router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
     corretor_responsavel_nome,
     corretor_responsavel_email,
     corretor_responsavel_telefone_fixo,
-    corretor_responsavel_celular
+    corretor_responsavel_celular,
+    tenant_id
   } = req.body;
+
+  // Portal da Corretora (Backlog, seção 4): concede/revoga login a este Broker vinculando-o a um
+  // Tenant(role=CORRETORA) — mesmo padrão já usado por Insurer.tenant_id para a Seguradora. Vale
+  // para os três papéis que um Broker pode ter numa Policy (líder, co-corretora ou assessoria —
+  // são todos o mesmo tipo `Broker`, só mudando em qual campo aparecem), então este é o único
+  // ponto necessário para dar acesso a qualquer um deles. `tenant_id: null` revoga o acesso sem
+  // apagar o Tenant/TenantUser (fica órfão, igual à seguradora hoje).
+  if (tenant_id !== undefined) {
+    if (tenant_id === null) {
+      delete broker.tenant_id;
+    } else {
+      const tenantAlvo = dbStore.tenants.find((t) => t.id === tenant_id);
+      if (!tenantAlvo) {
+        return res
+          .status(400)
+          .json({ status: 'erro', mensagem: 'tenant_id informado não corresponde a nenhum Tenant existente.' });
+      }
+      if (tenantAlvo.role !== 'CORRETORA') {
+        return res.status(400).json({
+          status: 'erro',
+          mensagem: 'O Tenant vinculado a uma Corretora/Assessoria precisa ter role=CORRETORA.'
+        });
+      }
+      const jaVinculado = dbStore.brokers.find((b) => b.id !== id && b.tenant_id === tenant_id);
+      if (jaVinculado) {
+        return res.status(409).json({
+          status: 'erro',
+          mensagem: `Este Tenant já está vinculado a outra corretora (${jaVinculado.nome_fantasia ?? jaVinculado.nome}).`
+        });
+      }
+      broker.tenant_id = tenant_id;
+    }
+  }
+
   if (cnpj !== undefined) broker.cnpj = cnpj;
   if (razao_social !== undefined) {
     broker.razao_social = razao_social;
