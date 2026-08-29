@@ -9,6 +9,15 @@ import { ResponseEngine } from './responseEngine';
 export interface AverbacaoRequestDTO {
   tenant_id: string;
   ramo: RamoApolice;
+  /**
+   * Opcional — permite ao chamador apontar exatamente qual apólice usar (id), em vez de deixar
+   * o motor resolver por tenant_id + ramo (ver passo 4 de process()). Usado pelo seletor de
+   * apólices ativas do Portal do Segurado (o segurado escolhe a apólice diretamente, não mais só
+   * o ramo) e pela rota de recuperação (`POST /tenant/recovery/:token/corrigir`), que já sabe o
+   * policy_id exato da sessão de recuperação. Quando ausente, mantém o comportamento legado de
+   * resolver por ramo (usado hoje pelas rotas /admin).
+   */
+  policy_id?: string;
   xml_content: string;
   recovery_token?: string;
   supplemented_vars?: Record<string, any>;
@@ -229,32 +238,45 @@ export class AverbacaoService {
       return this.erro('ERR-4005');
     }
 
-    // 4. Buscar a Apólice para o Ramo Solicitado (RCTRC, RCDC, RCV)
+    // 4. Buscar a Apólice a usar
     //
-    // Bug corrigido em 29/08: antes, .find() retornava a PRIMEIRA apólice que batesse
-    // tenant_id + ramo, sem considerar status/vigência. Se o tenant tivesse mais de uma apólice
-    // para o mesmo ramo (ex: uma antiga vencida/inativa e uma nova ativa), o motor podia acabar
-    // pegando a errada mesmo havendo uma apólice ativa de verdade disponível — e o passo 7 abaixo
-    // então recusava por "apólice inativa" (ERR-4003) apesar de existir apólice ativa. Agora
-    // damos preferência explícita a uma apólice ATIVA e dentro da vigência quando houver mais de
-    // uma opção para o mesmo ramo; só caímos numa apólice inativa/vencida se não houver nenhuma
-    // ativa — nesse caso os passos 7+ seguem dando o motivo específico (ERR-4002/4003/4011).
-    const policiesDoRamo = dbStore.policies.filter(
-      (p) => p.tenant_id === tenant.id && p.ramo === dto.ramo
-    );
-    const isPolicyUsavel = (p: Policy) =>
-      p.status === 'ATIVA' &&
-      !(p.vigencia_fim && new Date(p.vigencia_fim).getTime() < Date.now());
-    const policy = policiesDoRamo.find(isPolicyUsavel) || policiesDoRamo[0];
+    // Dois caminhos:
+    // a) policy_id explícito (dto.policy_id) — usado pelo seletor de apólices ativas do Portal
+    //    do Segurado (a pessoa escolhe a apólice diretamente) e pela rota de recuperação, que já
+    //    sabe exatamente qual policy_id a sessão pendente pertence. Resolução direta e sem
+    //    ambiguidade: se o id não existir OU não pertencer a este tenant, é tratado como
+    //    "nenhuma apólice encontrada" (ERR-4016) — nunca vazamos a existência de uma apólice de
+    //    outro tenant através da mensagem de erro.
+    // b) Legado, por ramo (RCTRC, RCDC, RCV) — mantido para quem ainda não migrou para
+    //    policy_id (ex: rotas /admin). Bug corrigido em 29/08: antes, .find() retornava a
+    //    PRIMEIRA apólice que batesse tenant_id + ramo, sem considerar status/vigência. Se o
+    //    tenant tivesse mais de uma apólice para o mesmo ramo (ex: uma antiga vencida/inativa e
+    //    uma nova ativa), o motor podia acabar pegando a errada mesmo havendo uma apólice ativa
+    //    de verdade disponível. Agora damos preferência explícita a uma apólice ATIVA e dentro
+    //    da vigência quando houver mais de uma opção para o mesmo ramo; só caímos numa apólice
+    //    inativa/vencida se não houver nenhuma ativa — nesse caso os passos 7+ seguem dando o
+    //    motivo específico (ERR-4002/4003/4011).
+    let policy: Policy | undefined;
+    if (dto.policy_id) {
+      policy = dbStore.policies.find((p) => p.id === dto.policy_id && p.tenant_id === tenant.id);
+    } else {
+      const policiesDoRamo = dbStore.policies.filter(
+        (p) => p.tenant_id === tenant.id && p.ramo === dto.ramo
+      );
+      const isPolicyUsavel = (p: Policy) =>
+        p.status === 'ATIVA' &&
+        !(p.vigencia_fim && new Date(p.vigencia_fim).getTime() < Date.now());
+      policy = policiesDoRamo.find(isPolicyUsavel) || policiesDoRamo[0];
+    }
 
     if (!policy) {
       // Diferente de ERR-4003 (apólice ENCONTRADA mas com cadastro inativo, ver passo 7): aqui
-      // não existe NENHUMA apólice cadastrada para este tenant+ramo. Código próprio para a
-      // mensagem não confundir "apólice inativa" com "apólice não cadastrada para este ramo" —
-      // achado da auditoria de 29/08 junto com o bug do .find() acima. Como não há policy_id
-      // neste ponto, esta rejeição específica não gera registro em Averbacao/Recusados, no mesmo
-      // padrão já documentado para tenant não encontrado/XML inválido/token de recuperação
-      // inválido (ver persistErro acima).
+      // não existe NENHUMA apólice cadastrada para este tenant+ramo (ou o policy_id informado não
+      // pertence a este tenant). Código próprio para a mensagem não confundir "apólice inativa"
+      // com "apólice não encontrada" — achado da auditoria de 29/08 junto com o bug do .find()
+      // acima. Como não há policy_id resolvido neste ponto, esta rejeição específica não gera
+      // registro em Averbacao/Recusados, no mesmo padrão já documentado para tenant não
+      // encontrado/XML inválido/token de recuperação inválido (ver persistErro acima).
       return this.erro('ERR-4016');
     }
 

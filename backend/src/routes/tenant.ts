@@ -8,7 +8,7 @@ import { AverbacaoService } from '../services/averbacao';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { checkActivated } from '../services/accountActivation';
-import { TenantUser, BusinessRuleRequest, SupportTicket } from '../types';
+import { TenantUser, BusinessRuleRequest, SupportTicket, Policy } from '../types';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -233,6 +233,15 @@ router.get('/policies', authMiddleware, (req: AuthenticatedRequest, res: Respons
 // --- Importação de Documentos Fiscais em Lote (equivalente ao /admin/importar-lote,
 // porém sem tenant_id livre no body: o tenant vem sempre do próprio JWT, então uma
 // empresa jamais consegue importar documentos "em nome" de outro tenant) ---
+//
+// Achado da auditoria de 29/08 (reportado pelo usuário): a tela pedia pra escolher um único
+// "ramo" (dropdown com opções fixas, sem nem listar RCDC corretamente) antes de enviar os XMLs —
+// se o segurado não soubesse de cabeça qual ramo cada documento pertencia, ou tivesse mais de uma
+// apólice ativa candidata, a importação simplesmente falhava com uma mensagem confusa. Agora a
+// pessoa escolhe diretamente quais apólices ATIVAS (já buscadas via GET /tenant/policies) usar —
+// pode marcar mais de uma — e cada arquivo XML é tentado contra CADA apólice selecionada; um
+// mesmo documento pode ser aceito em uma apólice e recusado em outra, e o resultado devolve essa
+// granularidade por combinação (arquivo × apólice) em vez de só por arquivo.
 router.post(
   '/importar-lote',
   authMiddleware,
@@ -242,32 +251,68 @@ router.post(
     const gate = checkActivated(tenantId);
     if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
-    const { ramo } = req.body;
     const files = req.files as Express.Multer.File[] | undefined;
-
-    if (!ramo) {
-      return res.status(400).json({ status: 'erro', mensagem: 'ramo é obrigatório.' });
-    }
     if (!files || files.length === 0) {
       return res.status(400).json({ status: 'erro', mensagem: 'Nenhum arquivo XML foi enviado.' });
     }
 
+    // policy_ids pode chegar como um único campo repetido várias vezes no multipart (multer/
+    // busboy já entrega como array quando o mesmo nome de campo aparece mais de uma vez) ou como
+    // um único valor. Nunca confiamos no id sozinho — sempre resolvido contra o tenant do JWT,
+    // pra uma empresa jamais conseguir averbar contra a apólice de outra.
+    const policyIdsRaw = req.body.policy_ids;
+    const policyIds: string[] = Array.isArray(policyIdsRaw)
+      ? policyIdsRaw.filter((v): v is string => typeof v === 'string' && v.length > 0)
+      : typeof policyIdsRaw === 'string' && policyIdsRaw.length > 0
+        ? [policyIdsRaw]
+        : [];
+
+    if (policyIds.length === 0) {
+      return res
+        .status(400)
+        .json({ status: 'erro', mensagem: 'Selecione ao menos uma apólice (policy_ids) para averbar os documentos.' });
+    }
+
+    const policiesAlvo: Policy[] = policyIds
+      .map((id) => dbStore.policies.find((p) => p.id === id && p.tenant_id === tenantId))
+      .filter((p): p is Policy => Boolean(p));
+
+    if (policiesAlvo.length === 0) {
+      return res
+        .status(400)
+        .json({ status: 'erro', mensagem: 'Nenhuma das apólices informadas foi encontrada para esta empresa.' });
+    }
+
     const appBaseUrl = `${req.protocol}://${req.get('host')}`;
+
     const resultados = files.map((file) => {
       const xmlContent = file.buffer.toString('utf-8');
-      const resultado = AverbacaoService.process({ tenant_id: tenantId, ramo, xml_content: xmlContent }, appBaseUrl);
+      const tentativas = policiesAlvo.map((policy) => {
+        const resultado = AverbacaoService.process(
+          { tenant_id: tenantId, ramo: policy.ramo, policy_id: policy.id, xml_content: xmlContent },
+          appBaseUrl
+        );
+        return {
+          policy_id: policy.id,
+          numero_apolice: policy.numero_apolice,
+          ramo: policy.ramo,
+          status: resultado.status,
+          codigo: resultado.codigo,
+          mensagem: resultado.mensagem,
+          numero_averbacao: resultado.numero_averbacao,
+          variaveis_faltantes: resultado.variaveis_faltantes
+        };
+      });
+      const aceitoEmAlgumaApolice = tentativas.some((t) => t.status === 'sucesso' || t.status === 'aviso');
       return {
         arquivo: file.originalname,
-        status: resultado.status,
-        codigo: resultado.codigo,
-        mensagem: resultado.mensagem,
-        numero_averbacao: resultado.numero_averbacao,
-        variaveis_faltantes: resultado.variaveis_faltantes
+        aceito_em_alguma_apolice: aceitoEmAlgumaApolice,
+        tentativas
       };
     });
 
-    const totalSucesso = resultados.filter((r) => r.status === 'sucesso' || r.status === 'aviso').length;
-    const totalErro = resultados.filter((r) => r.status === 'erro').length;
+    const totalSucesso = resultados.filter((r) => r.aceito_em_alguma_apolice).length;
+    const totalErro = resultados.length - totalSucesso;
 
     return res.json({
       status: 'sucesso',
@@ -475,6 +520,7 @@ router.post('/recovery/:token/corrigir', (req, res) => {
     {
       tenant_id: session.tenant_id,
       ramo: policy.ramo,
+      policy_id: policy.id,
       xml_content: session.raw_xml_content,
       recovery_token: token,
       supplemented_vars
