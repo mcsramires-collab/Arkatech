@@ -229,12 +229,33 @@ export class AverbacaoService {
       return this.erro('ERR-4005');
     }
 
-    // 4. Buscar a Apólice Ativa para o Ramo Solicitado (RCTRC, RCDC, RCV)
-    const policy = dbStore.policies.find(
+    // 4. Buscar a Apólice para o Ramo Solicitado (RCTRC, RCDC, RCV)
+    //
+    // Bug corrigido em 29/08: antes, .find() retornava a PRIMEIRA apólice que batesse
+    // tenant_id + ramo, sem considerar status/vigência. Se o tenant tivesse mais de uma apólice
+    // para o mesmo ramo (ex: uma antiga vencida/inativa e uma nova ativa), o motor podia acabar
+    // pegando a errada mesmo havendo uma apólice ativa de verdade disponível — e o passo 7 abaixo
+    // então recusava por "apólice inativa" (ERR-4003) apesar de existir apólice ativa. Agora
+    // damos preferência explícita a uma apólice ATIVA e dentro da vigência quando houver mais de
+    // uma opção para o mesmo ramo; só caímos numa apólice inativa/vencida se não houver nenhuma
+    // ativa — nesse caso os passos 7+ seguem dando o motivo específico (ERR-4002/4003/4011).
+    const policiesDoRamo = dbStore.policies.filter(
       (p) => p.tenant_id === tenant.id && p.ramo === dto.ramo
     );
+    const isPolicyUsavel = (p: Policy) =>
+      p.status === 'ATIVA' &&
+      !(p.vigencia_fim && new Date(p.vigencia_fim).getTime() < Date.now());
+    const policy = policiesDoRamo.find(isPolicyUsavel) || policiesDoRamo[0];
+
     if (!policy) {
-      return this.erro('ERR-4003');
+      // Diferente de ERR-4003 (apólice ENCONTRADA mas com cadastro inativo, ver passo 7): aqui
+      // não existe NENHUMA apólice cadastrada para este tenant+ramo. Código próprio para a
+      // mensagem não confundir "apólice inativa" com "apólice não cadastrada para este ramo" —
+      // achado da auditoria de 29/08 junto com o bug do .find() acima. Como não há policy_id
+      // neste ponto, esta rejeição específica não gera registro em Averbacao/Recusados, no mesmo
+      // padrão já documentado para tenant não encontrado/XML inválido/token de recuperação
+      // inválido (ver persistErro acima).
+      return this.erro('ERR-4016');
     }
 
     // 4b. Gravação Bruta do XML (Criptografado / Hash SHA-256) - ISO 27001 / LGPD. Feito aqui
