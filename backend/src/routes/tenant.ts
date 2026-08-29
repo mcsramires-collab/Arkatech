@@ -686,7 +686,14 @@ router.get('/dashboard-stats', authMiddleware, (req: AuthenticatedRequest, res: 
   // embarque e o detalhamento por cobertura NÃO são campos extraídos do XML hoje (só o valor total
   // já somado, em valor_considerado_averbacao) — ficam de fora até existir extração real desses
   // dados; o frontend simplesmente não mostra essas colunas na versão real.
-  const ultimasAverbacoes = averbacoesTenant.slice(0, 5).map((a) => {
+  // Achado do usuário em 29/08: documentos recusados (status='ERRO') apareciam misturados com os
+  // averbados nesta lista — "Últimas Averbações" deve mostrar só o que de fato gerou um número
+  // de averbação (status='SUCESSO'). Recusas continuam visíveis nos lugares certos (widget
+  // "Documentos Recusados" da Home, tela dedicada e total_recusadas acima), nunca aqui.
+  const ultimasAverbacoes = averbacoesTenant
+    .filter((a) => a.status === 'SUCESSO')
+    .slice(0, 5)
+    .map((a) => {
     const policy = dbStore.policies.find((p) => p.id === a.policy_id);
     return {
       id: a.id,
