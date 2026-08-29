@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { ResponseEngine } from '../services/responseEngine';
 import { getJwtSecret } from '../utils/jwtSecret';
 import { BackofficeAuthenticatedRequest } from './authMiddleware';
+import { dbStore } from '../services/dbStore';
 
 /**
  * Fase 3 do item "Login real + RBAC" (Backlog, seção 4) — substitui `internalApiKeyMiddleware`
@@ -43,6 +44,11 @@ function tentarAutenticarBearer(req: BackofficeAuthenticatedRequest): boolean {
   try {
     const decoded = jwt.verify(token, getJwtSecret()) as any;
     if (!decoded.actor_type) return false; // token de outro contexto (ex: /auth/token, /portal-login)
+    // Fase 5 (item 3) — revogação: mesmo padrão de backofficeAuthMiddleware.ts — um Bearer
+    // revogado (hoje só via logout real) não autentica aqui também, mesmo que a chave interna
+    // pudesse funcionar como alternativa mais abaixo (não faz sentido "cair" pra outra
+    // autenticação quando o que foi apresentado é um token que a própria pessoa invalidou).
+    if (dbStore.isTokenRevoked(decoded.jti)) return false;
     req.backoffice = {
       actor_type: decoded.actor_type,
       user_id: decoded.user_id,
@@ -52,7 +58,9 @@ function tentarAutenticarBearer(req: BackofficeAuthenticatedRequest): boolean {
       rbac_profile_id: decoded.rbac_profile_id,
       tenant_id: decoded.tenant_id,
       insurer_id: decoded.insurer_id,
-      broker_id: decoded.broker_id
+      broker_id: decoded.broker_id,
+      jti: decoded.jti,
+      exp: decoded.exp
     };
     return true;
   } catch {
