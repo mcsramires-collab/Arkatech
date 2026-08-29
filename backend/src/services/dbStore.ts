@@ -30,7 +30,8 @@ import {
   BusinessRuleRequest,
   PolicyBusinessSettings,
   PolicySublimite,
-  SupportTicket
+  SupportTicket,
+  RevokedToken
 } from '../types';
 
 class DBStore {
@@ -68,10 +69,13 @@ class DBStore {
   public policyCoverageValues: PolicyCoverageValue[] = [];
   // Fase 4 — Tela de Suporte real do Portal do Segurado (backlog item, auditoria de 27/08).
   public supportTickets: SupportTicket[] = [];
+  // Fase 5 (item 3) — Login real + RBAC: revogação de sessão antes do vencimento natural
+  // (ver types/index.ts, RevokedToken, para o desenho completo).
+  public revokedTokens: RevokedToken[] = [];
 
   // Por padrão, grava dentro da própria pasta de build (comportamento antigo, ok para dev local).
   // Em produção, defina a env var DATA_DIR apontando para um diretório com volume persistente
-  // mapeado no orquestrador (ex. Easypanel), para o dado sobreviver a reinícios/deploys do
+  // mapeado no orquestrador (ex. Easypanel), para o dado sobreviver a reinicios/deploys do
   // container — sem isso, tudo em memória é perdido a cada novo deploy.
   private filePath = path.join(
     process.env.DATA_DIR || path.join(__dirname, '../../'),
@@ -115,6 +119,7 @@ class DBStore {
         this.delegationExceptions = parsed.delegationExceptions || [];
         this.policyCoverageValues = parsed.policyCoverageValues || [];
         this.supportTickets = parsed.supportTickets || [];
+        this.revokedTokens = parsed.revokedTokens || [];
 
         if (this.ensureDefaultResponseTemplates()) {
           this.persist();
@@ -190,7 +195,8 @@ class DBStore {
             policySublimites: this.policySublimites,
             delegationExceptions: this.delegationExceptions,
             policyCoverageValues: this.policyCoverageValues,
-            supportTickets: this.supportTickets
+            supportTickets: this.supportTickets,
+            revokedTokens: this.revokedTokens
           },
           null,
           2
@@ -200,6 +206,32 @@ class DBStore {
     } catch (err) {
       console.error('Erro ao salvar no data_store.json:', err);
     }
+  }
+
+  /**
+   * Fase 5 (item 3) do "Login real + RBAC" — revoga um token de backoffice antes do vencimento
+   * natural (hoje só chamado no logout real, `POST /auth/backoffice-logout`). Aproveita a
+   * chamada para descartar de passagem qualquer entrada já expirada (limpeza preguiçosa, sem
+   * precisar de um job/cron separado — a lista nunca cresce além dos tokens de backoffice
+   * emitidos e ainda não vencidos que alguém efetivamente revogou).
+   */
+  public revokeToken(jti: string, expiresAtMs: number, userId: string | undefined, motivo: string) {
+    const agora = Date.now();
+    this.revokedTokens = this.revokedTokens.filter((rt) => rt.expires_at > agora);
+    this.revokedTokens.push({ jti, expires_at: expiresAtMs, revoked_at: agora, user_id: userId, motivo });
+    this.persist();
+  }
+
+  /**
+   * Checa se um `jti` de token de backoffice foi revogado — chamado a cada requisição autenticada
+   * via Bearer em `backofficeAuthMiddleware`/`backofficeOrInternalKeyMiddleware`, junto da
+   * verificação de assinatura do JWT. Não muta `revokedTokens` (checagem tem que ser barata e
+   * síncrona no meio do middleware) — a limpeza de entradas vencidas acontece em `revokeToken`.
+   */
+  public isTokenRevoked(jti: string | undefined): boolean {
+    if (!jti) return false;
+    const agora = Date.now();
+    return this.revokedTokens.some((rt) => rt.jti === jti && rt.expires_at > agora);
   }
 
   /**
