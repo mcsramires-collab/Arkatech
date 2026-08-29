@@ -444,6 +444,18 @@ class DBStore {
       },
       {
         id: uuidv4(),
+        codigo: 'ERR-4016',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao: 'ERRO 4016: Nenhuma apólice foi localizada para o ramo informado vinculada ao seu CNPJ.',
+        texto_customizado: 'ERRO 4016: Nenhuma apólice foi localizada para o ramo informado vinculada ao seu CNPJ.',
+        placeholders: [],
+        explicacao_nao_tecnica: 'Não encontramos nenhuma apólice cadastrada para o ramo selecionado vinculada à sua empresa — diferente de uma apólice inativa, aqui não existe nenhum cadastro para este ramo.',
+        orientacao_correcao: 'Confirme com sua seguradora/corretora se existe uma apólice cadastrada para este ramo, ou selecione o ramo correto ao enviar o documento.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
         codigo: 'ERR-4014',
         tipo: 'erro',
         categoria: 'APOLICE',
