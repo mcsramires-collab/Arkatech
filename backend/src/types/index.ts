@@ -192,7 +192,7 @@ export interface Averbacao {
   cnpj_remetente?: string;
   cnpj_destinatario?: string;
   cnpj_tomador?: string;
-  protocolo_aceitacao_sefaz?: string; // nProt do protXXX/infProt do XML, usado na dedupção
+  protocolo_aceitacao_sefaz?: string; // nProt do protXXX/infProt do XML, usado na deduplicação
   raw_xml_id: string;
   recovery_token?: string;
   ambiente: TenantEnvironment;
@@ -501,7 +501,6 @@ export interface RevokedToken {
    *  não usado para autorizar nada. */
   user_id?: string;
   /** Motivo da revogação — hoje só 'logout', mas o campo já existe para futuros motivos
-   *  (ex.: desativação de usuário, "sair de todos os dispositivos" — ver Backlog).
-   */
+   *  (ex.: desativação de usuário, "sair de todos os dispositivos" — ver Backlog). */
   motivo: string;
 }

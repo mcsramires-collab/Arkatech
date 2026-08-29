@@ -75,7 +75,7 @@ class DBStore {
 
   // Por padrão, grava dentro da própria pasta de build (comportamento antigo, ok para dev local).
   // Em produção, defina a env var DATA_DIR apontando para um diretório com volume persistente
-  // mapeado no orquestrador (ex. Easypanel), para o dado sobreviver a reinicios/deploys do
+  // mapeado no orquestrador (ex. Easypanel), para o dado sobreviver a reinícios/deploys do
   // container — sem isso, tudo em memória é perdido a cada novo deploy.
   private filePath = path.join(
     process.env.DATA_DIR || path.join(__dirname, '../../'),
