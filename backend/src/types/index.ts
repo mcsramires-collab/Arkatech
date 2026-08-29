@@ -192,7 +192,7 @@ export interface Averbacao {
   cnpj_remetente?: string;
   cnpj_destinatario?: string;
   cnpj_tomador?: string;
-  protocolo_aceitacao_sefaz?: string; // nProt do protXXX/infProt do XML, usado na deduplicação
+  protocolo_aceitacao_sefaz?: string; // nProt do protXXX/infProt do XML, usado na dedupção
   raw_xml_id: string;
   recovery_token?: string;
   ambiente: TenantEnvironment;
@@ -471,4 +471,37 @@ export interface PolicySublimite {
   tag: string;
   valor: string;
   created_at: string;
+}
+
+// ===================== REVOGAÇÃO DE SESSÃO (LOGIN REAL + RBAC, FASE 5 — ITEM 3) =====================
+
+/**
+ * Registro de um token de backoffice (emitido por `POST /auth/backoffice-login`) revogado antes
+ * do vencimento natural — item 3 da Fase 5 do "Login real + RBAC" (Backlog, seção 4). O sistema
+ * é stateless por padrão (JWT sem nenhum registro no servidor); esta lista é o único estado do
+ * lado do servidor, e existe só para os `jti` explicitamente revogados — a imensa maioria dos
+ * tokens nunca aparece aqui, e cada entrada pode ser descartada com segurança assim que
+ * `expires_at` passa (ver `DBStore.isTokenRevoked`/`DBStore.revokeToken`, que fazem essa limpeza
+ * de forma preguiçosa a cada chamada, sem precisar de um job separado).
+ *
+ * Desenho escolhido (opção "a" do desenho mapeado no Backlog): lista de `jti` revogados, não uma
+ * tabela completa de sessões ativas (opção "b", mais completa — permitiria listar "onde estou
+ * logado" e "sair de todos os dispositivos", mas não foi pedida agora). Resolve o caso de uso
+ * confirmado: logout que de fato invalida o token no servidor, não só localmente.
+ */
+export interface RevokedToken {
+  /** Claim `jti` do JWT revogado — identificador único gerado em cada emissão (ver auth.ts). */
+  jti: string;
+  /** Epoch ms igual ao `exp` do próprio token — permite descartar a entrada quando o token já
+   *  expiraria de qualquer forma, sem checar revogação para sempre. */
+  expires_at: number;
+  /** Epoch ms de quando a revogação foi registrada (auditoria/depuração). */
+  revoked_at: number;
+  /** `BackofficeAuthenticatedRequest['backoffice'].user_id` de quem era dono do token — auditoria;
+   *  não usado para autorizar nada. */
+  user_id?: string;
+  /** Motivo da revogação — hoje só 'logout', mas o campo já existe para futuros motivos
+   *  (ex.: desativação de usuário, "sair de todos os dispositivos" — ver Backlog).
+   */
+  motivo: string;
 }
