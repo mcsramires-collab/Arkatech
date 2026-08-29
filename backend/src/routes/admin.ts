@@ -1910,6 +1910,44 @@ router.get('/insurer-averbacoes', requirePermission('relatorios', 'ver'), (req: 
 // `PUT /tenants/:id` e nas demais ~15 rotas administrativas sem consumidor real no frontend hoje)
 // — uma SEGURADORA ou CORRETORA autenticada não pode mais criar/editar/excluir Broker nenhum.
 // Não muda o modelo de dados (Broker continua sem insurer_id) nem a tela de seleção do frontend. ---
+/**
+ * Concede (`tenantId` = id de um Tenant role=CORRETORA) ou revoga (`tenantId` = null) o login de
+ * Portal da Corretora de um Broker, vinculando/desvinculando `Broker.tenant_id` — mesma validação
+ * usada por `PUT /brokers/:id` (ADM, sem restrição de carteira) e pela nova `PUT
+ * /brokers/:id/portal-access` (SEGURADORA, restrita à própria carteira — ver abaixo). Extraído para
+ * função só nesta sessão para as duas rotas não divergirem quando uma delas mudar.
+ */
+function concederOuRevogarAcessoBroker(
+  broker: Broker,
+  tenantId: string | null
+): { ok: true } | { ok: false; status: number; mensagem: string } {
+  if (tenantId === null) {
+    delete broker.tenant_id;
+    return { ok: true };
+  }
+  const tenantAlvo = dbStore.tenants.find((t) => t.id === tenantId);
+  if (!tenantAlvo) {
+    return { ok: false, status: 400, mensagem: 'tenant_id informado não corresponde a nenhum Tenant existente.' };
+  }
+  if (tenantAlvo.role !== 'CORRETORA') {
+    return {
+      ok: false,
+      status: 400,
+      mensagem: 'O Tenant vinculado a uma Corretora/Assessoria precisa ter role=CORRETORA.'
+    };
+  }
+  const jaVinculado = dbStore.brokers.find((b) => b.id !== broker.id && b.tenant_id === tenantId);
+  if (jaVinculado) {
+    return {
+      ok: false,
+      status: 409,
+      mensagem: `Este Tenant já está vinculado a outra corretora (${jaVinculado.nome_fantasia ?? jaVinculado.nome}).`
+    };
+  }
+  broker.tenant_id = tenantId;
+  return { ok: true };
+}
+
 router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const {
@@ -1966,31 +2004,13 @@ router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
   // para os três papéis que um Broker pode ter numa Policy (líder, co-corretora ou assessoria —
   // são todos o mesmo tipo `Broker`, só mudando em qual campo aparecem), então este é o único
   // ponto necessário para dar acesso a qualquer um deles. `tenant_id: null` revoga o acesso sem
-  // apagar o Tenant/TenantUser (fica órfão, igual à seguradora hoje).
+  // apagar o Tenant/TenantUser (fica órfão, igual à seguradora hoje). Esta rota continua exclusiva
+  // de ADM (sem restrição de carteira) — para a SEGURADORA conceder/revogar acesso apenas às
+  // corretoras da própria carteira, ver a nova `PUT /brokers/:id/portal-access` abaixo.
   if (tenant_id !== undefined) {
-    if (tenant_id === null) {
-      delete broker.tenant_id;
-    } else {
-      const tenantAlvo = dbStore.tenants.find((t) => t.id === tenant_id);
-      if (!tenantAlvo) {
-        return res
-          .status(400)
-          .json({ status: 'erro', mensagem: 'tenant_id informado não corresponde a nenhum Tenant existente.' });
-      }
-      if (tenantAlvo.role !== 'CORRETORA') {
-        return res.status(400).json({
-          status: 'erro',
-          mensagem: 'O Tenant vinculado a uma Corretora/Assessoria precisa ter role=CORRETORA.'
-        });
-      }
-      const jaVinculado = dbStore.brokers.find((b) => b.id !== id && b.tenant_id === tenant_id);
-      if (jaVinculado) {
-        return res.status(409).json({
-          status: 'erro',
-          mensagem: `Este Tenant já está vinculado a outra corretora (${jaVinculado.nome_fantasia ?? jaVinculado.nome}).`
-        });
-      }
-      broker.tenant_id = tenant_id;
+    const resultado = concederOuRevogarAcessoBroker(broker, tenant_id);
+    if (!resultado.ok) {
+      return res.status(resultado.status).json({ status: 'erro', mensagem: resultado.mensagem });
     }
   }
 
@@ -2033,5 +2053,77 @@ router.delete('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
   dbStore.persist();
   return res.json({ status: 'sucesso', mensagem: 'Corretora/Assessoria removida com sucesso.' });
 });
+
+/**
+ * Portal da Corretora (Backlog, seção 4) — decisão tomada com o usuário nesta sessão: quem pode
+ * conceder/revogar o acesso de uma corretora/co-corretora/assessoria ao portal é tanto o ADM da
+ * Arckatech (via `PUT /brokers/:id` acima, sem restrição) quanto a própria SEGURADORA, mas neste
+ * segundo caso só para corretoras que já estão na carteira dela (têm ao menos uma apólice em
+ * comum) — mesmo padrão de isolamento de `resolveInsurerId`/`policyPertenceAoAtor` usados no resto
+ * deste arquivo. Rota separada de `PUT /brokers/:id` de propósito: o CRUD completo do cadastro
+ * (cnpj, razão social, etc.) continua exclusivo de ADM (decisão de escopo já registrada no
+ * comentário da seção P, acima) — abrir esta ação para SEGURADORA não reabre aquele.
+ *
+ * Módulo RBAC escolhido: `delegacao_corretora` — é o mesmo que já rege "Permissões e Autonomia"
+ * (`/delegation-permissions`) e a fila de aprovação (`/approval-requests`), e conceitualmente
+ * conceder/revogar login de uma corretora é outra forma de controlar até onde ela chega — não é um
+ * módulo novo. `requirePermission` cobre o nível mínimo (ADM sempre passa; AGENTE/SEGURADORA
+ * precisam de "editar" em `delegacao_corretora` no próprio RbacProfile).
+ */
+router.put(
+  '/brokers/:id/portal-access',
+  requirePermission('delegacao_corretora', 'editar'),
+  (req: BackofficeAuthenticatedRequest, res) => {
+    const ator = req.backoffice;
+    if (!ator) {
+      return res.status(401).json({ status: 'erro', mensagem: 'Autenticação de backoffice ausente.' });
+    }
+
+    const { id } = req.params;
+    const broker = dbStore.brokers.find((b) => b.id === id);
+    if (!broker) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Corretora/Assessoria não encontrada.' });
+    }
+
+    if (ator.actor_type === 'SEGURADORA') {
+      if (!ator.insurer_id) {
+        return res.status(403).json({
+          status: 'erro',
+          mensagem: 'Seu usuário não está vinculado a nenhuma seguradora — sem acesso a esta área.'
+        });
+      }
+      const pertenceACarteiraDaSeguradora = dbStore.policies.some(
+        (p) => p.insurer_id === ator.insurer_id && (p.broker_id === id || p.co_broker_id === id || p.assessoria_id === id)
+      );
+      if (!pertenceACarteiraDaSeguradora) {
+        return res.status(403).json({
+          status: 'erro',
+          mensagem: 'Esta corretora/assessoria não está vinculada a nenhuma apólice da sua seguradora.'
+        });
+      }
+    } else if (ator.actor_type !== 'INTERNAL_USER') {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.'
+      });
+    }
+
+    const { tenant_id } = req.body;
+    if (tenant_id === undefined || (tenant_id !== null && typeof tenant_id !== 'string')) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'tenant_id é obrigatório: string (id do Tenant role=CORRETORA) para conceder, ou null para revogar.'
+      });
+    }
+
+    const resultado = concederOuRevogarAcessoBroker(broker, tenant_id);
+    if (!resultado.ok) {
+      return res.status(resultado.status).json({ status: 'erro', mensagem: resultado.mensagem });
+    }
+
+    dbStore.persist();
+    return res.json({ status: 'sucesso', broker });
+  }
+);
 
 export default router;
