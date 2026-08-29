@@ -1809,7 +1809,12 @@ router.get('/insurer-dashboard-stats', requirePermission('relatorios', 'ver'), (
   }).length;
 
   const policyIdsDaSeguradora = new Set(policiesDaSeguradora.map((p) => p.id));
-  const averbacoesDaSeguradora = dbStore.averbacoes.filter((a) => policyIdsDaSeguradora.has(a.policy_id));
+  // Achado do usuário em 29/08: "Averbações no mês" contava TODAS as averbações da seguradora,
+  // inclusive as recusadas (status='ERRO') — um documento recusado nunca deveria ser contado
+  // aqui, só os que de fato geraram um número de averbação (status='SUCESSO').
+  const averbacoesDaSeguradora = dbStore.averbacoes.filter(
+    (a) => policyIdsDaSeguradora.has(a.policy_id) && a.status === 'SUCESSO'
+  );
 
   const agora = new Date();
   const inicioMesAtual = new Date(agora.getFullYear(), agora.getMonth(), 1);
