@@ -432,14 +432,14 @@ class DBStore {
         tipo: 'erro',
         categoria: 'APOLICE',
         texto_padrao:
-          "ERRO 4013: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o sublimite configurado para a mercadoria '[MERCADORIA]' (R$ [SUBLIMITE]).",
+          'ERRO 4013: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o sublimite configurado para [MERCADORIA] (R$ [SUBLIMITE]).',
         texto_customizado:
-          "ERRO 4013: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o sublimite configurado para a mercadoria '[MERCADORIA]' (R$ [SUBLIMITE]).",
+          'ERRO 4013: O valor considerado para a averbação (R$ [VALOR_AVERBACAO]) ultrapassa o sublimite configurado para [MERCADORIA] (R$ [SUBLIMITE]).',
         placeholders: ['[VALOR_AVERBACAO]', '[MERCADORIA]', '[SUBLIMITE]'],
         explicacao_nao_tecnica:
-          'O valor da carga deste documento é maior do que o limite específico contratado para este tipo de mercadoria.',
+          'O valor da carga deste documento é maior do que o limite específico configurado para esta condição (mercadoria e/ou tomador).',
         orientacao_correcao:
-          'Confirme o valor declarado no documento, ou fale com sua seguradora/corretora para avaliar um aumento do sublimite contratado para esta mercadoria.',
+          'Confirme o valor declarado no documento, ou fale com sua seguradora/corretora para avaliar um aumento deste sublimite.',
         updated_at: new Date().toISOString()
       },
       {
