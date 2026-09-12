@@ -477,37 +477,71 @@ export class AverbacaoService {
       });
     }
 
-    // 9c. Sublimite por Mercadoria (aba "Sublimites por Mercadoria" da Ficha do Segurado) — achado
-    // da auditoria de 28/08: acima do LMI da apólice inteira, a seguradora pode cadastrar um teto
-    // menor para uma mercadoria específica, mas isso nunca era comparado com o valor da averbação
-    // aqui. Só aplica quando o produto predominante do documento (proPred, hoje só extraído de
-    // CT-e) bate EXATAMENTE (sem distinguir maiúsculas/acentos) com a palavra-chave cadastrada —
-    // optamos por correspondência exata, não por substring, para não recusar uma averbação por
-    // coincidência de texto livre; correspondência mais ampla (ex: por catálogo de produtos) fica
-    // para uma iteração futura combinada com o produto.
-    if (parsedDoc.produtoPredominante) {
-      const normalizeProduto = (v: string) =>
-        v
-          .normalize('NFD')
-          .replace(/[̀-ͯ]/g, '')
-          .trim()
-          .toLowerCase();
-      const produtoNormalizado = normalizeProduto(parsedDoc.produtoPredominante);
-      const sublimite = dbStore.policySublimites.find(
-        (s) => s.policy_id === policy.id && normalizeProduto(s.tag) === produtoNormalizado
-      );
-      if (sublimite) {
-        const valorSublimite = RuleEngineService.parseMoneyBR(sublimite.valor);
-        if (!isNaN(valorSublimite) && valorConsiderado > valorSublimite) {
-          const replacements = {
-            VALOR_AVERBACAO: valorConsiderado.toFixed(2),
-            MERCADORIA: sublimite.tag,
-            SUBLIMITE: valorSublimite.toFixed(2)
-          };
-          const fmt = ResponseEngine.formatResponse('ERR-4013', replacements);
-          this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
-          return this.erro('ERR-4013', replacements);
-        }
+    // 9c. Sublimites (aba "Sublimites" da Ficha do Segurado) — achado da auditoria de 28/08: acima
+    // do LMI da apólice inteira, a seguradora pode cadastrar um teto menor para uma condição mais
+    // específica, mas isso nunca era comparado com o valor da averbação aqui. Ampliado em 05/09
+    // (item D-10 do relatório técnico do wizard de cadastro, compartilhado pelo usuário): a
+    // seguradora agora pode cadastrar um sublimite por mercadoria (como antes), por CNPJ do
+    // tomador, ou pela combinação dos dois — quando mais de um bate com o mesmo documento, a
+    // condição mais específica prevalece: tomador_mercadoria > tomador > mercadoria. A
+    // comparação de mercadoria continua exigindo correspondência EXATA da palavra-chave (sem
+    // distinguir maiúsculas/acentos) com o produto predominante do documento (proPred, hoje só
+    // extraído de CT-e) — não por substring, para não recusar uma averbação por coincidência de
+    // texto livre. `tipo_condicao` ausente (sublimites cadastrados antes do D-10) é tratado como
+    // 'mercadoria', preservando o comportamento anterior.
+    const normalizeProduto = (v: string) =>
+      v
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .trim()
+        .toLowerCase();
+    const produtoNormalizado = parsedDoc.produtoPredominante
+      ? normalizeProduto(parsedDoc.produtoPredominante)
+      : undefined;
+    const cnpjTomadorDoc = norm(parsedDoc.cnpjTomador);
+
+    const PRIORIDADE_TIPO_CONDICAO: Record<string, number> = {
+      tomador_mercadoria: 3,
+      tomador: 2,
+      mercadoria: 1
+    };
+
+    const sublimitesCandidatos = dbStore.policySublimites.filter((s) => {
+      if (s.policy_id !== policy.id) return false;
+      const tipo = s.tipo_condicao ?? 'mercadoria';
+      const mercadoriaBate =
+        produtoNormalizado !== undefined && s.tag !== undefined && normalizeProduto(s.tag) === produtoNormalizado;
+      const tomadorBate = cnpjTomadorDoc !== undefined && norm(s.cnpj_tomador) === cnpjTomadorDoc;
+
+      if (tipo === 'mercadoria') return mercadoriaBate;
+      if (tipo === 'tomador') return tomadorBate;
+      return mercadoriaBate && tomadorBate; // tomador_mercadoria — os dois precisam bater
+    });
+
+    const sublimite = sublimitesCandidatos.sort(
+      (a, b) =>
+        PRIORIDADE_TIPO_CONDICAO[b.tipo_condicao ?? 'mercadoria'] -
+        PRIORIDADE_TIPO_CONDICAO[a.tipo_condicao ?? 'mercadoria']
+    )[0];
+
+    if (sublimite) {
+      const valorSublimite = RuleEngineService.parseMoneyBR(sublimite.valor);
+      if (!isNaN(valorSublimite) && valorConsiderado > valorSublimite) {
+        const tipoSublimite = sublimite.tipo_condicao ?? 'mercadoria';
+        const descricaoCondicao =
+          tipoSublimite === 'tomador'
+            ? `tomador ${sublimite.cnpj_tomador}`
+            : tipoSublimite === 'tomador_mercadoria'
+              ? `tomador ${sublimite.cnpj_tomador} + mercadoria '${sublimite.tag}'`
+              : `mercadoria '${sublimite.tag}'`;
+        const replacements = {
+          VALOR_AVERBACAO: valorConsiderado.toFixed(2),
+          MERCADORIA: descricaoCondicao,
+          SUBLIMITE: valorSublimite.toFixed(2)
+        };
+        const fmt = ResponseEngine.formatResponse('ERR-4013', replacements);
+        this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+        return this.erro('ERR-4013', replacements);
       }
     }
 
