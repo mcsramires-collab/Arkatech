@@ -189,6 +189,7 @@ export interface Averbacao {
   chave_documento: string;
   numero_documento?: string; // número "de mercado" do próprio documento (nCT/nNF/nMDF), não o número da averbação
   serie_documento?: string; // ide.serie do CT-e/NF-e/MDF-e
+  cnpj_emissor?: string; // emit.CNPJ do documento — já extraído pelo XMLParser (usado na checagem de titularidade), só não era persistido até 05/09
   cnpj_remetente?: string;
   cnpj_destinatario?: string;
   cnpj_tomador?: string;
