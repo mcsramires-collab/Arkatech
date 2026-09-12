@@ -463,14 +463,29 @@ export interface PolicyBusinessSettings {
 }
 
 /**
- * Sublimite de cobertura por palavra-chave de mercadoria, específico de uma apólice
- * (aba "Sublimites por Mercadoria" da Ficha do Segurado).
+ * Tipo de condição de um sublimite — item D-10 do relatório técnico do wizard de cadastro
+ * (31/08, compartilhado pelo usuário): antes só existia por mercadoria (tag); agora também pode
+ * ser por CNPJ do tomador, ou pela combinação dos dois. Quando mais de um sublimite bate com o
+ * mesmo documento, a condição mais específica prevalece — ver `RuleEngineService`/checagem em
+ * `AverbacaoService.process()` (passo 9c): tomador_mercadoria > tomador > mercadoria.
+ */
+export type TipoCondicaoSublimite = 'mercadoria' | 'tomador' | 'tomador_mercadoria';
+
+/**
+ * Sublimite de cobertura, específico de uma apólice (aba "Sublimites" da Ficha do Segurado).
+ * `tag` (palavra-chave de mercadoria) é obrigatória para `tipo_condicao` 'mercadoria' e
+ * 'tomador_mercadoria', mas ausente para 'tomador' puro. `cnpj_tomador` é obrigatório para
+ * 'tomador' e 'tomador_mercadoria', ausente para 'mercadoria' puro — ver validação em
+ * `POST /admin/policy-sublimites`.
  */
 export interface PolicySublimite {
   id: string;
   policy_id: string;
-  tag: string;
+  tag?: string;
   valor: string;
+  /** Ausente = 'mercadoria', para compatibilidade com sublimites cadastrados antes do D-10. */
+  tipo_condicao?: TipoCondicaoSublimite;
+  cnpj_tomador?: string;
   created_at: string;
 }
 
