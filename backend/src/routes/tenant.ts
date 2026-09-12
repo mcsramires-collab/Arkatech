@@ -369,8 +369,10 @@ router.get('/averbacoes', authMiddleware, (req: AuthenticatedRequest, res: Respo
 
   const items = filtered.slice(startIndex, startIndex + pageSize).map((a) => {
     const template = dbStore.responseTemplates.find((t) => t.codigo === a.codigo_resposta);
+    const policy = dbStore.policies.find((p) => p.id === a.policy_id);
     return {
       ...a,
+      ramo: policy?.ramo,
       explicacao_nao_tecnica: template?.explicacao_nao_tecnica
     };
   });
