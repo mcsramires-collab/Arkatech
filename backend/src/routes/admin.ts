@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite, Broker, DelegationException, DelegationExceptionLevel, PolicyCoverageValue } from '../types';
+import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, Broker, DelegationException, DelegationExceptionLevel, PolicyCoverageValue } from '../types';
 import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { PurgeService } from '../services/purgeService';
@@ -1633,7 +1633,10 @@ router.put('/policy-business-settings', requirePermission('apolices', 'editar'),
   return res.json({ status: 'sucesso', settings });
 });
 
-// --- M. Sublimites por Mercadoria (lista por apólice) ---
+// --- M. Sublimites (lista por apólice) — ver PolicySublimite/TipoCondicaoSublimite em
+// types/index.ts (item D-10 do relatório técnico do wizard de cadastro, compartilhado pelo
+// usuário em 05/09): antes só aceitava { tag, valor } (sublimite por mercadoria); agora também
+// aceita tipo_condicao ('mercadoria' | 'tomador' | 'tomador_mercadoria') e cnpj_tomador. ---
 router.get('/policy-sublimites', requirePermission('apolices', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { policy_id } = req.query;
   if (req.backoffice?.actor_type === 'SEGURADORA' || policy_id) {
@@ -1647,17 +1650,33 @@ router.get('/policy-sublimites', requirePermission('apolices', 'ver'), (req: Bac
 });
 
 router.post('/policy-sublimites', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
-  const { policy_id, tag, valor } = req.body;
+  const { policy_id, tag, valor, tipo_condicao, cnpj_tomador } = req.body;
   if (!policyPertenceAoAtor(req, res, policy_id)) return;
-  if (!tag) {
-    return res.status(400).json({ status: 'erro', mensagem: 'tag é obrigatório.' });
+
+  const tipo: TipoCondicaoSublimite = tipo_condicao || 'mercadoria';
+  const tiposValidos: TipoCondicaoSublimite[] = ['mercadoria', 'tomador', 'tomador_mercadoria'];
+  if (!tiposValidos.includes(tipo)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: "tipo_condicao deve ser 'mercadoria', 'tomador' ou 'tomador_mercadoria'."
+    });
+  }
+  // tag é obrigatória para condições que envolvem mercadoria; cnpj_tomador para as que envolvem
+  // tomador. 'tomador' puro não exige tag; 'mercadoria' pura não exige cnpj_tomador.
+  if ((tipo === 'mercadoria' || tipo === 'tomador_mercadoria') && !tag) {
+    return res.status(400).json({ status: 'erro', mensagem: 'tag é obrigatória para este tipo_condicao.' });
+  }
+  if ((tipo === 'tomador' || tipo === 'tomador_mercadoria') && !cnpj_tomador) {
+    return res.status(400).json({ status: 'erro', mensagem: 'cnpj_tomador é obrigatório para este tipo_condicao.' });
   }
 
   const newSublimite: PolicySublimite = {
     id: uuidv4(),
     policy_id,
-    tag,
+    tag: tag || undefined,
     valor: valor || 'R$ 0,00',
+    tipo_condicao: tipo,
+    cnpj_tomador: cnpj_tomador || undefined,
     created_at: new Date().toISOString()
   };
   dbStore.policySublimites.push(newSublimite);
@@ -1673,9 +1692,30 @@ router.put('/policy-sublimites/:id', requirePermission('apolices', 'editar'), (r
   }
   if (!policyPertenceAoAtor(req, res, sublimite.policy_id)) return;
 
-  const { tag, valor } = req.body;
-  if (tag !== undefined) sublimite.tag = tag;
+  const { tag, valor, tipo_condicao, cnpj_tomador } = req.body;
+  const tipoFinal: TipoCondicaoSublimite = tipo_condicao ?? sublimite.tipo_condicao ?? 'mercadoria';
+  if (tipo_condicao !== undefined) {
+    const tiposValidos: TipoCondicaoSublimite[] = ['mercadoria', 'tomador', 'tomador_mercadoria'];
+    if (!tiposValidos.includes(tipo_condicao)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: "tipo_condicao deve ser 'mercadoria', 'tomador' ou 'tomador_mercadoria'."
+      });
+    }
+  }
+  const tagFinal = tag !== undefined ? tag : sublimite.tag;
+  const cnpjFinal = cnpj_tomador !== undefined ? cnpj_tomador : sublimite.cnpj_tomador;
+  if ((tipoFinal === 'mercadoria' || tipoFinal === 'tomador_mercadoria') && !tagFinal) {
+    return res.status(400).json({ status: 'erro', mensagem: 'tag é obrigatória para este tipo_condicao.' });
+  }
+  if ((tipoFinal === 'tomador' || tipoFinal === 'tomador_mercadoria') && !cnpjFinal) {
+    return res.status(400).json({ status: 'erro', mensagem: 'cnpj_tomador é obrigatório para este tipo_condicao.' });
+  }
+
+  if (tag !== undefined) sublimite.tag = tag || undefined;
   if (valor !== undefined) sublimite.valor = valor;
+  if (tipo_condicao !== undefined) sublimite.tipo_condicao = tipo_condicao;
+  if (cnpj_tomador !== undefined) sublimite.cnpj_tomador = cnpj_tomador || undefined;
 
   dbStore.persist();
   return res.json({ status: 'sucesso', sublimite });
