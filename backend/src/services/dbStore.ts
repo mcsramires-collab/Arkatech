@@ -31,7 +31,10 @@ import {
   PolicyBusinessSettings,
   PolicySublimite,
   SupportTicket,
-  RevokedToken
+  RevokedToken,
+  TenantCnpjAdicional,
+  PolicyPartnerHistory,
+  LiberationCode
 } from '../types';
 
 class DBStore {
@@ -72,6 +75,13 @@ class DBStore {
   // Fase 5 (item 3) — Login real + RBAC: revogação de sessão antes do vencimento natural
   // (ver types/index.ts, RevokedToken, para o desenho completo).
   public revokedTokens: RevokedToken[] = [];
+  // Pacote de 21/09 (validação técnica + implementação combinada com o usuário): CNPJs
+  // adicionais/filiais persistidos de verdade (Fase 1), histórico de vínculos de apólice com
+  // corretora/cocorretora/assessoria (Fase 3), e códigos de liberação de limite — Averbação
+  // Esporádica real (Fase 4). Ver types/index.ts para o desenho completo de cada um.
+  public tenantCnpjsAdicionais: TenantCnpjAdicional[] = [];
+  public policyPartnerHistory: PolicyPartnerHistory[] = [];
+  public liberationCodes: LiberationCode[] = [];
 
   // Por padrão, grava dentro da própria pasta de build (comportamento antigo, ok para dev local).
   // Em produção, defina a env var DATA_DIR apontando para um diretório com volume persistente
@@ -116,6 +126,9 @@ class DBStore {
         this.businessRuleRequests = parsed.businessRuleRequests || [];
         this.policyBusinessSettings = parsed.policyBusinessSettings || [];
         this.policySublimites = parsed.policySublimites || [];
+        this.tenantCnpjsAdicionais = parsed.tenantCnpjsAdicionais || [];
+        this.policyPartnerHistory = parsed.policyPartnerHistory || [];
+        this.liberationCodes = parsed.liberationCodes || [];
         this.delegationExceptions = parsed.delegationExceptions || [];
         this.policyCoverageValues = parsed.policyCoverageValues || [];
         this.supportTickets = parsed.supportTickets || [];
@@ -193,6 +206,9 @@ class DBStore {
             businessRuleRequests: this.businessRuleRequests,
             policyBusinessSettings: this.policyBusinessSettings,
             policySublimites: this.policySublimites,
+            tenantCnpjsAdicionais: this.tenantCnpjsAdicionais,
+            policyPartnerHistory: this.policyPartnerHistory,
+            liberationCodes: this.liberationCodes,
             delegationExceptions: this.delegationExceptions,
             policyCoverageValues: this.policyCoverageValues,
             supportTickets: this.supportTickets,
@@ -452,6 +468,18 @@ class DBStore {
         placeholders: [],
         explicacao_nao_tecnica: 'Não encontramos nenhuma apólice cadastrada para o ramo selecionado vinculada à sua empresa — diferente de uma apólice inativa, aqui não existe nenhum cadastro para este ramo.',
         orientacao_correcao: 'Confirme com sua seguradora/corretora se existe uma apólice cadastrada para este ramo, ou selecione o ramo correto ao enviar o documento.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4017',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao: 'ERRO 4017: A apólice está suspensa até [SUSPENSA_ATE].',
+        texto_customizado: 'ERRO 4017: A apólice está suspensa até [SUSPENSA_ATE].',
+        placeholders: ['[SUSPENSA_ATE]'],
+        explicacao_nao_tecnica: 'Sua apólice está temporariamente suspensa pela seguradora.',
+        orientacao_correcao: 'Fale com sua seguradora/corretora sobre o motivo e o prazo da suspensão.',
         updated_at: new Date().toISOString()
       },
       {
