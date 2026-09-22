@@ -14,6 +14,13 @@ export interface ParsedDocumentData {
   cnpjExpedidor?: string;
   cnpjRecebedor?: string;
   cnpjTomador?: string;
+  /**
+   * Item 6.6.2 do relatório técnico de 20/09 (compartilhado pelo usuário) — nova função
+   * TRANSPORTADOR da Regra A: segurado que transporta a carga de uma NF-e sem ser quem a emite.
+   * Extraído de transp/transporta/CNPJ (grupo de transporte da NF-e) — só faz sentido para NF-e;
+   * no CT-e o emissor já é sempre o próprio transportador (EMISSOR cobre esse caso).
+   */
+  cnpjTransportador?: string;
   serie?: string; // série do documento (ide.serie no CT-e/NF-e/MDF-e)
   ufOrigem?: string;
   ufDestino?: string;
@@ -112,6 +119,7 @@ export class XMLParserService {
       let cnpjRemetente: string | undefined;
       let cnpjExpedidor: string | undefined;
       let cnpjRecebedor: string | undefined;
+      let cnpjTransportador: string | undefined;
       let cnpjTomador: string | undefined;
       let serie: string | undefined;
       let ufOrigem: string | undefined;
@@ -166,6 +174,7 @@ export class XMLParserService {
         valorCarga = Number(nfeNode.total?.ICMSTot?.vProd || nfeNode.total?.ICMSTot?.vNF || 0);
         cnpjEmitente = nfeNode.emit?.CNPJ;
         cnpjDestinatario = nfeNode.dest?.CNPJ;
+        cnpjTransportador = nfeNode.transp?.transporta?.CNPJ;
         serie = nfeNode.ide?.serie !== undefined ? String(nfeNode.ide.serie) : undefined;
         tpAmbSefaz = nfeNode.ide?.tpAmb ? Number(nfeNode.ide.tpAmb) as 1 | 2 : undefined;
         protocoloAceitacaoSefaz = protNode?.nProt;
@@ -246,6 +255,7 @@ export class XMLParserService {
         cnpjRemetente,
         cnpjExpedidor,
         cnpjRecebedor,
+        cnpjTransportador,
         cnpjTomador,
         serie,
         ufOrigem,
