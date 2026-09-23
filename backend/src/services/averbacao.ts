@@ -21,12 +21,20 @@ export interface AverbacaoRequestDTO {
   xml_content: string;
   recovery_token?: string;
   supplemented_vars?: Record<string, any>;
+  /**
+   * Fase 4 do pacote de 21/09 (Tratamento de Recusas, Bloco 1 — estratégia 'exigir-codigo') —
+   * código de liberação (Averbação Esporádica) para destravar um valor acima do LMI/sublimite.
+   * Aplicado só à checagem de LMI (9b); sublimites (9c) nunca consomem um código — ver comentário
+   * em avaliarLimiteComEstrategia.
+   */
+  codigo_liberacao?: string;
 }
 
 export interface AverbacaoResponseDTO {
-  status: 'sucesso' | 'erro' | 'aviso';
+  status: 'sucesso' | 'erro' | 'aviso' | 'pendente';
   codigo: string;
   mensagem: string;
+  averbacao_id?: string;
   numero_averbacao?: string;
   protocolo_interno_averbacao?: string;
   valor_considerado_averbacao?: number;
@@ -105,6 +113,132 @@ export class AverbacaoService {
     };
     dbStore.averbacoes.unshift(erroRecord);
     dbStore.persist();
+  }
+
+  /**
+   * Fase 4 do pacote de 21/09 (Tratamento de Recusas / Documentos Pendentes) — mesma ideia de
+   * `persistErro`, mas grava status='PENDENTE_APROVACAO' em vez de 'ERRO': o motivo de recusa
+   * (`codigo`) fica em `motivo_pendencia`, e `codigo_resposta`/`mensagem_resposta` recebem o
+   * mesmo texto por enquanto (são atualizados de verdade quando a seguradora decidir, via
+   * `POST /admin/averbacoes/:id/decidir`). Devolve o registro criado (não só grava) porque quem
+   * chama precisa do `id` para montar a resposta HTTP (`averbacao_id`).
+   */
+  private static persistPendente(
+    tenant: Tenant,
+    policy: Policy,
+    parsedDoc: ReturnType<typeof XMLParserService.parse>,
+    rawXmlId: string,
+    fmt: { codigo: string; mensagem: string },
+    regrasAplicadas: string[],
+    valorConsiderado?: number,
+    lmiSnapshot?: number,
+    sublimiteSnapshot?: number
+  ): Averbacao {
+    const timestampISO = new Date().toISOString();
+    const pendenteRecord: Averbacao = {
+      id: uuidv4(),
+      protocolo_interno_averbacao: `PI-${uuidv4()}`,
+      tenant_id: tenant.id,
+      policy_id: policy.id,
+      status: 'PENDENTE_APROVACAO',
+      motivo_pendencia: fmt.codigo,
+      codigo_resposta: fmt.codigo,
+      mensagem_resposta: fmt.mensagem,
+      valor_carga: parsedDoc.valorCarga,
+      valor_considerado_averbacao: valorConsiderado ?? parsedDoc.valorCarga,
+      lmi_no_momento_envio: lmiSnapshot,
+      sublimite_no_momento_envio: sublimiteSnapshot,
+      regras_internas_aplicadas: regrasAplicadas,
+      tp_amb_sefaz: parsedDoc.tpAmbSefaz,
+      tipo_documento: parsedDoc.tipoDocumento,
+      chave_documento: parsedDoc.chaveDocumento,
+      numero_documento: parsedDoc.numeroDocumento,
+      serie_documento: parsedDoc.serie,
+      cnpj_emissor: parsedDoc.cnpjEmitente,
+      cnpj_remetente: parsedDoc.cnpjRemetente,
+      cnpj_destinatario: parsedDoc.cnpjDestinatario,
+      cnpj_tomador: parsedDoc.cnpjTomador,
+      protocolo_aceitacao_sefaz: parsedDoc.protocoloAceitacaoSefaz,
+      raw_xml_id: rawXmlId,
+      ambiente: tenant.ambiente,
+      timestamp: timestampISO,
+      created_at: timestampISO
+    };
+    dbStore.averbacoes.unshift(pendenteRecord);
+    dbStore.persist();
+    return pendenteRecord;
+  }
+
+  /**
+   * Fase 4 — decide o destino de um excedente de LMI/sublimite conforme a estratégia configurada
+   * em Tratamento de Recusas (Bloco 1, `PolicyBusinessSettings.config`, chaves `regras:*` — ainda
+   * um blob genérico, ver gap registrado no documento de validação técnica). Valores possíveis de
+   * `regras:estrategia-lmg` (default `'exigir-codigo'`, igual ao padrão descrito no relatório):
+   * - `'exigir-codigo'`: só passa com um `LiberationCode` válido para o excedente; sem código
+   *   informado ou código inválido/expirado/esgotado/insuficiente → recusa direto (não enfileira
+   *   — sem código não há o que esperar).
+   * - `'sem-codigo'` + `regras:sem-codigo-modo === 'teto'`: dentro do teto (`regras:teto-valor`)
+   *   passa direto; acima do teto, vai para `regras:teto-acima-acao` (`'fila'` → pendente,
+   *   `'recusar'` → recusa direto).
+   * - `'sem-codigo'` + modo `'fila-sempre'`: qualquer excedente vira pendente.
+   * - `'aceitar-sem-trava'`: passa sempre, mesmo acima do limite.
+   * - `'truncar'`: passa, mas o valor considerado é limitado ao teto (LMI/sublimite) — nunca gera
+   *   pendência nem recusa.
+   * Sublimites (9c) NUNCA consomem `codigo_liberacao` — os campos do código (`valor_carga_liberado`
+   * etc.) são pensados no nível da apólice/LMI, não por sublimite específico; um excedente de
+   * sublimite sob estratégia `'exigir-codigo'` sempre recusa direto (não enfileira, mesmo padrão
+   * de "sem código não há o que esperar").
+   */
+  private static avaliarLimiteComEstrategia(params: {
+    valorConsiderado: number;
+    limite: number;
+    tipoLimite: 'LMI' | 'SUBLIMITE';
+    businessConfig: Record<string, any>;
+    policy: Policy;
+    codigoLiberacaoInformado?: string;
+  }): { resultado: 'aprovado' | 'pendente' | 'recusado'; valorFinal: number; codigoConsumido?: string } {
+    const { valorConsiderado, limite, tipoLimite, businessConfig, policy, codigoLiberacaoInformado } = params;
+    const estrategia = businessConfig['regras:estrategia-lmg'] ?? 'exigir-codigo';
+
+    if (estrategia === 'aceitar-sem-trava') {
+      return { resultado: 'aprovado', valorFinal: valorConsiderado };
+    }
+    if (estrategia === 'truncar') {
+      return { resultado: 'aprovado', valorFinal: Math.min(valorConsiderado, limite) };
+    }
+    if (estrategia === 'exigir-codigo') {
+      if (tipoLimite === 'SUBLIMITE' || !codigoLiberacaoInformado) {
+        return { resultado: 'recusado', valorFinal: valorConsiderado };
+      }
+      const codigoNormalizado = codigoLiberacaoInformado.trim().toUpperCase();
+      const codigo = dbStore.liberationCodes.find(
+        (c) => c.policy_id === policy.id && c.codigo.trim().toUpperCase() === codigoNormalizado
+      );
+      const excedente = valorConsiderado - limite;
+      const codigoValido =
+        codigo &&
+        codigo.ativo &&
+        new Date(codigo.validade).getTime() >= Date.now() &&
+        (codigo.usos_maximos === undefined || codigo.usos_realizados < codigo.usos_maximos) &&
+        (codigo.valor_carga_liberado === undefined || codigo.valor_carga_liberado >= excedente);
+      if (!codigoValido) {
+        return { resultado: 'recusado', valorFinal: valorConsiderado };
+      }
+      codigo!.usos_realizados += 1;
+      return { resultado: 'aprovado', valorFinal: valorConsiderado, codigoConsumido: codigo!.codigo };
+    }
+    // 'sem-codigo'
+    const modo = businessConfig['regras:sem-codigo-modo'] ?? 'fila-sempre';
+    if (modo === 'fila-sempre') {
+      return { resultado: 'pendente', valorFinal: valorConsiderado };
+    }
+    // modo === 'teto'
+    const teto = Number(businessConfig['regras:teto-valor']);
+    if (!isNaN(teto) && valorConsiderado <= teto) {
+      return { resultado: 'aprovado', valorFinal: valorConsiderado };
+    }
+    const acaoAcimaTeto = businessConfig['regras:teto-acima-acao'] ?? 'fila';
+    return { resultado: acaoAcimaTeto === 'recusar' ? 'recusado' : 'pendente', valorFinal: valorConsiderado };
   }
 
   /** Faz o parse de "DD/MM/AAAA" (formato da variável DATA_EMBARQUE) para Date local. undefined se inválido. */
@@ -295,6 +429,13 @@ export class AverbacaoService {
     };
     dbStore.rawXmlStore.push(rawXmlRecord);
 
+    // 4c. Carrega o blob de Regras de Negócio da apólice cedo — Fase 4 do pacote de 21/09 precisa
+    // dele já na checagem de titularidade (passo 5), para saber se a "fila genérica" (Bloco 2 de
+    // Tratamento de Recusas, regras:fila-aprovacao-recusas) está ligada. Antes só era carregado
+    // no passo 9d (Prazos e Datas); mantido carregado uma única vez aqui, reaproveitado depois.
+    const businessConfig = RuleEngineService.getBusinessConfig(policy);
+    const filaGenericaHabilitada = businessConfig['regras:fila-aprovacao-recusas'] === true;
+
     // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
     const regrasAplicadas: string[] = [];
     const tenantCnpjLimpo = tenant.cnpj.replace(/\D/g, '');
@@ -309,7 +450,8 @@ export class AverbacaoService {
       REMETENTE: norm(parsedDoc.cnpjRemetente),
       TOMADOR: norm(parsedDoc.cnpjTomador),
       EXPEDIDOR: norm(parsedDoc.cnpjExpedidor),
-      RECEBEDOR: norm(parsedDoc.cnpjRecebedor)
+      RECEBEDOR: norm(parsedDoc.cnpjRecebedor),
+      TRANSPORTADOR: norm(parsedDoc.cnpjTransportador)
     };
 
     const titularityRules = dbStore.policyTitularityRules.filter((r) => r.policy_id === policy.id);
@@ -340,6 +482,14 @@ export class AverbacaoService {
 
     if (!isEmitente && !matchedByFuncao && !matchedByBypass) {
       const fmt = ResponseEngine.formatResponse('ERR-4008');
+      // Fase 4 — Bloco 2 de Tratamento de Recusas ("fila genérica"): quando ligado na apólice,
+      // motivos de recusa que não sejam LMI/sublimite (que têm sua própria estratégia no Bloco 1)
+      // viram pendência em vez de recusa definitiva. Desligado por padrão — preserva o
+      // comportamento anterior para quem nunca configurou essa aba.
+      if (filaGenericaHabilitada) {
+        const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+        return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
+      }
       this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
       return this.erro('ERR-4008');
     }
@@ -385,26 +535,48 @@ export class AverbacaoService {
     const isTenantInactive = tenant.status === 'INATIVO';
     const isPolicyStatusInactive = policy.status !== 'ATIVA';
     const isPolicyExpiredByDate = Boolean(policy.vigencia_fim) && new Date(policy.vigencia_fim).getTime() < Date.now();
-    const isInactiveProblem = isTenantInactive || isPolicyStatusInactive || isPolicyExpiredByDate;
+    // Fase 2 do pacote de 21/09 (Suspensão de Apólice) — "está suspensa agora" é sempre
+    // calculado a partir das duas datas, nunca lido de um boolean solto (ver comentário em
+    // Policy.suspensa_desde em types/index.ts): evita ficar suspensa para sempre depois que o
+    // prazo determinado já passou.
+    const isPolicySuspensa =
+      Boolean(policy.suspensa_desde) &&
+      new Date(policy.suspensa_desde!).getTime() <= Date.now() &&
+      (!policy.suspensa_ate || new Date(policy.suspensa_ate).getTime() >= Date.now());
+    const isInactiveProblem = isTenantInactive || isPolicyStatusInactive || isPolicyExpiredByDate || isPolicySuspensa;
 
     let hasWarningBypass = false;
 
     if (isInactiveProblem) {
       if (policy.permitir_inativo_vencido) {
         hasWarningBypass = true;
-        regrasAplicadas.push('Bypass de apólice vencida/cadastro inativo aplicado (exceção configurada na apólice).');
+        regrasAplicadas.push('Bypass de apólice vencida/cadastro inativo/suspensa aplicado (exceção configurada na apólice).');
       } else {
-        // ERR-4011 é o caso novo: status ainda 'ATIVA' na apólice, mas a vigência já passou —
-        // ERR-4002/ERR-4003 continuam cobrindo os dois motivos já existentes antes.
-        const errCode = isTenantInactive ? 'ERR-4002' : isPolicyStatusInactive ? 'ERR-4003' : 'ERR-4011';
+        // ERR-4002/ERR-4003 continuam recusa definitiva (cadastro/apólice inativos são um estado
+        // administrativo, não uma pendência a resolver por decisão pontual). ERR-4011 (vigência
+        // vencida) e ERR-4017 (nova — apólice suspensa) viram PENDENTE_APROVACAO — Fase 4 do
+        // pacote de 21/09 (documentos-pendentes-campos-api.md pede exatamente esses dois como
+        // cenários de "Documentos Pendentes", não recusa definitiva).
+        const errCode = isTenantInactive
+          ? 'ERR-4002'
+          : isPolicyStatusInactive
+            ? 'ERR-4003'
+            : isPolicySuspensa
+              ? 'ERR-4017'
+              : 'ERR-4011';
         const fmt =
           errCode === 'ERR-4011'
             ? ResponseEngine.formatResponse(errCode, { VIGENCIA_FIM: policy.vigencia_fim })
-            : ResponseEngine.formatResponse(errCode);
+            : errCode === 'ERR-4017'
+              ? ResponseEngine.formatResponse(errCode, { SUSPENSA_ATE: policy.suspensa_ate ?? 'prazo indeterminado' })
+              : ResponseEngine.formatResponse(errCode);
+
+        if (errCode === 'ERR-4011' || errCode === 'ERR-4017') {
+          const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+          return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
+        }
         this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
-        return errCode === 'ERR-4011'
-          ? this.erro(errCode, { VIGENCIA_FIM: policy.vigencia_fim })
-          : this.erro(errCode);
+        return this.erro(errCode);
       }
     }
 
@@ -455,7 +627,7 @@ export class AverbacaoService {
       parsedDoc,
       dto.supplemented_vars || {}
     );
-    const valorConsiderado = parsedDoc.valorCarga + totalCoberturas;
+    let valorConsiderado = parsedDoc.valorCarga + totalCoberturas;
     for (const c of coberturasAplicadas) {
       regrasAplicadas.push(`Cobertura adicional '${c.titulo}' localizada e somada (R$ ${c.valor.toFixed(2)}).`);
     }
@@ -465,16 +637,43 @@ export class AverbacaoService {
     // valor da averbação em nenhum lugar do fluxo: dava pra averbar um valor acima do limite
     // contratado sem nenhum aviso. Só aplica quando a apólice tem um LMI configurado (campo
     // opcional) — sem LMI cadastrado, não há limite a enforçar.
+    //
+    // Fase 4 do pacote de 21/09 (Tratamento de Recusas, Bloco 1) — o excedente não é mais sempre
+    // uma recusa definitiva: passa por `avaliarLimiteComEstrategia`, que decide entre aprovar
+    // (com ou sem truncar), enfileirar como pendência, ou recusar, conforme a estratégia
+    // configurada na apólice (padrão 'exigir-codigo', igual ao descrito no relatório).
+    const lmiSnapshot = policy.lmi;
     if (policy.lmi !== undefined && valorConsiderado > policy.lmi) {
-      const fmt = ResponseEngine.formatResponse('ERR-4010', {
-        VALOR_AVERBACAO: valorConsiderado.toFixed(2),
-        LMI_APOLICE: policy.lmi.toFixed(2)
+      const avaliacao = this.avaliarLimiteComEstrategia({
+        valorConsiderado,
+        limite: policy.lmi,
+        tipoLimite: 'LMI',
+        businessConfig,
+        policy,
+        codigoLiberacaoInformado: dto.codigo_liberacao
       });
-      this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
-      return this.erro('ERR-4010', {
-        VALOR_AVERBACAO: valorConsiderado.toFixed(2),
-        LMI_APOLICE: policy.lmi.toFixed(2)
-      });
+      const replacements = { VALOR_AVERBACAO: valorConsiderado.toFixed(2), LMI_APOLICE: policy.lmi.toFixed(2) };
+
+      if (avaliacao.resultado === 'aprovado') {
+        valorConsiderado = avaliacao.valorFinal;
+        if (avaliacao.codigoConsumido) {
+          regrasAplicadas.push(`Código de liberação '${avaliacao.codigoConsumido}' aplicado para o excedente do LMI.`);
+        } else if (avaliacao.valorFinal < parsedDoc.valorCarga + totalCoberturas) {
+          regrasAplicadas.push(`Valor truncado no LMI da apólice (R$ ${policy.lmi.toFixed(2)}), conforme estratégia configurada.`);
+        } else {
+          regrasAplicadas.push('Excedente do LMI aceito sem trava, conforme estratégia configurada na apólice.');
+        }
+      } else if (avaliacao.resultado === 'pendente') {
+        const fmt = ResponseEngine.formatResponse('ERR-4010', replacements);
+        const registro = this.persistPendente(
+          tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas, valorConsiderado, lmiSnapshot
+        );
+        return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
+      } else {
+        const fmt = ResponseEngine.formatResponse('ERR-4010', replacements);
+        this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+        return this.erro('ERR-4010', replacements);
+      }
     }
 
     // 9c. Sublimites (aba "Sublimites" da Ficha do Segurado) — achado da auditoria de 28/08: acima
@@ -524,8 +723,10 @@ export class AverbacaoService {
         PRIORIDADE_TIPO_CONDICAO[a.tipo_condicao ?? 'mercadoria']
     )[0];
 
+    let sublimiteSnapshot: number | undefined;
     if (sublimite) {
       const valorSublimite = RuleEngineService.parseMoneyBR(sublimite.valor);
+      sublimiteSnapshot = isNaN(valorSublimite) ? undefined : valorSublimite;
       if (!isNaN(valorSublimite) && valorConsiderado > valorSublimite) {
         const tipoSublimite = sublimite.tipo_condicao ?? 'mercadoria';
         const descricaoCondicao =
@@ -539,9 +740,35 @@ export class AverbacaoService {
           MERCADORIA: descricaoCondicao,
           SUBLIMITE: valorSublimite.toFixed(2)
         };
-        const fmt = ResponseEngine.formatResponse('ERR-4013', replacements);
-        this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
-        return this.erro('ERR-4013', replacements);
+
+        // Mesma estratégia do LMI (Bloco 1), mas sublimite nunca consome codigo_liberacao — ver
+        // comentário em avaliarLimiteComEstrategia.
+        const avaliacao = this.avaliarLimiteComEstrategia({
+          valorConsiderado,
+          limite: valorSublimite,
+          tipoLimite: 'SUBLIMITE',
+          businessConfig,
+          policy
+        });
+
+        if (avaliacao.resultado === 'aprovado') {
+          valorConsiderado = avaliacao.valorFinal;
+          regrasAplicadas.push(
+            valorConsiderado < parsedDoc.valorCarga + totalCoberturas
+              ? `Valor truncado no sublimite (${descricaoCondicao}, R$ ${valorSublimite.toFixed(2)}), conforme estratégia configurada.`
+              : `Excedente do sublimite (${descricaoCondicao}) aceito sem trava, conforme estratégia configurada na apólice.`
+          );
+        } else if (avaliacao.resultado === 'pendente') {
+          const fmt = ResponseEngine.formatResponse('ERR-4013', replacements);
+          const registro = this.persistPendente(
+            tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas, valorConsiderado, lmiSnapshot, sublimiteSnapshot
+          );
+          return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
+        } else {
+          const fmt = ResponseEngine.formatResponse('ERR-4013', replacements);
+          this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+          return this.erro('ERR-4013', replacements);
+        }
       }
     }
 
@@ -552,10 +779,13 @@ export class AverbacaoService {
     // abriu esta aba passa a ser bloqueada por um prazo "padrão" inventado por nós. O Bloco "Prazo
     // de Cancelamento" NÃO foi implementado nesta rodada — o sistema ainda não tem nenhum fluxo de
     // cancelamento de averbação para aplicar esse prazo contra (ver achado registrado no backlog).
-    const businessConfig = RuleEngineService.getBusinessConfig(policy);
     const prazoErro = this.checkPrazos(businessConfig, parsedDoc.tagsMap);
     if (prazoErro) {
       const fmt = ResponseEngine.formatResponse(prazoErro.codigo, prazoErro.replacements);
+      if (filaGenericaHabilitada) {
+        const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+        return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
+      }
       this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
       return this.erro(prazoErro.codigo, prazoErro.replacements);
     }
@@ -595,6 +825,9 @@ export class AverbacaoService {
       mensagem_resposta: resFormat.mensagem,
       valor_carga: parsedDoc.valorCarga,
       valor_considerado_averbacao: valorConsiderado,
+      lmi_no_momento_envio: lmiSnapshot,
+      sublimite_no_momento_envio: sublimiteSnapshot,
+      codigo_liberacao_utilizado: dto.codigo_liberacao,
       regras_internas_aplicadas: regrasAplicadas,
       tp_amb_sefaz: parsedDoc.tpAmbSefaz,
       tipo_documento: parsedDoc.tipoDocumento,
@@ -620,6 +853,7 @@ export class AverbacaoService {
       status: hasWarningBypass ? 'aviso' : 'sucesso',
       codigo: resFormat.codigo,
       mensagem: resFormat.mensagem,
+      averbacao_id: averbacaoRecord.id,
       numero_averbacao: numeroAverbacao,
       protocolo_interno_averbacao: protocoloInterno,
       valor_considerado_averbacao: valorConsiderado,
@@ -627,5 +861,37 @@ export class AverbacaoService {
       timestamp: timestampISO,
       hash_validacao: hashSHA256
     };
+  }
+
+  /**
+   * Fase 4 do pacote de 21/09 — reprocessa um documento PENDENTE_APROVACAO ou ERRO já existente,
+   * a partir do XML já salvo (`RawXMLStore`), sem exigir novo upload. Usado por
+   * `POST /tenant/averbacoes/:id/reenviar`. Cria um NOVO registro de Averbacao (o antigo
+   * permanece intacto para histórico/auditoria) — mesmo padrão de "cada tentativa é um registro"
+   * já usado no resto do motor. `supplementedVars` precisa ser reenviado por quem chama quando a
+   * pendência original dependia de uma variável suplementada (ex.: recuperação) — esse valor não
+   * fica gravado em nenhum lugar hoje, só o XML bruto.
+   */
+  public static reenviar(
+    averbacaoAnterior: Averbacao,
+    appBaseUrl: string,
+    codigoLiberacao?: string,
+    supplementedVars?: Record<string, any>
+  ): AverbacaoResponseDTO {
+    const rawXml = dbStore.rawXmlStore.find((r) => r.id === averbacaoAnterior.raw_xml_id);
+    if (!rawXml) {
+      return this.erro('ERR-4005', {}, {});
+    }
+    return this.process(
+      {
+        tenant_id: averbacaoAnterior.tenant_id,
+        ramo: dbStore.policies.find((p) => p.id === averbacaoAnterior.policy_id)?.ramo ?? ('RCTRC' as RamoApolice),
+        policy_id: averbacaoAnterior.policy_id,
+        xml_content: rawXml.content_xml,
+        codigo_liberacao: codigoLiberacao,
+        supplemented_vars: supplementedVars
+      },
+      appBaseUrl
+    );
   }
 }

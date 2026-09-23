@@ -389,6 +389,34 @@ router.get('/averbacoes', authMiddleware, (req: AuthenticatedRequest, res: Respo
   });
 });
 
+/**
+ * POST /tenant/averbacoes/:id/reenviar — Fase 4 do pacote de 21/09 (documentos-
+ * pendentes-campos-api.md pede exatamente isso: reenviar sem novo upload). Reprocessa o XML já
+ * salvo de um documento PENDENTE_APROVACAO ou ERRO do próprio tenant, criando um NOVO registro
+ * (o anterior fica intacto para histórico). Aceita `codigo_liberacao` opcional, útil quando a
+ * pendência original foi por excedente de LMI sob a estratégia 'exigir-codigo'.
+ */
+router.post('/averbacoes/:id/reenviar', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const gate = checkActivated(tenantId);
+  if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
+
+  const { id } = req.params;
+  const averbacaoAnterior = dbStore.averbacoes.find((a) => a.id === id && a.tenant_id === tenantId);
+  if (!averbacaoAnterior) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Documento não encontrado.' });
+  }
+  if (averbacaoAnterior.status !== 'PENDENTE_APROVACAO' && averbacaoAnterior.status !== 'ERRO') {
+    return res.status(409).json({ status: 'erro', mensagem: 'Este documento não está pendente nem recusado — não há o que reenviar.' });
+  }
+
+  const { codigo_liberacao, supplemented_vars } = req.body;
+  const appBaseUrl = `${req.protocol}://${req.get('host')}`;
+  const resultado = AverbacaoService.reenviar(averbacaoAnterior, appBaseUrl, codigo_liberacao, supplemented_vars);
+  const statusCode = resultado.status === 'erro' ? 400 : 200;
+  return res.status(statusCode).json(resultado);
+});
+
 // --- Pendências de Correção (variáveis faltantes) — sem precisar do link externo ---
 //
 // Achado da auditoria de 27/08 (Documentos Pendentes, revisão do status "Negada"): o protótipo
