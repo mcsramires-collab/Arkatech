@@ -220,11 +220,20 @@ export interface Averbacao {
    *   novo e distinto do "Cancelado" (que no vocabulário do produto significa "foi averbado e
    *   depois cancelado", conceito que ainda não existe no motor). Só alcançável a partir de
    *   PENDENTE_APROVACAO, via POST /admin/averbacoes/:id/cancelar.
+   * Fase 4b (pacote de 23/09, compartilhado pelo usuário) — motor de Cancelamento pós-averbação:
+   * - CANCELADO: documento que JÁ FOI averbado com sucesso e depois foi cancelado de verdade,
+   *   via evento de cancelamento real do Sefaz (tpEvento 110111) — distinto de
+   *   CANCELADO_NAO_AVERBADO acima. Só alcançável a partir de SUCESSO, via
+   *   `POST /tenant/averbacoes/:id/cancelar` (segurado, dentro do prazo configurado na apólice —
+   *   ver PolicyBusinessSettings.config['regras:prazo-cancelamento-valor']) ou
+   *   `POST /admin/averbacoes/:id/cancelar-averbado` (seguradora/ADM, sem restrição de prazo). Os
+   *   dois exigem o XML real do evento de cancelamento do Sefaz — ver
+   *   `XMLParserService.parseEventoCancelamento` e `CancelamentoService`.
    * Variável obrigatória faltante (ERR-4004) e XML malformado (ERR-4005) continuam fora dessa
    * fila — não fazem sentido como "aguardando decisão humana" (o primeiro já tem seu próprio
    * fluxo de recuperação; o segundo não tem o que esperar sem um arquivo novo).
    */
-  status: 'SUCESSO' | 'ERRO' | 'PENDENTE_APROVACAO' | 'CANCELADO_NAO_AVERBADO';
+  status: 'SUCESSO' | 'ERRO' | 'PENDENTE_APROVACAO' | 'CANCELADO_NAO_AVERBADO' | 'CANCELADO';
   codigo_resposta: string;
   mensagem_resposta: string;
   /**
@@ -248,6 +257,12 @@ export interface Averbacao {
   /** Quem decidiu um PENDENTE_APROVACAO (aprovar/recusar) — auditoria simples; não referencia RBAC. */
   decidido_por?: string;
   decidido_em?: string;
+  /** Preenchidos só quando status='CANCELADO' — ver CancelamentoService. */
+  protocolo_cancelamento_sefaz?: string;
+  justificativa_cancelamento?: string;
+  cancelado_em?: string;
+  /** 'SEGURADO' quando cancelado via self-service dentro do prazo; 'SEGURADORA' via /admin. */
+  cancelado_por?: 'SEGURADO' | 'SEGURADORA';
   valor_carga: number; // valor bruto extraído do documento (vCarga/vProd/etc.)
   valor_considerado_averbacao: number; // valor_carga + coberturas adicionais monetárias somadas
   regras_internas_aplicadas: string[]; // ex: "Cobertura 'Container' somada (R$ 25.000,00)", "Bypass de apólice vencida aplicado"
@@ -675,4 +690,34 @@ export interface LiberationCode {
   valor_cobertura_adicional_liberado?: number;
   ativo: boolean; // permite desativar manualmente antes da validade, sem apagar o histórico de uso
   created_at: string;
+}
+
+// ===================== NOTIFICAÇÃO DE EMBARQUES RETROATIVOS (pacote de 23/09) =====================
+
+/**
+ * Notificação enviada à corretora nova quando `POST /admin/policies/:id/trocar-parceria` tem uma
+ * `vigencia_inicio` retroativa (no passado) — pergunta se ela quer assumir a responsabilidade
+ * pelos embarques daquele período, com prazo de 2 dias úteis para responder. Item decidido com o
+ * usuário no pacote de 21/09 (seção "Fora de escopo") e implementado agora, no pacote de 23/09.
+ *
+ * A resposta (ACEITO/RECUSADO/EXPIRADO) é registrada para consentimento/auditoria — não reescreve
+ * `PolicyPartnerHistory` nem o vínculo em si; "quem era a corretora numa data X" continua sendo
+ * respondido só pelas datas de vigência do histórico, independente de como esta notificação foi
+ * respondida. `EXPIRADO` é calculado de forma preguiçosa (mesmo padrão do resto do sistema — sem
+ * job/cron — ver `expirarSeNecessario` em `routes/partnerNotifications.ts`), nunca escrito por um
+ * processo em segundo plano.
+ */
+export interface PartnerChangeNotification {
+  id: string;
+  policy_id: string;
+  /** Corretora nova que precisa decidir — a que passou a ocupar o papel na troca. */
+  broker_id: string;
+  papel: 'lider' | 'cocorretora' | 'assessoria';
+  /** A data retroativa da troca que originou esta notificação. */
+  vigencia_inicio: string;
+  status: 'PENDENTE' | 'ACEITO' | 'RECUSADO' | 'EXPIRADO';
+  /** 2 dias úteis a partir de `created_at` — ver `calcularPrazoDoisDiasUteis`. */
+  prazo_limite: string;
+  created_at: string;
+  respondido_em?: string;
 }
