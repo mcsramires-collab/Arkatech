@@ -29,6 +29,15 @@ export interface ParsedDocumentData {
   protocoloAceitacaoSefaz?: string; // nProt do protXXX/infProt
 }
 
+export interface ParsedCancelamentoData {
+  chaveDocumentoCancelado: string;
+  /** Precisa ser '110111' (código padrão Sefaz de Cancelamento) — validado por CancelamentoService. */
+  tipoEvento: string;
+  protocoloEvento?: string;
+  justificativa?: string;
+  dataEvento?: string;
+}
+
 export class XMLParserService {
   private static parser = new FastXMLParser({
     ignoreAttributes: false,
@@ -266,6 +275,66 @@ export class XMLParserService {
       };
     } catch (err: any) {
       throw new Error('Formato XML malformado ou desconhecido: ' + err.message);
+    }
+  }
+
+  /**
+   * Motor de Cancelamento (pacote de 23/09, compartilhado pelo usuário) — lê um EVENTO DE
+   * CANCELAMENTO real do Sefaz (schema totalmente diferente do documento original: é um
+   * `procEventoCTe`/`procEventoNFe`/`procEventoMDFe`, não um `cteProc`/`nfeProc`/`mdfeProc`).
+   * Usado por `CancelamentoService` para validar um pedido de cancelamento antes de aceitar —
+   * decisão do usuário: cancelamento exige o evento real do Sefaz (`tpEvento` 110111), não um
+   * simples registro em texto.
+   *
+   * Cobre os três tipos de documento (CT-e/NF-e/MDF-e) — a estrutura de `detEvento` muda por
+   * tipo (`evCancCTe`/`evCancNFe`/`evCancMDFe`), mas os campos que importam (chave do documento
+   * cancelado, tipo de evento, protocolo, justificativa) seguem o mesmo padrão nos três.
+   */
+  public static parseEventoCancelamento(content: string): ParsedCancelamentoData {
+    const trimmed = content.trim();
+    try {
+      const parsedObj = this.parser.parse(trimmed);
+
+      // Localiza o nó <evento>/<infEvento> ou <eventoCTe>/<infEvento>, cobrindo as variações de
+      // nome usadas nos três tipos de documento e em envelopes com/sem o <procEvento...> externo.
+      const procEvento =
+        parsedObj.procEventoCTe || parsedObj.procEventoNFe || parsedObj.procEventoMDFe || parsedObj;
+      const eventoNode = procEvento.evento || procEvento.eventoCTe || procEvento.eventoNFe || procEvento.eventoMDFe;
+      const infEvento = eventoNode?.infEvento;
+
+      if (!infEvento) {
+        throw new Error('Evento de cancelamento sem o nó infEvento — XML não é um evento Sefaz válido.');
+      }
+
+      const tipoEvento = String(infEvento.tpEvento ?? '');
+
+      const chaveDocumentoCancelado: string | undefined =
+        infEvento.chCTe || infEvento.chNFe || infEvento.chMDFe || infEvento['@_chDoc'];
+
+      // detEvento muda de nome por tipo de documento (evCancCTe/evCancNFe/evCancMDFe) — tenta os
+      // três, mais um fallback genérico para XMLs que não seguem exatamente o padrão nomeado.
+      const detEvento = infEvento.detEvento;
+      const detEspecifico =
+        detEvento?.evCancCTe || detEvento?.evCancNFe || detEvento?.evCancMDFe || detEvento;
+
+      const justificativa: string | undefined = detEspecifico?.xJust;
+
+      // O protocolo "oficial" do cancelamento vem do <retEvento>/<infEvento>/<nProt> (resposta do
+      // Sefaz), não do <evento> (que é só o pedido) — mas aceita o nProt do próprio detEvento como
+      // fallback, para XMLs que só trazem o evento de ida sem a resposta anexada.
+      const retEventoNode = procEvento.retEvento || procEvento.retEventoCTe || procEvento.retEventoNFe || procEvento.retEventoMDFe;
+      const protocoloEvento: string | undefined =
+        retEventoNode?.infEvento?.nProt || detEspecifico?.nProt || detEspecifico?.nProtCTe;
+
+      const dataEvento: string | undefined = infEvento.dhEvento;
+
+      if (!chaveDocumentoCancelado) {
+        throw new Error('Evento de cancelamento sem a chave do documento cancelado (chCTe/chNFe/chMDFe).');
+      }
+
+      return { chaveDocumentoCancelado, tipoEvento, protocoloEvento, justificativa, dataEvento };
+    } catch (err: any) {
+      throw new Error('Formato do evento de cancelamento inválido ou malformado: ' + err.message);
     }
   }
 }
