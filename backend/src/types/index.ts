@@ -42,6 +42,18 @@ export interface Tenant {
    * (ver `routes/admin.ts`) — evitou precisar tocar em todo tenant já semeado.
    */
   token_duration_max_hours?: number;
+  /**
+   * Inativação agendada (pacote de 27/09, compartilhado pelo usuário) — a seguradora pode marcar
+   * `status: 'INATIVO'` para uma data futura em vez de imediata. Presente = existe um
+   * agendamento pendente; a efetivação real (status vira 'INATIVO' de verdade, com a mesma
+   * cascata para CNPJs adicionais já usada na inativação imediata) só acontece quando essa data
+   * chega — calculado de forma preguiçosa (sem job/cron), via
+   * `efetivarInativacaoProgramadaSeNecessaria` (services/tenantLifecycle.ts), chamado tanto na
+   * leitura (GET /admin/tenants) quanto no motor de averbação, para o bloqueio valer mesmo sem
+   * ninguém ter aberto a tela. Uma reativação explícita, ou uma nova inativação (imediata ou
+   * agendada para outra data), sempre cancela/substitui o agendamento anterior.
+   */
+  inativacao_programada_para?: string;
   created_at: string;
   // Contato do cliente (usado no cadastro pela seguradora)
   contato_nome?: string;
@@ -624,6 +636,9 @@ export interface TenantCnpjAdicional {
   id: string;
   tenant_id: string;
   cnpj: string;
+  /** Razão social do CNPJ extra — opcional; o cadastro (wizard) já coleta isso hoje mas
+   *  descartava, mesmo achado do CNPJ principal corrigido no pacote de 21/09. */
+  razao_social?: string;
   tipo: 'filial' | 'adicional'; // filial = mesma raiz de 8 dígitos do principal; adicional = raiz diferente
   status: 'ATIVO' | 'INATIVO';
   created_at: string;
