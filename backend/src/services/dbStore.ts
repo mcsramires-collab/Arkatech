@@ -34,7 +34,8 @@ import {
   RevokedToken,
   TenantCnpjAdicional,
   PolicyPartnerHistory,
-  LiberationCode
+  LiberationCode,
+  PartnerChangeNotification
 } from '../types';
 
 class DBStore {
@@ -82,6 +83,7 @@ class DBStore {
   public tenantCnpjsAdicionais: TenantCnpjAdicional[] = [];
   public policyPartnerHistory: PolicyPartnerHistory[] = [];
   public liberationCodes: LiberationCode[] = [];
+  public partnerChangeNotifications: PartnerChangeNotification[] = [];
 
   // Por padrão, grava dentro da própria pasta de build (comportamento antigo, ok para dev local).
   // Em produção, defina a env var DATA_DIR apontando para um diretório com volume persistente
@@ -129,6 +131,7 @@ class DBStore {
         this.tenantCnpjsAdicionais = parsed.tenantCnpjsAdicionais || [];
         this.policyPartnerHistory = parsed.policyPartnerHistory || [];
         this.liberationCodes = parsed.liberationCodes || [];
+        this.partnerChangeNotifications = parsed.partnerChangeNotifications || [];
         this.delegationExceptions = parsed.delegationExceptions || [];
         this.policyCoverageValues = parsed.policyCoverageValues || [];
         this.supportTickets = parsed.supportTickets || [];
@@ -209,6 +212,7 @@ class DBStore {
             tenantCnpjsAdicionais: this.tenantCnpjsAdicionais,
             policyPartnerHistory: this.policyPartnerHistory,
             liberationCodes: this.liberationCodes,
+            partnerChangeNotifications: this.partnerChangeNotifications,
             delegationExceptions: this.delegationExceptions,
             policyCoverageValues: this.policyCoverageValues,
             supportTickets: this.supportTickets,
@@ -480,6 +484,54 @@ class DBStore {
         placeholders: ['[SUSPENSA_ATE]'],
         explicacao_nao_tecnica: 'Sua apólice está temporariamente suspensa pela seguradora.',
         orientacao_correcao: 'Fale com sua seguradora/corretora sobre o motivo e o prazo da suspensão.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'SUC-2002',
+        tipo: 'sucesso',
+        categoria: 'SISTEMA',
+        texto_padrao: 'Averbação cancelada com sucesso. Protocolo de cancelamento Sefaz: [PROTOCOLO_CANCELAMENTO].',
+        texto_customizado: 'Averbação cancelada com sucesso. Protocolo de cancelamento Sefaz: [PROTOCOLO_CANCELAMENTO].',
+        placeholders: ['[PROTOCOLO_CANCELAMENTO]'],
+        explicacao_nao_tecnica: 'O cancelamento deste documento foi confirmado e registrado.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4018',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          'ERRO 4018: O prazo para cancelamento desta averbação expirou, ou o cancelamento por conta própria não está habilitado para esta apólice.',
+        texto_customizado:
+          'ERRO 4018: O prazo para cancelamento desta averbação expirou, ou o cancelamento por conta própria não está habilitado para esta apólice.',
+        placeholders: [],
+        explicacao_nao_tecnica: 'Não é mais possível cancelar este documento por conta própria.',
+        orientacao_correcao: 'Fale com sua seguradora/corretora para avaliar o cancelamento diretamente com eles.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4019',
+        tipo: 'erro',
+        categoria: 'REGRA_XML',
+        texto_padrao: 'ERRO 4019: Evento de cancelamento inválido — [MOTIVO].',
+        texto_customizado: 'ERRO 4019: Evento de cancelamento inválido — [MOTIVO].',
+        placeholders: ['[MOTIVO]'],
+        explicacao_nao_tecnica: 'O arquivo de cancelamento enviado não pôde ser validado.',
+        orientacao_correcao: 'Confirme se o arquivo é o evento de cancelamento (protocolo Sefaz) correto para este documento.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4020',
+        tipo: 'erro',
+        categoria: 'REGRA_XML',
+        texto_padrao: 'ERRO 4020: Este documento não pode ser cancelado — o status atual não é uma averbação com sucesso.',
+        texto_customizado: 'ERRO 4020: Este documento não pode ser cancelado — o status atual não é uma averbação com sucesso.',
+        placeholders: [],
+        explicacao_nao_tecnica: 'Só é possível cancelar um documento que já foi averbado com sucesso.',
         updated_at: new Date().toISOString()
       },
       {
