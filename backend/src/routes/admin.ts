@@ -16,7 +16,7 @@ import { aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
 import pacote2109Router, { calcularStatusCadastro, seedPartnerHistory } from './adminPacote2109';
-import { efetivarInativacaoProgramadaSeNecessaria } from '../services/tenantLifecycle';
+import { efetivarInativacaoProgramadaSeNecessaria, sincronizarStatusCadastroSeNecessario } from '../services/tenantLifecycle';
 import { resolveInsurerId, policyPertenceAoAtor, apenasInternalUser } from './adminHelpers';
 import adminSeguradora1Router from './adminSeguradora1';
 import adminSeguradora2Router from './adminSeguradora2';
@@ -107,6 +107,12 @@ router.get('/tenants', requirePermission('clientes', 'ver'), (req: BackofficeAut
   // isso a tela mostraria "Ativo" num cadastro que já deveria estar inativo (ver
   // services/tenantLifecycle.ts).
   dbStore.tenants.forEach(efetivarInativacaoProgramadaSeNecessaria);
+  // Inativação Automática por Ausência de Apólice Vigente (pacote de 27/09, confirmado pelo
+  // usuário): o cadastro vira INATIVO de verdade assim que não sobra nenhuma apólice vigente —
+  // calculado aqui, antes de montar a resposta, pelo mesmo motivo acima.
+  dbStore.tenants.forEach((t) =>
+    sincronizarStatusCadastroSeNecessario(t, dbStore.policies.filter((p) => p.tenant_id === t.id))
+  );
   const comStatusCadastro = (tenants: Tenant[]) =>
     tenants.map((t) => ({
       ...t,

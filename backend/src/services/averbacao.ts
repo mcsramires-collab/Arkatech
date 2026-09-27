@@ -5,7 +5,7 @@ import { Tenant, Policy, RamoApolice, Averbacao, RecoverySession, RawXMLStore } 
 import { XMLParserService } from './xmlParser';
 import { RuleEngineService } from './ruleEngine';
 import { ResponseEngine } from './responseEngine';
-import { efetivarInativacaoProgramadaSeNecessaria } from './tenantLifecycle';
+import { efetivarInativacaoProgramadaSeNecessaria, sincronizarStatusCadastroSeNecessario } from './tenantLifecycle';
 
 export interface AverbacaoRequestDTO {
   tenant_id: string;
@@ -349,6 +349,9 @@ export class AverbacaoService {
     // — sem isso, o bloqueio (ERR-4002) só valeria depois que alguém abrisse a tela de
     // Consultar Segurados (ver services/tenantLifecycle.ts).
     efetivarInativacaoProgramadaSeNecessaria(tenant);
+    // Inativação Automática por Ausência de Apólice Vigente (pacote de 27/09, confirmado pelo
+    // usuário) — mesmo motivo: o bloqueio precisa valer aqui, não só quando alguém abrir a tela.
+    sincronizarStatusCadastroSeNecessario(tenant, dbStore.policies.filter((p) => p.tenant_id === tenant.id));
 
     // 2. Se for um envio de recuperação via Token existente
     let recoverySession: RecoverySession | undefined;
