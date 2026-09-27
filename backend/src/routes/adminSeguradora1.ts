@@ -221,8 +221,9 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
     uf,
     cep,
     codigo_interno_seguradora,
-    // Fase 1 do pacote de 21/09 — array opcional [{ cnpj, tipo }], persistido de verdade a
-    // partir de agora (achado do relatório de 20/09: antes era descartado silenciosamente).
+    // Fase 1 do pacote de 21/09 — array opcional [{ cnpj, tipo, razao_social? }], persistido de
+    // verdade a partir de agora (achado do relatório de 20/09: antes era descartado
+    // silenciosamente). razao_social adicionada no pacote de 27/09.
     cnpjs_adicionais
   } = req.body;
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
@@ -326,6 +327,7 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
         id: uuidv4(),
         tenant_id: tenant.id,
         cnpj: item.cnpj,
+        razao_social: item.razao_social || undefined,
         tipo: item.tipo,
         status: 'ATIVO',
         created_at: new Date().toISOString()
