@@ -19,6 +19,7 @@ import pacote2109Router, { calcularStatusCadastro, seedPartnerHistory } from './
 import { resolveInsurerId, policyPertenceAoAtor, apenasInternalUser } from './adminHelpers';
 import adminSeguradora1Router from './adminSeguradora1';
 import adminSeguradora2Router from './adminSeguradora2';
+import partnerNotificationsRouter from './partnerNotifications';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -93,6 +94,7 @@ const DEFAULT_TOKEN_DURATION_MAX_HOURS = 24;
 router.use('/', pacote2109Router);
 router.use('/', adminSeguradora1Router);
 router.use('/', adminSeguradora2Router);
+router.use('/', partnerNotificationsRouter);
 
 // --- 1. GESTÃO DE CLIENTES / TENANTS (com flag ambiente: teste vs producao) ---
 // GET fica aberto para SEGURADORA (filtrado à carteira dela, via as apólices que a vinculam a um
