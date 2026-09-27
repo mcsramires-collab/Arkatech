@@ -5,6 +5,7 @@ import { Tenant, Policy, RamoApolice, Averbacao, RecoverySession, RawXMLStore } 
 import { XMLParserService } from './xmlParser';
 import { RuleEngineService } from './ruleEngine';
 import { ResponseEngine } from './responseEngine';
+import { efetivarInativacaoProgramadaSeNecessaria } from './tenantLifecycle';
 
 export interface AverbacaoRequestDTO {
   tenant_id: string;
@@ -344,6 +345,10 @@ export class AverbacaoService {
     if (!tenant) {
       return this.erro('ERR-4001');
     }
+    // Efetiva uma inativação agendada cuja data já chegou, antes de checar tenant.status abaixo
+    // — sem isso, o bloqueio (ERR-4002) só valeria depois que alguém abrisse a tela de
+    // Consultar Segurados (ver services/tenantLifecycle.ts).
+    efetivarInativacaoProgramadaSeNecessaria(tenant);
 
     // 2. Se for um envio de recuperação via Token existente
     let recoverySession: RecoverySession | undefined;

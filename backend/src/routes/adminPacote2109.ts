@@ -92,7 +92,7 @@ router.post('/tenants/:id/cnpjs-adicionais', requirePermission('clientes', 'edit
   if (!tenant) {
     return res.status(404).json({ status: 'erro', mensagem: 'Cliente não encontrado.' });
   }
-  const { cnpj, tipo } = req.body;
+  const { cnpj, tipo, razao_social } = req.body;
   if (!cnpj || (tipo !== 'filial' && tipo !== 'adicional')) {
     return res.status(400).json({ status: 'erro', mensagem: "cnpj e tipo ('filial' ou 'adicional') são obrigatórios." });
   }
@@ -107,6 +107,7 @@ router.post('/tenants/:id/cnpjs-adicionais', requirePermission('clientes', 'edit
     id: uuidv4(),
     tenant_id: id,
     cnpj,
+    razao_social: razao_social || undefined,
     tipo,
     status: 'ATIVO',
     created_at: new Date().toISOString()
@@ -230,6 +231,61 @@ router.post('/policies/:id/trocar-parceria', requirePermission('apolices', 'edit
 
   return res.json({ status: 'sucesso', policy, vinculo: novoRegistro });
 });
+
+/**
+ * Desfazer Troca de Parceria (pacote de 27/09, compartilhado pelo usuário) — janela de 10
+ * minutos para reverter uma troca feita por engano, sem deixar rastro de uma decisão errada no
+ * histórico. Só funciona no vínculo mais recente daquele papel: reabre o vínculo anterior
+ * (remove o `vigencia_fim` que a troca havia fechado) e remove o registro criado pela troca,
+ * revertendo também o campo-cache correspondente em `Policy`. Papel 'lider' nunca fica sem
+ * vínculo (toda apólice sempre tem uma corretora líder) — cocorretora/assessoria voltam a
+ * `undefined` quando não havia vínculo anterior nenhum.
+ */
+router.post(
+  '/policies/:id/trocar-parceria/:vinculoId/desfazer',
+  requirePermission('apolices', 'editar'),
+  (req: BackofficeAuthenticatedRequest, res) => {
+    const { id, vinculoId } = req.params;
+    const policy = dbStore.policies.find((p) => p.id === id);
+    if (!policy) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Apólice não localizada.' });
+    }
+    if (!policyPertenceAoAtor(req, res, id)) return;
+
+    const registro = dbStore.policyPartnerHistory.find((h) => h.id === vinculoId && h.policy_id === id);
+    if (!registro) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Vínculo não encontrado nesta apólice.' });
+    }
+
+    const DEZ_MINUTOS_MS = 10 * 60 * 1000;
+    if (Date.now() - new Date(registro.created_at).getTime() > DEZ_MINUTOS_MS) {
+      return res.status(409).json({ status: 'erro', mensagem: 'O prazo de 10 minutos para desfazer esta troca já passou.' });
+    }
+
+    const anterior = dbStore.policyPartnerHistory
+      .filter((h) => h.policy_id === id && h.papel === registro.papel && h.id !== registro.id)
+      .sort((a, b) => b.vigencia_inicio.localeCompare(a.vigencia_inicio))[0];
+
+    dbStore.policyPartnerHistory = dbStore.policyPartnerHistory.filter((h) => h.id !== registro.id);
+
+    if (anterior) {
+      anterior.vigencia_fim = undefined;
+    }
+    const brokerIdRevertido = anterior?.broker_id;
+    if (registro.papel === 'lider') {
+      if (brokerIdRevertido) policy.broker_id = brokerIdRevertido;
+      // 'lider' nunca fica sem valor — se não havia anterior (não deveria acontecer na prática,
+      // já que toda apólice nasce com líder), mantém o broker_id atual em vez de apagar.
+    } else if (registro.papel === 'cocorretora') {
+      policy.co_broker_id = brokerIdRevertido;
+    } else {
+      policy.assessoria_id = brokerIdRevertido;
+    }
+
+    dbStore.persist();
+    return res.json({ status: 'sucesso', policy });
+  }
+);
 
 
 // --- Código de Liberação de Limite (Fase 4 do pacote de 21/09) — Averbação Esporádica real, ver

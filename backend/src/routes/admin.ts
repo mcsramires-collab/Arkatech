@@ -16,6 +16,7 @@ import { aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
 import pacote2109Router, { calcularStatusCadastro, seedPartnerHistory } from './adminPacote2109';
+import { efetivarInativacaoProgramadaSeNecessaria } from '../services/tenantLifecycle';
 import { resolveInsurerId, policyPertenceAoAtor, apenasInternalUser } from './adminHelpers';
 import adminSeguradora1Router from './adminSeguradora1';
 import adminSeguradora2Router from './adminSeguradora2';
@@ -102,6 +103,10 @@ router.use('/', partnerNotificationsRouter);
 // Portal da Seguradora consome. POST/PUT (acima) seguem exclusivos de ADM.
 router.get('/tenants', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const ator = req.backoffice;
+  // Efetiva qualquer inativação agendada cuja data já passou, antes de montar a resposta — sem
+  // isso a tela mostraria "Ativo" num cadastro que já deveria estar inativo (ver
+  // services/tenantLifecycle.ts).
+  dbStore.tenants.forEach(efetivarInativacaoProgramadaSeNecessaria);
   const comStatusCadastro = (tenants: Tenant[]) =>
     tenants.map((t) => ({
       ...t,
@@ -175,19 +180,37 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
     cep
   } = req.body;
   if (status) {
-    tenant.status = status;
-    // Cascata de CNPJ (pacote de 23/09, confirmado pelo usuário): inativar o CNPJ principal
-    // (= inativar o Tenant, já que o principal não tem status próprio — ver comentário em
-    // TenantCnpjAdicional em types/index.ts) inativa também todos os CNPJs adicionais/filiais.
-    // Só nesta direção — reativar o Tenant NÃO reativa os adicionais automaticamente (a
-    // seguradora reativa cada um manualmente se fizer sentido; inativar um adicional isolado
-    // continua sem efeito no cadastro, como já era antes).
-    if (status === 'INATIVO') {
-      dbStore.tenantCnpjsAdicionais
-        .filter((c) => c.tenant_id === id && c.status === 'ATIVO')
-        .forEach((c) => {
-          c.status = 'INATIVO';
-        });
+    // Inativação Agendada (pacote de 27/09, compartilhado pelo usuário) — `efetiva_em` futura
+    // adia a inativação de verdade: o cadastro fica ATIVO até essa data, com o agendamento
+    // pendente registrado em `inativacao_programada_para` (efetivado por
+    // `efetivarInativacaoProgramadaSeNecessaria`, chamado de forma preguiçosa em GET
+    // /admin/tenants e no motor de averbação). Sem `efetiva_em`, ou com uma data já passada,
+    // continua o comportamento imediato de sempre.
+    const efetivaEm = req.body.efetiva_em as string | undefined;
+    const agendarParaFuturo = status === 'INATIVO' && efetivaEm && new Date(efetivaEm).getTime() > Date.now();
+
+    if (agendarParaFuturo) {
+      tenant.inativacao_programada_para = efetivaEm;
+      // Não mexe em tenant.status nem nos CNPJs adicionais ainda — só na efetivação real.
+    } else {
+      tenant.status = status;
+      // Qualquer efetivação explícita (inativação imediata ou reativação) cancela um
+      // agendamento pendente que porventura existisse — nunca deixa os dois coexistindo.
+      tenant.inativacao_programada_para = undefined;
+
+      // Cascata de CNPJ (pacote de 23/09, confirmado pelo usuário): inativar o CNPJ principal
+      // (= inativar o Tenant, já que o principal não tem status próprio — ver comentário em
+      // TenantCnpjAdicional em types/index.ts) inativa também todos os CNPJs adicionais/filiais.
+      // Só nesta direção — reativar o Tenant NÃO reativa os adicionais automaticamente (a
+      // seguradora reativa cada um manualmente se fizer sentido; inativar um adicional isolado
+      // continua sem efeito no cadastro, como já era antes).
+      if (status === 'INATIVO') {
+        dbStore.tenantCnpjsAdicionais
+          .filter((c) => c.tenant_id === id && c.status === 'ATIVO')
+          .forEach((c) => {
+            c.status = 'INATIVO';
+          });
+      }
     }
   }
   if (ambiente) tenant.ambiente = ambiente;
