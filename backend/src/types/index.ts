@@ -610,14 +610,12 @@ export interface RevokedToken {
  * pelo usuário): desde sempre, o que era preenchido nessa parte do wizard nunca chegava a ser
  * persistido de verdade (só aparecia na tela e se perdia). Esta entidade corrige isso.
  *
- * Escopo desta primeira versão, deixado explícito porque o relatório descreve um comportamento
- * mais amplo que este modelo ainda não cobre por completo: a regra de "inativar o último CNPJ
- * ativo inativa o cadastro inteiro" NÃO está implementada aqui — o CNPJ principal (`Tenant.cnpj`)
- * não é uma linha nesta lista, é um campo à parte sem status próprio, então não existe hoje uma
- * lista unificada "principal + adicionais" para calcular "o último que restou". Inativar/reativar
- * um CNPJ adicional aqui NUNCA muda `Tenant.status` automaticamente — isso continua uma ação
- * explícita via `PUT /admin/tenants/:id`. Unificar os dois modelos é uma mudança maior, deixada
- * para uma rodada própria caso a cascata automática seja de fato necessária.
+ * Cascata (pacote de 23/09, confirmada pelo usuário): inativar o CNPJ principal — que aqui
+ * significa inativar o próprio `Tenant` via `PUT /admin/tenants/:id`, já que o principal não é
+ * uma linha nesta lista, é só o campo `Tenant.cnpj` sem status próprio — cascade agora sim para
+ * todos os CNPJs adicionais/filiais (ver `router.put('/tenants/:id', ...)` em `routes/admin.ts`).
+ * Só nesta direção: reativar o Tenant NÃO reativa os adicionais automaticamente, e inativar um
+ * adicional isolado continua sem efeito nenhum sobre `Tenant.status`.
  *
  * Imutabilidade: uma vez cadastrado, `cnpj` nunca é editado nem excluído fisicamente — só
  * inativado/reativado via `status` (regra confirmada pelo usuário no relatório de 13/09).
