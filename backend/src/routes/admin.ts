@@ -174,7 +174,22 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
     uf,
     cep
   } = req.body;
-  if (status) tenant.status = status;
+  if (status) {
+    tenant.status = status;
+    // Cascata de CNPJ (pacote de 23/09, confirmado pelo usuário): inativar o CNPJ principal
+    // (= inativar o Tenant, já que o principal não tem status próprio — ver comentário em
+    // TenantCnpjAdicional em types/index.ts) inativa também todos os CNPJs adicionais/filiais.
+    // Só nesta direção — reativar o Tenant NÃO reativa os adicionais automaticamente (a
+    // seguradora reativa cada um manualmente se fizer sentido; inativar um adicional isolado
+    // continua sem efeito no cadastro, como já era antes).
+    if (status === 'INATIVO') {
+      dbStore.tenantCnpjsAdicionais
+        .filter((c) => c.tenant_id === id && c.status === 'ATIVO')
+        .forEach((c) => {
+          c.status = 'INATIVO';
+        });
+    }
+  }
   if (ambiente) tenant.ambiente = ambiente;
   if (razao_social) tenant.razao_social = razao_social;
   if (token_duration_hours) tenant.token_duration_hours = Number(token_duration_hours);
