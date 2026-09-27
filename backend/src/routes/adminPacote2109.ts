@@ -6,6 +6,8 @@ import { Tenant, Policy, TenantCnpjAdicional, PolicyPartnerHistory, LiberationCo
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
 import { policyPertenceAoAtor } from './adminHelpers';
+import { criarNotificacaoSeRetroativa } from './partnerNotifications';
+import { CancelamentoService } from '../services/cancelamento';
 
 /**
  * Fase 0 a 4 do pacote de 21/09 (compartilhado pelo usuário — validação técnica + implementação
@@ -169,8 +171,8 @@ router.delete('/policies/:id/suspensao', requirePermission('apolices', 'editar')
 // types/index.ts. "Trocar Parceria" fecha o registro aberto daquele papel (vigencia_fim =
 // vigencia_inicio da troca menos 1 dia) e abre um novo, atualizando também o campo-cache
 // correspondente em Policy (broker_id/co_broker_id/assessoria_id) para não quebrar nenhum lugar
-// que já lê esses três campos diretamente. Notificação de embarques retroativos: fora de escopo
-// nesta rodada (não existe canal de notificação real hoje) — ver documento de validação técnica. ---
+// que já lê esses três campos diretamente. Notificação de embarques retroativos: implementada no
+// pacote de 23/09 — ver criarNotificacaoSeRetroativa (partnerNotifications.ts), chamada abaixo. ---
 router.get('/policies/:id/historico-parcerias', requirePermission('apolices', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   if (!policyPertenceAoAtor(req, res, id)) return;
@@ -180,7 +182,7 @@ router.get('/policies/:id/historico-parcerias', requirePermission('apolices', 'v
   return res.json({ status: 'sucesso', historico });
 });
 
-router.post('/policies/:id/trocar-parceria', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/policies/:id/trocar-parceria', requirePermission('apolices', 'editar'), async (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const policy = dbStore.policies.find((p) => p.id === id);
   if (!policy) {
@@ -220,6 +222,12 @@ router.post('/policies/:id/trocar-parceria', requirePermission('apolices', 'edit
   else policy.assessoria_id = broker_id;
 
   dbStore.persist();
+
+  // Fase "Notificação de Embarques Retroativos" (pacote de 23/09) — se a vigência é retroativa,
+  // avisa a corretora nova por e-mail e abre uma janela de 2 dias úteis para ela decidir; nunca
+  // bloqueia a troca em si, que já está efetivada acima independente da resposta.
+  await criarNotificacaoSeRetroativa(policy, papel, broker_id, vigencia_inicio);
+
   return res.json({ status: 'sucesso', policy, vinculo: novoRegistro });
 });
 
@@ -302,7 +310,7 @@ router.delete('/policy-liberation-codes/:id', requirePermission('apolices', 'edi
 // averbação de verdade (mesma lógica de sucesso do motor, sem reprocessar as regras — a decisão
 // humana SUBSTITUI a regra que gerou a pendência); recusar converte para ERRO. Cancelar só é
 // permitido a partir de PENDENTE_APROVACAO — vira CANCELADO_NAO_AVERBADO, distinto do "Cancelado"
-// (documento averbado e depois cancelado), que ainda não existe no motor. ---
+// (documento averbado e depois cancelado, ver o motor de cancelamento pós-averbação abaixo). ---
 router.post('/averbacoes/:id/decidir', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const averbacao = dbStore.averbacoes.find((a) => a.id === id);
@@ -363,5 +371,30 @@ router.post('/averbacoes/:id/cancelar', requirePermission('apolices', 'editar'),
   return res.json({ status: 'sucesso', averbacao });
 });
 
+// --- Motor de Cancelamento pós-averbação (pacote de 23/09) — lado da seguradora: sem restrição
+// de prazo (o segurado tem o dele em POST /tenant/averbacoes/:id/cancelar, ver tenant.ts), mas
+// exige o mesmo evento de cancelamento REAL do Sefaz — ver CancelamentoService. ---
+router.post('/averbacoes/:id/cancelar-averbado', requirePermission('apolices', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
+  const { id } = req.params;
+  const averbacao = dbStore.averbacoes.find((a) => a.id === id);
+  if (!averbacao) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Averbação não encontrada.' });
+  }
+  if (!policyPertenceAoAtor(req, res, averbacao.policy_id)) return;
+
+  const { xml_evento_cancelamento } = req.body;
+  if (!xml_evento_cancelamento || typeof xml_evento_cancelamento !== 'string') {
+    return res.status(400).json({ status: 'erro', mensagem: 'xml_evento_cancelamento é obrigatório.' });
+  }
+
+  const resultado = CancelamentoService.processar({
+    averbacaoAnterior: averbacao,
+    xmlEvento: xml_evento_cancelamento,
+    requisitante: 'SEGURADORA'
+  });
+
+  const statusCode = resultado.status === 'erro' ? 400 : 200;
+  return res.status(statusCode).json(resultado);
+});
 
 export default router;
