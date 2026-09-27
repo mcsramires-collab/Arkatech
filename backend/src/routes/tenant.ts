@@ -8,6 +8,7 @@ import { AverbacaoService } from '../services/averbacao';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { checkActivated } from '../services/accountActivation';
+import { CancelamentoService } from '../services/cancelamento';
 import { TenantUser, BusinessRuleRequest, SupportTicket, Policy } from '../types';
 
 const router = Router();
@@ -413,6 +414,40 @@ router.post('/averbacoes/:id/reenviar', authMiddleware, (req: AuthenticatedReque
   const { codigo_liberacao, supplemented_vars } = req.body;
   const appBaseUrl = `${req.protocol}://${req.get('host')}`;
   const resultado = AverbacaoService.reenviar(averbacaoAnterior, appBaseUrl, codigo_liberacao, supplemented_vars);
+  const statusCode = resultado.status === 'erro' ? 400 : 200;
+  return res.status(statusCode).json(resultado);
+});
+
+/**
+ * POST /tenant/averbacoes/:id/cancelar — Motor de Cancelamento pós-averbação (pacote de 23/09,
+ * compartilhado pelo usuário). Self-service: só funciona DENTRO do prazo que a seguradora
+ * configurou para esta apólice (`regras:prazo-cancelamento-valor`/`-unidade`, aba Regras de
+ * Negócio) — sem essa configuração, ou fora do prazo, o segurado é orientado a falar com a
+ * seguradora (que cancela sem restrição via `POST /admin/averbacoes/:id/cancelar-averbado`).
+ * Exige o evento de cancelamento REAL do Sefaz — ver CancelamentoService/XMLParserService.
+ */
+router.post('/averbacoes/:id/cancelar', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const gate = checkActivated(tenantId);
+  if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
+
+  const { id } = req.params;
+  const averbacaoAnterior = dbStore.averbacoes.find((a) => a.id === id && a.tenant_id === tenantId);
+  if (!averbacaoAnterior) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Documento não encontrado.' });
+  }
+
+  const { xml_evento_cancelamento } = req.body;
+  if (!xml_evento_cancelamento || typeof xml_evento_cancelamento !== 'string') {
+    return res.status(400).json({ status: 'erro', mensagem: 'xml_evento_cancelamento é obrigatório.' });
+  }
+
+  const resultado = CancelamentoService.processar({
+    averbacaoAnterior,
+    xmlEvento: xml_evento_cancelamento,
+    requisitante: 'SEGURADO'
+  });
+
   const statusCode = resultado.status === 'erro' ? 400 : 200;
   return res.status(statusCode).json(resultado);
 });
