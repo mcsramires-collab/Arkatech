@@ -1,3 +1,4 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
@@ -193,8 +194,14 @@ router.post('/clients', requirePermission('clientes', 'editar'), (req: Backoffic
   }
 
   // Sem exigência de aprovação — aplica direto (mesma lógica do cadastro pela seguradora)
-  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
-  let tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpjLimpo);
+  const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+    });
+  }
+  let tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpjLimpo);
 
   if (tenant) {
     const policyConflitante = dbStore.policies.find(
