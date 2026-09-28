@@ -156,9 +156,10 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     storeKey: 'fiscalDocuments',
     pk: 'id',
     columns: [
-      'id', 'tenant_id', 'source', 'status', 'content_hash_sha256', 'original_filename',
-      'tipo_documento', 'chave_documento', 'numero_documento', 'serie_documento',
-      'cnpj_emissor', 'nsu', 'connector_id', 'external_id', 'policy_ids_attempted',
+      'id', 'tenant_id', 'source', 'capture_mode', 'status', 'content_hash_sha256', 'raw_xml_id',
+      'original_filename', 'tipo_documento', 'chave_documento', 'numero_documento',
+      'serie_documento', 'cnpj_emissor', 'protocolo_aceitacao_sefaz', 'nsu',
+      'connector_id', 'external_id', 'policy_ids_attempted',
       'averbacao_ids', 'codigo_resultado', 'mensagem_resultado', 'received_at', 'processed_at'
     ],
     jsonbColumns: ['policy_ids_attempted', 'averbacao_ids']
@@ -185,6 +186,17 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
       'last_cstat', 'last_message', 'last_document_count', 'last_sync_at',
       'next_sync_after', 'created_at', 'updated_at'
     ]
+  },
+  {
+    table: 'fiscal_events',
+    storeKey: 'fiscalEvents',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'connector_id', 'provider', 'nsu', 'tipo_evento',
+      'chave_documento', 'status', 'content_hash_sha256', 'raw_xml_id',
+      'averbacao_ids', 'mensagem', 'received_at', 'processed_at'
+    ],
+    jsonbColumns: ['averbacao_ids']
   },
   {
     table: 'averbacoes',
