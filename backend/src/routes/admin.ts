@@ -22,9 +22,11 @@ import { resolveInsurerId, policyPertenceAoAtor, apenasInternalUser } from './ad
 import adminSeguradora1Router from './adminSeguradora1';
 import adminSeguradora2Router from './adminSeguradora2';
 import partnerNotificationsRouter from './partnerNotifications';
+import supportAdminRouter from './supportAdmin';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+router.use(supportAdminRouter);
 
 /**
  * Fase 4 do item "Login real + RBAC" (Backlog, seção 4) para admin.ts — ao contrário de
