@@ -19,6 +19,14 @@ describe('ConnectorFiscalService', () => {
     created_at: '2026-09-28T00:00:00.000Z'
   };
 
+  const cteSemAutorizacao = `<CTe>
+    <infCte Id="CTe35123456789012345678901234567890123456789013">
+      <ide><nCT>124</nCT><serie>1</serie><tpAmb>2</tpAmb></ide>
+      <emit><CNPJ>12345678000190</CNPJ></emit>
+      <vPrest><vRec>1000.00</vRec></vPrest>
+    </infCte>
+  </CTe>`;
+
   const cteAutorizado = `<cteProc>
     <CTe><infCte Id="CTe35123456789012345678901234567890123456789012">
       <ide><nCT>123</nCT><serie>1</serie><tpAmb>2</tpAmb></ide>
@@ -139,7 +147,7 @@ describe('ConnectorFiscalService', () => {
       provider: 'CTE',
       capture_mode: 'OUTBOUND',
       app_base_url: 'http://localhost:3000',
-      documents: [{ external_id: 'emissor-rejeitado', xml: '<cteProc />' }]
+      documents: [{ external_id: 'emissor-rejeitado', xml: cteSemAutorizacao }]
     });
 
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({
@@ -198,7 +206,7 @@ describe('ConnectorFiscalService', () => {
       provider: 'CTE',
       capture_mode: 'DISTRIBUTION',
       app_base_url: 'http://localhost:3000',
-      documents: [{ nsu: '10', xml: '<cteProc />' }]
+      documents: [{ nsu: '10', xml: cteSemAutorizacao }]
     });
 
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({
