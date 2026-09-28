@@ -7,6 +7,7 @@ import {
 import { ConnectorService } from '../services/connectorService';
 import { ConnectorFiscalService } from '../services/connectorFiscalService';
 import { FiscalSyncService } from '../services/fiscalSyncService';
+import { FiscalEventService } from '../services/fiscalEventService';
 import { dbStore } from '../services/dbStore';
 import {
   ConnectorCertificateStatus,
@@ -201,6 +202,63 @@ router.post(
       total: results.length,
       processed: results.filter((item) => !item.duplicate).length,
       duplicates: results.filter((item) => item.duplicate).length,
+      results
+    });
+  }
+);
+
+router.post(
+  '/fiscal-events',
+  connectorAuthMiddleware,
+  (req: ConnectorAuthenticatedRequest, res: Response) => {
+    const connector = req.connector!;
+    const provider = String(req.body.provider || '').toUpperCase() as FiscalSyncProvider;
+    const allowedProviders: FiscalSyncProvider[] = ['NFE', 'CTE', 'MDFE'];
+
+    if (!allowedProviders.includes(provider)) {
+      return res.status(400).json({ status: 'erro', mensagem: 'provider deve ser NFE, CTE ou MDFE.' });
+    }
+    if (!ConnectorFiscalService.supportsProvider(connector, provider)) {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: `Este conector não possui a capability ${ConnectorFiscalService.requiredCapability(provider)}.`
+      });
+    }
+
+    const events = req.body.events;
+    if (!Array.isArray(events) || events.length === 0) {
+      return res.status(400).json({ status: 'erro', mensagem: 'events deve conter ao menos um evento.' });
+    }
+    if (events.length > 50) {
+      return res.status(413).json({ status: 'erro', mensagem: 'O lote aceita no máximo 50 eventos fiscais.' });
+    }
+
+    const invalid = events.find(
+      (event: any) => !event || typeof event.xml !== 'string' || event.xml.trim().length === 0
+    );
+    if (invalid) {
+      return res.status(400).json({ status: 'erro', mensagem: 'Cada evento precisa informar xml.' });
+    }
+
+    const results = events.map((event: any) =>
+      FiscalEventService.process({
+        connector,
+        provider,
+        event: {
+          nsu: typeof event.nsu === 'string' && event.nsu.trim() ? event.nsu.trim() : undefined,
+          xml: event.xml
+        }
+      })
+    );
+
+    return res.json({
+      status: 'sucesso',
+      provider,
+      total: results.length,
+      processados: results.filter((item) => item.status === 'PROCESSADO').length,
+      ignorados: results.filter((item) => item.status === 'IGNORADO').length,
+      duplicados: results.filter((item) => item.status === 'DUPLICADO').length,
+      erros: results.filter((item) => item.status === 'ERRO').length,
       results
     });
   }
