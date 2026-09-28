@@ -413,6 +413,21 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
     const insurer = isSeguradora ? dbStore.insurers.find((i) => i.tenant_id === tenant.id) : undefined;
     const broker = !isSeguradora ? dbStore.brokers.find((b) => b.tenant_id === tenant.id) : undefined;
 
+    // Backfill de contas criadas antes do onboarding RBAC automático. Sem isso, usuários legados
+    // conseguem autenticar mas recebem 403 em todas as rotas /admin ou /broker.
+    if (!candidato.rbac_profile_id) {
+      const profile = ensureDefaultBackofficeProfile(tenant);
+      if (!profile) {
+        return res.status(409).json({
+          status: 'erro',
+          codigo: 'BACKOFFICE_OWNER_NOT_LINKED',
+          mensagem: 'Esta empresa ainda não está vinculada corretamente ao cadastro de seguradora/corretora.'
+        });
+      }
+      candidato.rbac_profile_id = profile.id;
+      dbStore.persist();
+    }
+
     const payload = {
       actor_type: (isSeguradora ? 'SEGURADORA' : 'CORRETORA') as 'SEGURADORA' | 'CORRETORA',
       user_id: candidato.id,
