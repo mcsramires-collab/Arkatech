@@ -1,3 +1,4 @@
+import { normalizeAlphanumeric } from '../utils/cnpj';
 import { dbStore } from './dbStore';
 import { Averbacao } from '../types';
 import { XMLParserService } from './xmlParser';
@@ -85,7 +86,7 @@ export class CancelamentoService {
       return { status: 'erro', codigo: fmt.codigo, mensagem: fmt.mensagem };
     }
 
-    const norm = (v?: string) => (v ?? '').replace(/\D/g, '');
+    const norm = (v?: string) => normalizeAlphanumeric(v ?? '');
     if (norm(parsed.chaveDocumentoCancelado) !== norm(averbacaoAnterior.chave_documento)) {
       const fmt = ResponseEngine.formatResponse('ERR-4019', {
         MOTIVO: 'a chave do documento no evento não confere com a chave desta averbação'
