@@ -4,10 +4,14 @@ import {
   ConnectorAuthenticatedRequest
 } from '../middleware/connectorAuthMiddleware';
 import { ConnectorService } from '../services/connectorService';
+import { ConnectorFiscalService } from '../services/connectorFiscalService';
+import { FiscalSyncService } from '../services/fiscalSyncService';
 import { dbStore } from '../services/dbStore';
 import {
   ConnectorCertificateStatus,
-  ConnectorSefazStatus
+  ConnectorSefazStatus,
+  FiscalSyncProvider,
+  FiscalSyncStatus
 } from '../types';
 
 const router = Router();
@@ -89,8 +93,145 @@ router.get(
         cte: connector.capabilities.includes('CTE_DFE'),
         mdfe: connector.capabilities.includes('MDFE_DFE')
       },
-      max_batch_size: 50
+      max_batch_size: 50,
+      sync_state: FiscalSyncService.publicResumeState(connector)
     });
+  }
+);
+
+
+router.post(
+  '/fiscal-documents',
+  connectorAuthMiddleware,
+  (req: ConnectorAuthenticatedRequest, res: Response) => {
+    const connector = req.connector!;
+    const provider = String(req.body.provider || '').toUpperCase() as FiscalSyncProvider;
+    const allowedProviders: FiscalSyncProvider[] = ['NFE', 'CTE', 'MDFE'];
+
+    if (!allowedProviders.includes(provider)) {
+      return res.status(400).json({ status: 'erro', mensagem: 'provider deve ser NFE, CTE ou MDFE.' });
+    }
+    if (!ConnectorFiscalService.supportsProvider(connector, provider)) {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: `Este conector não possui a capability ${ConnectorFiscalService.requiredCapability(provider)}.`
+      });
+    }
+
+    const documents = req.body.documents;
+    if (!Array.isArray(documents) || documents.length === 0) {
+      return res.status(400).json({ status: 'erro', mensagem: 'documents deve conter ao menos um documento.' });
+    }
+    if (documents.length > 50) {
+      return res.status(413).json({ status: 'erro', mensagem: 'O lote do Connector aceita no máximo 50 documentos.' });
+    }
+
+    const invalid = documents.find(
+      (document: any) =>
+        !document ||
+        typeof document.nsu !== 'string' ||
+        document.nsu.trim().length === 0 ||
+        typeof document.xml !== 'string' ||
+        document.xml.trim().length === 0
+    );
+    if (invalid) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'Cada documento precisa informar nsu e xml como strings não vazias.'
+      });
+    }
+
+    const appBaseUrl = `${req.protocol}://${req.get('host')}`;
+    const results = ConnectorFiscalService.ingestBatch({
+      connector,
+      provider,
+      app_base_url: appBaseUrl,
+      documents: documents.map((document: any) => ({
+        nsu: document.nsu.trim(),
+        xml: document.xml
+      }))
+    });
+
+    return res.json({
+      status: 'sucesso',
+      provider,
+      total: results.length,
+      processed: results.filter((item) => !item.duplicate).length,
+      duplicates: results.filter((item) => item.duplicate).length,
+      results
+    });
+  }
+);
+
+router.post(
+  '/sync-result',
+  connectorAuthMiddleware,
+  (req: ConnectorAuthenticatedRequest, res: Response) => {
+    const connector = req.connector!;
+    const provider = String(req.body.provider || '').toUpperCase() as FiscalSyncProvider;
+    const syncStatus = String(req.body.status || '').toUpperCase() as FiscalSyncStatus;
+
+    const allowedProviders: FiscalSyncProvider[] = ['NFE', 'CTE', 'MDFE'];
+    const allowedStatuses: FiscalSyncStatus[] = [
+      'OK',
+      'NO_DOCUMENTS',
+      'RATE_LIMITED',
+      'ERROR'
+    ];
+
+    if (!allowedProviders.includes(provider)) {
+      return res.status(400).json({ status: 'erro', mensagem: 'provider deve ser NFE, CTE ou MDFE.' });
+    }
+    if (!ConnectorFiscalService.supportsProvider(connector, provider)) {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: `Este conector não possui a capability ${ConnectorFiscalService.requiredCapability(provider)}.`
+      });
+    }
+    if (!allowedStatuses.includes(syncStatus)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'status deve ser OK, NO_DOCUMENTS, RATE_LIMITED ou ERROR.'
+      });
+    }
+
+    const cstat =
+      req.body.cstat === undefined || req.body.cstat === null
+        ? undefined
+        : Number(req.body.cstat);
+    if (cstat !== undefined && !Number.isInteger(cstat)) {
+      return res.status(400).json({ status: 'erro', mensagem: 'cstat deve ser um número inteiro.' });
+    }
+
+    const documentCount =
+      req.body.document_count === undefined ? 0 : Number(req.body.document_count);
+    if (!Number.isInteger(documentCount) || documentCount < 0) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'document_count deve ser um número inteiro maior ou igual a zero.'
+      });
+    }
+
+    if (req.body.next_sync_after) {
+      const parsed = new Date(String(req.body.next_sync_after));
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({ status: 'erro', mensagem: 'next_sync_after inválido.' });
+      }
+    }
+
+    const state = FiscalSyncService.report(connector, {
+      provider,
+      status: syncStatus,
+      ult_nsu: req.body.ult_nsu !== undefined ? String(req.body.ult_nsu) : undefined,
+      max_nsu: req.body.max_nsu !== undefined ? String(req.body.max_nsu) : undefined,
+      cstat,
+      message: req.body.message !== undefined ? String(req.body.message) : undefined,
+      document_count: documentCount,
+      next_sync_after:
+        req.body.next_sync_after !== undefined ? String(req.body.next_sync_after) : undefined
+    });
+
+    return res.json({ status: 'sucesso', sync: state });
   }
 );
 
