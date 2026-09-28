@@ -177,6 +177,16 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     jsonbColumns: ['capabilities']
   },
   {
+    table: 'fiscal_sync_states',
+    storeKey: 'fiscalSyncStates',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'connector_id', 'provider', 'status', 'ult_nsu', 'max_nsu',
+      'last_cstat', 'last_message', 'last_document_count', 'last_sync_at',
+      'next_sync_after', 'created_at', 'updated_at'
+    ]
+  },
+  {
     table: 'averbacoes',
     storeKey: 'averbacoes',
     pk: 'id',
