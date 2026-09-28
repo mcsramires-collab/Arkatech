@@ -140,6 +140,7 @@ export class WhatsappMessageService {
       text: params.text,
       status: 'PENDING',
       support_ticket_id: params.support_ticket_id,
+      attempt_count: 0,
       fiscal_document_ids: [],
       created_at: now,
       updated_at: now
@@ -149,12 +150,66 @@ export class WhatsappMessageService {
     return record;
   }
 
+  private static releaseExpiredClaims(): void {
+    const now = Date.now();
+    let changed = false;
+
+    for (const item of dbStore.whatsappMessages) {
+      if (
+        item.direction === 'OUTBOUND' &&
+        item.status === 'PROCESSING' &&
+        item.claim_expires_at &&
+        new Date(item.claim_expires_at).getTime() <= now
+      ) {
+        item.status = 'PENDING';
+        item.claimed_by = undefined;
+        item.claim_token = undefined;
+        item.claim_expires_at = undefined;
+        item.updated_at = new Date(now).toISOString();
+        changed = true;
+      }
+    }
+
+    if (changed) dbStore.persist();
+  }
+
   static outbox(limit = 50): WhatsappMessage[] {
+    this.releaseExpiredClaims();
     const safeLimit = Math.min(200, Math.max(1, limit));
     return dbStore.whatsappMessages
       .filter((item) => item.direction === 'OUTBOUND' && item.status === 'PENDING')
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .slice(0, safeLimit);
+  }
+
+  static claimOutbox(params: {
+    worker_id: string;
+    limit?: number;
+    lease_seconds?: number;
+  }): WhatsappMessage[] {
+    this.releaseExpiredClaims();
+
+    const safeLimit = Math.min(100, Math.max(1, params.limit ?? 20));
+    const leaseSeconds = Math.min(900, Math.max(30, params.lease_seconds ?? 120));
+    const now = Date.now();
+    const expiresAt = new Date(now + leaseSeconds * 1000).toISOString();
+
+    const selected = dbStore.whatsappMessages
+      .filter((item) => item.direction === 'OUTBOUND' && item.status === 'PENDING')
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .slice(0, safeLimit);
+
+    for (const item of selected) {
+      item.status = 'PROCESSING';
+      item.claimed_by = params.worker_id;
+      item.claim_token = uuidv4();
+      item.claim_expires_at = expiresAt;
+      item.attempt_count = (item.attempt_count ?? 0) + 1;
+      item.updated_at = new Date(now).toISOString();
+    }
+
+    if (selected.length > 0) dbStore.persist();
+    return selected;
   }
 
   static updateOutboundStatus(params: {
@@ -163,16 +218,26 @@ export class WhatsappMessageService {
     provider?: string;
     provider_message_id?: string;
     error_message?: string;
+    claim_token?: string;
   }): WhatsappMessage | undefined {
     const record = dbStore.whatsappMessages.find(
       (item) => item.id === params.id && item.direction === 'OUTBOUND'
     );
     if (!record) return undefined;
+    if (
+      record.status === 'PROCESSING' &&
+      (!params.claim_token || params.claim_token !== record.claim_token)
+    ) {
+      return undefined;
+    }
 
     record.status = params.status;
     if (params.provider) record.provider = params.provider;
     if (params.provider_message_id) record.provider_message_id = params.provider_message_id;
     record.error_message = params.error_message;
+    record.claimed_by = undefined;
+    record.claim_token = undefined;
+    record.claim_expires_at = undefined;
     record.updated_at = new Date().toISOString();
     if (params.status !== 'FAILED') record.processed_at = record.updated_at;
     dbStore.persist();
