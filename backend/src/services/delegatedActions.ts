@@ -1,3 +1,4 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
 import { DelegationAction, Tenant, Policy, ApprovalRequest, PolicyCoverageValue } from '../types';
@@ -93,8 +94,15 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
     contato_celular
   } = payload;
 
-  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
-  let tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpjLimpo);
+  const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return {
+      ok: false,
+      codigo: 'erro',
+      mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+    };
+  }
+  let tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpjLimpo);
 
   if (tenant) {
     const policyConflitante = dbStore.policies.find(
