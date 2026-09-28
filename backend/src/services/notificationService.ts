@@ -52,9 +52,16 @@ export class NotificationService {
       .slice(0, limit);
   }
 
-  static markRead(tenantId: string, id: string): OperationalNotification | undefined {
+  static markRead(
+    tenantId: string,
+    id: string,
+    tenantUserId?: string
+  ): OperationalNotification | undefined {
     const notification = dbStore.operationalNotifications.find(
-      (item) => item.id === id && item.tenant_id === tenantId
+      (item) =>
+        item.id === id &&
+        item.tenant_id === tenantId &&
+        (!item.tenant_user_id || item.tenant_user_id === tenantUserId)
     );
     if (!notification) return undefined;
 
