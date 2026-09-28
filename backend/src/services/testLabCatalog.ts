@@ -626,13 +626,10 @@ const suites: TestLabSuiteTemplate[] = [
       'policy.status',
       'policy.permitir_inativo_vencido',
       'policy.aceita_averbacao_como_destinatario',
-      'policy.lmi',
       'policy.vigencia_inicio',
       'policy.vigencia_fim',
       'policy.suspensao',
-      'regras:documentos-aceitos',
-      'document.tipo',
-      'document.valor_carga'
+      'document.funcao_cnpj_segurado'
     ]
   },
   {
@@ -657,7 +654,10 @@ const suites: TestLabSuiteTemplate[] = [
     flag_keys: [
       'ingestion.channel',
       'ingestion.deduplication',
-      'document.autorizacao_sefaz'
+      'document.autorizacao_sefaz',
+      'regras:documentos-aceitos',
+      'document.tipo',
+      'document.tp_amb'
     ]
   },
   {
