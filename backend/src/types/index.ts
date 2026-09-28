@@ -4,6 +4,7 @@ export type UserRole = 'ADMIN' | 'SEGURADORA' | 'CORRETORA' | 'TRANSPORTADOR';
 export type RamoApolice = 'RCTRC' | 'RCDC' | 'RCV';
 export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE' | 'MDFE';
 export type DocumentIngestionSource = 'API' | 'PORTAL' | 'SEFAZ' | 'TMS' | 'WHATSAPP' | 'INTERNAL';
+export type FiscalCaptureMode = 'DISTRIBUTION' | 'OUTBOUND' | 'MANUAL' | 'INTEGRATION';
 export type FiscalDocumentStatus =
   | 'RECEBIDO'
   | 'PROCESSANDO'
@@ -234,14 +235,17 @@ export interface FiscalDocument {
   id: string;
   tenant_id: string;
   source: DocumentIngestionSource;
+  capture_mode: FiscalCaptureMode;
   status: FiscalDocumentStatus;
   content_hash_sha256: string;
+  raw_xml_id: string;
   original_filename?: string;
   tipo_documento?: TipoDocumento;
   chave_documento?: string;
   numero_documento?: string;
   serie_documento?: string;
   cnpj_emissor?: string;
+  protocolo_aceitacao_sefaz?: string;
   nsu?: string;
   connector_id?: string;
   external_id?: string;
@@ -299,6 +303,25 @@ export interface FiscalSyncState {
   next_sync_after?: string;
   created_at: string;
   updated_at: string;
+}
+
+export type FiscalEventStatus = 'PROCESSADO' | 'IGNORADO' | 'DUPLICADO' | 'ERRO';
+
+export interface FiscalEvent {
+  id: string;
+  tenant_id: string;
+  connector_id: string;
+  provider: FiscalSyncProvider;
+  nsu?: string;
+  tipo_evento?: string;
+  chave_documento?: string;
+  status: FiscalEventStatus;
+  content_hash_sha256: string;
+  raw_xml_id: string;
+  averbacao_ids: string[];
+  mensagem?: string;
+  received_at: string;
+  processed_at?: string;
 }
 
 export interface Averbacao {
@@ -363,7 +386,7 @@ export interface Averbacao {
   justificativa_cancelamento?: string;
   cancelado_em?: string;
   /** 'SEGURADO' quando cancelado via self-service dentro do prazo; 'SEGURADORA' via /admin. */
-  cancelado_por?: 'SEGURADO' | 'SEGURADORA';
+  cancelado_por?: 'SEGURADO' | 'SEGURADORA' | 'SEFAZ';
   valor_carga: number; // valor bruto extraído do documento (vCarga/vProd/etc.)
   valor_considerado_averbacao: number; // valor_carga + coberturas adicionais monetárias somadas
   regras_internas_aplicadas: string[]; // ex: "Cobertura 'Container' somada (R$ 25.000,00)", "Bypass de apólice vencida aplicado"
