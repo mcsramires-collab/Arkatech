@@ -1,3 +1,4 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
@@ -624,7 +625,7 @@ router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
     return res.status(400).json({ status: 'erro', mensagem: 'cnpj e razao_social são obrigatórios.' });
   }
 
-  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
+  const cnpjLimpo = normalizeCnpj(cnpj);
   const newBroker: Broker = {
     id: `brk_${cnpjLimpo}_${Date.now()}`,
     cnpj,
