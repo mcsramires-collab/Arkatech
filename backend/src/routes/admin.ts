@@ -12,6 +12,7 @@ import { dbStore } from '../services/dbStore';
 import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, Broker, DelegationException, DelegationExceptionLevel, PolicyCoverageValue, TenantCnpjAdicional, PolicyPartnerHistory, LiberationCode, Averbacao } from '../types';
 import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
+import { getTestLabCatalog } from '../services/testLabCatalog';
 import { PurgeService } from '../services/purgeService';
 import { AverbacaoService } from '../services/averbacao';
 import { sendActivationInviteEmail } from '../services/emailService';
@@ -742,6 +743,17 @@ router.post('/importar-lote', upload.array('arquivos', 200), async (req: Backoff
     total_sucesso: totalSucesso,
     total_erro: totalErro,
     resultados
+  });
+});
+
+// --- LABORATÓRIO DE TESTES (catálogo declarativo) ---
+// Ferramenta exclusivamente interna. A UI consome este catálogo para não precisar
+// codificar checkbox/campo novo a cada flag adicionada ao motor.
+router.get('/test-lab/catalog', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  return res.json({
+    status: 'sucesso',
+    catalog: getTestLabCatalog()
   });
 });
 
