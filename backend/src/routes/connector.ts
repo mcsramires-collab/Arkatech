@@ -12,7 +12,8 @@ import {
   ConnectorCertificateStatus,
   ConnectorSefazStatus,
   FiscalSyncProvider,
-  FiscalSyncStatus
+  FiscalSyncStatus,
+  FiscalCaptureMode
 } from '../types';
 
 const router = Router();
@@ -131,10 +132,18 @@ router.post(
   (req: ConnectorAuthenticatedRequest, res: Response) => {
     const connector = req.connector!;
     const provider = String(req.body.provider || '').toUpperCase() as FiscalSyncProvider;
+    const captureMode = String(req.body.capture_mode || 'DISTRIBUTION').toUpperCase() as FiscalCaptureMode;
     const allowedProviders: FiscalSyncProvider[] = ['NFE', 'CTE', 'MDFE'];
+    const allowedCaptureModes: FiscalCaptureMode[] = ['DISTRIBUTION', 'OUTBOUND'];
 
     if (!allowedProviders.includes(provider)) {
       return res.status(400).json({ status: 'erro', mensagem: 'provider deve ser NFE, CTE ou MDFE.' });
+    }
+    if (!allowedCaptureModes.includes(captureMode)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'capture_mode deve ser DISTRIBUTION ou OUTBOUND.'
+      });
     }
     if (!ConnectorFiscalService.supportsProvider(connector, provider)) {
       return res.status(403).json({
@@ -154,15 +163,18 @@ router.post(
     const invalid = documents.find(
       (document: any) =>
         !document ||
-        typeof document.nsu !== 'string' ||
-        document.nsu.trim().length === 0 ||
         typeof document.xml !== 'string' ||
-        document.xml.trim().length === 0
+        document.xml.trim().length === 0 ||
+        (captureMode === 'DISTRIBUTION' &&
+          (typeof document.nsu !== 'string' || document.nsu.trim().length === 0))
     );
     if (invalid) {
       return res.status(400).json({
         status: 'erro',
-        mensagem: 'Cada documento precisa informar nsu e xml como strings não vazias.'
+        mensagem:
+          captureMode === 'DISTRIBUTION'
+            ? 'Na distribuição, cada documento precisa informar nsu e xml.'
+            : 'Na captura OUTBOUND, cada documento precisa informar xml; NSU é opcional.'
       });
     }
 
@@ -170,9 +182,14 @@ router.post(
     const results = ConnectorFiscalService.ingestBatch({
       connector,
       provider,
+      capture_mode: captureMode,
       app_base_url: appBaseUrl,
       documents: documents.map((document: any) => ({
-        nsu: document.nsu.trim(),
+        nsu: typeof document.nsu === 'string' && document.nsu.trim() ? document.nsu.trim() : undefined,
+        external_id:
+          typeof document.external_id === 'string' && document.external_id.trim()
+            ? document.external_id.trim()
+            : undefined,
         xml: document.xml
       }))
     });
@@ -180,6 +197,7 @@ router.post(
     return res.json({
       status: 'sucesso',
       provider,
+      capture_mode: captureMode,
       total: results.length,
       processed: results.filter((item) => !item.duplicate).length,
       duplicates: results.filter((item) => item.duplicate).length,
