@@ -1,3 +1,4 @@
+import { normalizeRamo } from '../utils/ramo';
 import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { createClientCredentials } from '../utils/clientCredentials';
 import { Router } from 'express';
@@ -157,7 +158,7 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
     cnpj,
     razao_social,
     nome_fantasia,
-    ramo,
+    ramo: ramoNormalizado,
     numero_apolice,
     lmi,
     vigencia_inicio,
@@ -200,6 +201,13 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
       mensagem: 'broker_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
     });
   }
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    });
+  }
 
   const cnpjLimpo = normalizeCnpj(cnpj);
   if (!isCnpjFormatValid(cnpjLimpo)) {
@@ -214,7 +222,7 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   if (tenant) {
     // Cliente já existe — checar conflito de ramo com OUTRA seguradora
     const policyConflitante = dbStore.policies.find(
-      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.status === 'ATIVA' && p.insurer_id !== insurer_id
+      (p) => p.tenant_id === tenant!.id && p.ramo === ramoNormalizado && p.status === 'ATIVA' && p.insurer_id !== insurer_id
     );
 
     if (policyConflitante) {
@@ -222,13 +230,13 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
         status: 'conflito',
         mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este CNPJ vinculada a outra seguradora.`,
         tenant_id: tenant.id,
-        ramo,
+        ramo: ramoNormalizado,
         instrucao: 'Use POST /admin/insurer-clients/:tenantId/assume-policy para assumir a responsabilidade desta apólice.'
       });
     }
 
     const jaTemEsseRamoComEstaSeguradora = dbStore.policies.some(
-      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.insurer_id === insurer_id
+      (p) => p.tenant_id === tenant!.id && p.ramo === ramoNormalizado && p.insurer_id === insurer_id
     );
     if (jaTemEsseRamoComEstaSeguradora) {
       return res.status(400).json({
@@ -269,9 +277,9 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   }
 
   const newPolicy: Policy = {
-    id: `pol_${String(ramo).toLowerCase()}_${Date.now()}`,
+    id: `pol_${String(ramoNormalizado).toLowerCase()}_${Date.now()}`,
     numero_apolice,
-    ramo,
+    ramo: ramoNormalizado,
     tenant_id: tenant.id,
     insurer_id,
     broker_id,
@@ -365,7 +373,7 @@ router.post('/insurer-clients/:tenantId/assume-policy', requirePermission('apoli
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
 
-  const policy = dbStore.policies.find((p) => p.tenant_id === tenantId && p.ramo === ramo && p.status === 'ATIVA');
+  const policy = dbStore.policies.find((p) => p.tenant_id === tenantId && p.ramo === ramoNormalizado && p.status === 'ATIVA');
   if (!policy) {
     return res.status(404).json({ status: 'erro', mensagem: 'Nenhuma apólice ativa encontrada para este cliente/ramo.' });
   }
@@ -411,7 +419,7 @@ router.post('/insurer-coverages', requirePermission('coberturas', 'editar'), (re
   const newCoverage: InsurerCoverage = {
     id: uuidv4(),
     insurer_id,
-    ramo,
+    ramo: ramoNormalizado,
     titulo,
     exemplo_preenchimento,
     obrigatoria: Boolean(obrigatoria),
