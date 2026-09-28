@@ -432,7 +432,7 @@ export class AverbacaoService {
     // conhecem o policy_id e passam a gerar um registro de Averbacao com status='ERRO', que
     // exige um raw_xml_id — precisamos do XML bruto salvo mesmo quando o documento é rejeitado.
     const rawXmlRecord =
-      RawDocumentService.get(dto.raw_xml_id) ?? RawDocumentService.store(contentToParse);
+      RawDocumentService.get(dto.raw_xml_id) ?? RawDocumentService.store(contentToParse, tenant.id);
 
     // 4c. Carrega o blob de Regras de Negócio da apólice cedo — Fase 4 do pacote de 21/09 precisa
     // dele já na checagem de titularidade (passo 5), para saber se a "fila genérica" (Bloco 2 de
