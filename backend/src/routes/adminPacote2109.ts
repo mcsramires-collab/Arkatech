@@ -6,7 +6,7 @@ import { dbStore } from '../services/dbStore';
 import { Tenant, Policy, TenantCnpjAdicional, PolicyPartnerHistory, LiberationCode } from '../types';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
-import { policyPertenceAoAtor } from './adminHelpers';
+import { policyPertenceAoAtor, tenantPertenceAoAtor } from './adminHelpers';
 import { criarNotificacaoSeRetroativa } from './partnerNotifications';
 import { CancelamentoService } from '../services/cancelamento';
 
@@ -81,6 +81,7 @@ export function seedPartnerHistory(policy: Policy): void {
 // types/index.ts para o escopo desta versão (sem cascata automática para Tenant.status). ---
 router.get('/tenants/:id/cnpjs-adicionais', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
+  if (!tenantPertenceAoAtor(req, res, id)) return;
   return res.json({
     status: 'sucesso',
     cnpjs: dbStore.tenantCnpjsAdicionais.filter((c) => c.tenant_id === id)
@@ -89,6 +90,7 @@ router.get('/tenants/:id/cnpjs-adicionais', requirePermission('clientes', 'ver')
 
 router.post('/tenants/:id/cnpjs-adicionais', requirePermission('clientes', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
+  if (!tenantPertenceAoAtor(req, res, id)) return;
   const tenant = dbStore.tenants.find((t) => t.id === id);
   if (!tenant) {
     return res.status(404).json({ status: 'erro', mensagem: 'Cliente não encontrado.' });
@@ -121,6 +123,7 @@ router.post('/tenants/:id/cnpjs-adicionais', requirePermission('clientes', 'edit
 // Imutabilidade de CNPJ (confirmada no relatório de 13/09): só `status` pode mudar aqui —
 // inativar/reativar, nunca editar o número nem excluir fisicamente.
 router.put('/tenants/:id/cnpjs-adicionais/:cnpjId', requirePermission('clientes', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
+  if (!tenantPertenceAoAtor(req, res, req.params.id)) return;
   const { cnpjId } = req.params;
   const registro = dbStore.tenantCnpjsAdicionais.find((c) => c.id === cnpjId && c.tenant_id === req.params.id);
   if (!registro) {
