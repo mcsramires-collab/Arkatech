@@ -83,6 +83,90 @@ function pertenceACarteira(policy: Policy, brokerId: string): boolean {
   return policy.broker_id === brokerId || policy.co_broker_id === brokerId || policy.assessoria_id === brokerId;
 }
 
+// --- Seguradoras vinculadas à corretora / assessoria / co-corretora ---
+// A relação pode existir porque o parceiro já está em uma apólice OU porque a seguradora
+// configurou a matriz de delegação antes da primeira ação. Isso permite ao frontend escolher
+// insurer_id sem expor seguradoras que não têm relação com o parceiro autenticado.
+router.get('/insurers', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
+  const broker_id = resolveBrokerId(req, res, req.query.broker_id);
+  if (!broker_id) return;
+
+  const insurerIds = new Set<string>();
+
+  for (const policy of dbStore.policies) {
+    if (pertenceACarteira(policy, broker_id)) insurerIds.add(policy.insurer_id);
+  }
+  for (const permission of dbStore.delegationPermissions) {
+    if (permission.broker_id === broker_id) insurerIds.add(permission.insurer_id);
+  }
+  for (const request of dbStore.approvalRequests) {
+    if (request.broker_id === broker_id) insurerIds.add(request.insurer_id);
+  }
+
+  const insurers = [...insurerIds]
+    .map((id) => {
+      const insurer = dbStore.insurers.find((item) => item.id === id);
+      if (!insurer) return undefined;
+      const tenant = insurer.tenant_id
+        ? dbStore.tenants.find((item) => item.id === insurer.tenant_id)
+        : undefined;
+      const policies = dbStore.policies.filter(
+        (policy) => policy.insurer_id === id && pertenceACarteira(policy, broker_id)
+      );
+
+      return {
+        id: insurer.id,
+        cnpj: insurer.cnpj,
+        nome: insurer.nome_fantasia || insurer.razao_social || insurer.nome,
+        status: tenant?.status ?? 'ATIVO',
+        segurados: new Set(policies.map((policy) => policy.tenant_id)).size,
+        apolices: policies.length
+      };
+    })
+    .filter(Boolean);
+
+  return res.json({ status: 'sucesso', insurers });
+});
+
+// --- Solicitações da própria corretora ---
+// A fila administrativa continua em /admin/approval-requests. Aqui o parceiro só enxerga o que
+// ele mesmo solicitou, inclusive o resultado final, para não ficar sem feedback após enviar uma
+// ação que depende de aprovação.
+router.get('/approval-requests', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
+  const broker_id = resolveBrokerId(req, res, req.query.broker_id);
+  if (!broker_id) return;
+
+  const requestedStatus = req.query.status
+    ? String(req.query.status).toUpperCase()
+    : undefined;
+  const allowed = ['PENDENTE', 'APROVADO', 'REJEITADO'];
+  if (requestedStatus && !allowed.includes(requestedStatus)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'status deve ser PENDENTE, APROVADO ou REJEITADO.'
+    });
+  }
+
+  let requests = dbStore.approvalRequests.filter((item) => item.broker_id === broker_id);
+  if (requestedStatus) {
+    requests = requests.filter((item) => item.status === requestedStatus);
+  }
+
+  requests.sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+  return res.json({
+    status: 'sucesso',
+    requests: requests.map((item) => {
+      const insurer = dbStore.insurers.find((candidate) => candidate.id === item.insurer_id);
+      return {
+        ...item,
+        seguradora:
+          insurer?.nome_fantasia || insurer?.razao_social || insurer?.nome || item.insurer_id
+      };
+    })
+  });
+});
+
 // --- Carteira de Clientes da Corretora ---
 router.get('/clients', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const { insurer_id } = req.query;
