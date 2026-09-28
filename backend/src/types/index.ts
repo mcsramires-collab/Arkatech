@@ -253,6 +253,34 @@ export interface FiscalDocument {
   processed_at?: string;
 }
 
+export type ConnectorStatus = 'ATIVO' | 'REVOGADO';
+export type ConnectorCertificateStatus = 'NAO_CONFIGURADO' | 'VALID' | 'EXPIRING' | 'EXPIRED' | 'ERROR';
+export type ConnectorSefazStatus = 'UNKNOWN' | 'ONLINE' | 'DEGRADED' | 'OFFLINE';
+
+export interface Connector {
+  id: string;
+  tenant_id: string;
+  device_id: string;
+  device_name: string;
+  version: string;
+  os: string;
+  capabilities: string[];
+  status: ConnectorStatus;
+  device_token_hash: string;
+  sefaz_status: ConnectorSefazStatus;
+  last_heartbeat_at?: string;
+  last_sync_at?: string;
+  certificate_status: ConnectorCertificateStatus;
+  certificate_cnpj?: string;
+  certificate_type?: 'A1' | 'A3';
+  certificate_issuer?: string;
+  certificate_serial_hash?: string;
+  certificate_valid_from?: string;
+  certificate_valid_until?: string;
+  created_at: string;
+  revoked_at?: string;
+}
+
 export interface Averbacao {
   id: string;
   /** Ausente em registros status='ERRO' — só é gerado quando a averbação é aceita. */
