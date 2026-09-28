@@ -142,6 +142,44 @@ describe('DocumentIngestionService', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  it('deduplica TMS pelo external_id mesmo quando o payload reaparece por outra chamada', () => {
+    jest.spyOn(AverbacaoService, 'process').mockReturnValue({
+      status: 'sucesso',
+      codigo: 'SUC-2000',
+      mensagem: 'Averbado.',
+      averbacao_id: 'avb-tms'
+    });
+
+    const first = DocumentIngestionService.processXmlBatch({
+      tenant_id: 'tenant-1',
+      source: 'TMS',
+      app_base_url: 'http://localhost:3000',
+      files: [{
+        filename: 'tms-1.json',
+        xml_content: cteXml,
+        capture_mode: 'INTEGRATION',
+        external_id: 'TOTVS:123'
+      }],
+      policies: [{ id: 'p1', numero_apolice: 'AP-1', ramo: 'RCTRC' }]
+    });
+
+    const second = DocumentIngestionService.processXmlBatch({
+      tenant_id: 'tenant-1',
+      source: 'TMS',
+      app_base_url: 'http://localhost:3000',
+      files: [{
+        filename: 'tms-1-retry.json',
+        xml_content: cteXml.replace('<nCT>123</nCT>', '<nCT>999</nCT>'),
+        capture_mode: 'INTEGRATION',
+        external_id: 'TOTVS:123'
+      }],
+      policies: [{ id: 'p1', numero_apolice: 'AP-1', ramo: 'RCTRC' }]
+    });
+
+    expect(first[0]?.duplicate).not.toBe(true);
+    expect(second[0]?.duplicate).toBe(true);
+  });
+
   it('permite reprocessar o mesmo XML quando surgiu uma apólice ainda não tentada', () => {
     jest.spyOn(AverbacaoService, 'process').mockReturnValue({
       status: 'sucesso',
