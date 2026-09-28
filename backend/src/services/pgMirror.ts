@@ -56,7 +56,7 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     storeKey: 'brokers',
     pk: 'id',
     columns: [
-      'id', 'tenant_id', 'cnpj', 'nome', 'razao_social', 'nome_fantasia',
+      'id', 'tenant_id', 'cnpj', 'partner_type', 'nome', 'razao_social', 'nome_fantasia',
       'corretor_responsavel_nome', 'corretor_responsavel_email',
       'corretor_responsavel_telefone_fixo', 'corretor_responsavel_celular', 'created_at'
     ]
