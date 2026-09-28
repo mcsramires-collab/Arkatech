@@ -20,11 +20,13 @@ describe('FiscalSyncService', () => {
 
   beforeEach(() => {
     dbStore.fiscalSyncStates = [];
+    dbStore.operationalNotifications = [];
     jest.spyOn(dbStore, 'persist').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     dbStore.fiscalSyncStates = [];
+    dbStore.operationalNotifications = [];
     jest.restoreAllMocks();
   });
 
@@ -62,6 +64,39 @@ describe('FiscalSyncService', () => {
     expect(() => FiscalSyncService.report(connector, {
       provider: 'NFE', status: 'OK', ult_nsu: '10', max_nsu: '10', cstat: 137
     })).toThrow('SYNC_STATUS_CSTAT_MISMATCH');
+  });
+
+  it('notifica somente nas transições de falha/rate limit e recuperação', () => {
+    FiscalSyncService.report(connector, {
+      provider: 'NFE', status: 'ERROR', message: 'timeout'
+    });
+    expect(dbStore.operationalNotifications).toHaveLength(1);
+    expect(dbStore.operationalNotifications[0]).toMatchObject({
+      type: 'SINCRONIZACAO_SEFAZ',
+      severity: 'ERROR'
+    });
+
+    FiscalSyncService.report(connector, {
+      provider: 'NFE', status: 'ERROR', message: 'timeout novamente'
+    });
+    expect(dbStore.operationalNotifications).toHaveLength(1);
+
+    FiscalSyncService.report(connector, {
+      provider: 'NFE', status: 'OK', ult_nsu: '10', max_nsu: '10'
+    });
+    expect(dbStore.operationalNotifications).toHaveLength(2);
+    expect(dbStore.operationalNotifications[0]).toMatchObject({
+      type: 'SINCRONIZACAO_SEFAZ',
+      severity: 'INFO'
+    });
+
+    FiscalSyncService.report(connector, {
+      provider: 'NFE', status: 'RATE_LIMITED', cstat: 656
+    });
+    expect(dbStore.operationalNotifications).toHaveLength(3);
+    expect(dbStore.operationalNotifications[0]).toMatchObject({
+      severity: 'WARNING'
+    });
   });
 
   it('devolve estado de retomada com NEVER_SYNCED para providers ainda não consultados', () => {
