@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore';
 import { AverbacaoService } from '../services/averbacao';
+import { DocumentIngestionService } from '../services/ingestion/documentIngestion';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { checkActivated } from '../services/accountActivation';
@@ -286,30 +287,19 @@ router.post(
 
     const appBaseUrl = `${req.protocol}://${req.get('host')}`;
 
-    const resultados = files.map((file) => {
-      const xmlContent = file.buffer.toString('utf-8');
-      const tentativas = policiesAlvo.map((policy) => {
-        const resultado = AverbacaoService.process(
-          { tenant_id: tenantId, ramo: policy.ramo, policy_id: policy.id, xml_content: xmlContent },
-          appBaseUrl
-        );
-        return {
-          policy_id: policy.id,
-          numero_apolice: policy.numero_apolice,
-          ramo: policy.ramo,
-          status: resultado.status,
-          codigo: resultado.codigo,
-          mensagem: resultado.mensagem,
-          numero_averbacao: resultado.numero_averbacao,
-          variaveis_faltantes: resultado.variaveis_faltantes
-        };
-      });
-      const aceitoEmAlgumaApolice = tentativas.some((t) => t.status === 'sucesso' || t.status === 'aviso');
-      return {
-        arquivo: file.originalname,
-        aceito_em_alguma_apolice: aceitoEmAlgumaApolice,
-        tentativas
-      };
+    const resultados = DocumentIngestionService.processXmlBatch({
+      tenant_id: tenantId,
+      source: 'PORTAL',
+      app_base_url: appBaseUrl,
+      files: files.map((file) => ({
+        filename: file.originalname,
+        xml_content: file.buffer.toString('utf-8')
+      })),
+      policies: policiesAlvo.map((policy) => ({
+        id: policy.id,
+        numero_apolice: policy.numero_apolice,
+        ramo: policy.ramo
+      }))
     });
 
     const totalSucesso = resultados.filter((r) => r.aceito_em_alguma_apolice).length;
