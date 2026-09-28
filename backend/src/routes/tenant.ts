@@ -13,10 +13,12 @@ import { CancelamentoService } from '../services/cancelamento';
 import { TenantUser, BusinessRuleRequest, SupportTicket, Policy } from '../types';
 import fiscalDocumentsRouter from './fiscalDocuments';
 import connectorsRouter from './connectors';
+import fiscalSyncRouter from './fiscalSync';
 
 const router = Router();
 router.use('/fiscal-documents', fiscalDocumentsRouter);
 router.use('/connectors', connectorsRouter);
+router.use('/fiscal-sync', fiscalSyncRouter);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 /**
