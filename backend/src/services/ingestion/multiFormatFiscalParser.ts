@@ -88,10 +88,21 @@ function buildCanonicalContent(row: Row): { content?: string; warnings: string[]
   const valorCarga = cleanNumber(findValue(row, 'valorCarga'));
 
   if (!tipoDocumento) warnings.push('tipo_documento ausente ou não reconhecido');
-  if (!chaveDocumento && !numeroDocumento) warnings.push('chave_documento/numero_documento ausente');
+  if (tipoDocumento === 'NFSE') {
+    if (!chaveDocumento && !numeroDocumento) {
+      warnings.push('chave_documento/numero_documento ausente');
+    }
+  } else if (tipoDocumento && chaveDocumento.length !== 44) {
+    warnings.push('chave_documento deve conter 44 posições para CT-e/NF-e/MDF-e');
+  }
   if (!(valorCarga > 0)) warnings.push('valor_carga ausente ou inválido');
 
-  if (!tipoDocumento || (!chaveDocumento && !numeroDocumento) || !(valorCarga > 0)) {
+  const identityValid =
+    tipoDocumento === 'NFSE'
+      ? Boolean(chaveDocumento || numeroDocumento)
+      : chaveDocumento.length === 44;
+
+  if (!tipoDocumento || !identityValid || !(valorCarga > 0)) {
     return { warnings };
   }
 
@@ -110,7 +121,7 @@ function buildCanonicalContent(row: Row): { content?: string; warnings: string[]
     warnings,
     content: JSON.stringify({
       tipoDocumento,
-      chaveDocumento: chaveDocumento || `${tipoDocumento}-${numeroDocumento}`,
+      chaveDocumento: chaveDocumento || `NFSE-${numeroDocumento}`,
       numeroDocumento: numeroDocumento || chaveDocumento.slice(-9),
       valorCarga,
       serie: String(findValue(row, 'serie') ?? '').trim() || undefined,
@@ -184,7 +195,7 @@ function keyValueRow(text: string): Row {
   const row: Row = {};
   const patterns: Array<[string, RegExp]> = [
     ['tipo_documento', /(?:tipo(?:\s+de)?\s+documento|documento)\s*[:=-]\s*(CT-?E|NF-?E|MDF-?E|NFS-?E)/i],
-    ['chave_documento', /(?:chave(?:\s+de)?\s+acesso|chave)\s*[:=-]\s*([A-Z0-9]{30,60})/i],
+    ['chave_documento', /(?:chave(?:\s+de)?\s+acesso|chave)\s*[:=-]\s*([A-Z0-9\s]{44,80})/i],
     ['numero_documento', /(?:n[uú]mero|n[º°]|nCT|nNF|nMDF)\s*[:=-]\s*([A-Z0-9./-]+)/i],
     ['serie', /s[eé]rie\s*[:=-]\s*([A-Z0-9./-]+)/i],
     ['valor_carga', /(?:valor(?:\s+total|\s+da\s+carga)?|vCarga|vNF)\s*[:=-]?\s*(?:R\$)?\s*([0-9.,]+)/i],
