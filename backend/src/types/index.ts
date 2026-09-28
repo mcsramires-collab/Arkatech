@@ -1,5 +1,6 @@
 export type TenantEnvironment = 'teste' | 'producao';
 export type TenantStatus = 'ATIVO' | 'INATIVO';
+export type TenantOperationType = 'TRANSPORTADOR' | 'EMBARCADOR' | 'AMBOS';
 export type UserRole = 'ADMIN' | 'SEGURADORA' | 'CORRETORA' | 'TRANSPORTADOR';
 export type RamoApolice = 'RCTRC' | 'RCDC' | 'RCV';
 export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE' | 'MDFE';
@@ -44,6 +45,12 @@ export interface Tenant {
   client_id: string;
   client_secret_hash: string;
   role: UserRole;
+  /**
+   * Perfil operacional do segurado. Não é papel de autenticação: transportadores e embarcadores
+   * usam o mesmo Portal do Segurado, mas o produto precisa distinguir suas jornadas/regras.
+   * Opcional para compatibilidade com cadastros antigos; ausência equivale a TRANSPORTADOR.
+   */
+  tipo_operacao?: TenantOperationType;
   token_duration_hours: number;
   /**
    * Teto (em horas) até onde a própria seguradora/corretora pode ajustar seu
