@@ -7,6 +7,7 @@ import { ResponseEngine } from '../services/responseEngine';
 import { getJwtSecret } from '../utils/jwtSecret';
 import { hashClientSecret, verifyClientSecret } from '../utils/clientCredentials';
 import { backofficeAuthMiddleware, BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
+import { ensureDefaultBackofficeProfile } from '../services/backofficeProfileService';
 
 const router = Router();
 
@@ -266,6 +267,15 @@ router.post('/backoffice-activation/:token/definir-senha', async (req: Request, 
     return res.status(400).json({ status: 'erro', mensagem: 'Convite sem e-mail associado.' });
   }
 
+  const defaultProfile = ensureDefaultBackofficeProfile(tenant);
+  if (!defaultProfile) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem:
+        'O cadastro de backoffice ainda não está vinculado corretamente à seguradora/corretora.'
+    });
+  }
+
   const passwordHash = await bcrypt.hash(senha, 10);
   let user = dbStore.tenantUsers.find(
     (item) => item.tenant_id === tenant.id && item.email.trim().toLowerCase() === email
@@ -275,6 +285,7 @@ router.post('/backoffice-activation/:token/definir-senha', async (req: Request, 
     user.password_hash = passwordHash;
     user.status = 'ATIVO';
     user.is_admin_da_conta = true;
+    user.rbac_profile_id = defaultProfile.id;
   } else {
     user = {
       id: uuidv4(),
@@ -282,6 +293,7 @@ router.post('/backoffice-activation/:token/definir-senha', async (req: Request, 
       nome,
       email,
       password_hash: passwordHash,
+      rbac_profile_id: defaultProfile.id,
       is_admin_da_conta: true,
       status: 'ATIVO',
       created_at: new Date().toISOString()
