@@ -24,6 +24,7 @@ export interface MockGenerationOptions {
   incluirProtocoloSefaz?: boolean;
   produtoPredominante?: string;
   contraparteCnpj?: string;
+  observationOverride?: string;
 }
 
 export class MockGeneratorService {
@@ -85,7 +86,8 @@ export class MockGeneratorService {
       cStatSefaz = '100',
       incluirProtocoloSefaz = true,
       produtoPredominante = 'Carga Geral Embalada',
-      contraparteCnpj
+      contraparteCnpj,
+      observationOverride
     } = options;
     const tenant = dbStore.tenants.find((t) => t.id === tenantId);
 
@@ -134,9 +136,11 @@ export class MockGeneratorService {
     const ufIniFinal = ufOrigem || 'SP';
     const ufFimFinal = ufDestino || 'MG';
 
-    const obsField = incluirVariaveisApolice
-      ? this.buildObsField(policyId, omitirObrigatorias || [])
-      : `Averbação de Teste ARCKATECH - Doc Nº ${docNum}`;
+    const obsField = observationOverride !== undefined
+      ? observationOverride
+      : incluirVariaveisApolice
+        ? this.buildObsField(policyId, omitirObrigatorias || [])
+        : `Averbação de Teste ARCKATECH - Doc Nº ${docNum}`;
 
     // Grupo <seg> do MDF-e — obrigatório no modal rodoviário (rejeições 698/699 do Sefaz se ausente/incompleto)
     const grupoSeg =
