@@ -27,6 +27,10 @@ export interface SendEmailResult {
   motivo?: string;
 }
 
+export interface BackofficeActivationEmailParams extends ActivationEmailParams {
+  perfil: string;
+}
+
 function buildActivationEmailHtml(params: ActivationEmailParams): string {
   const primeiroNome = (params.nomeDestinatario || '').trim().split(/\s+/)[0] || params.nomeDestinatario;
   return `<!doctype html>
@@ -114,6 +118,78 @@ export async function sendActivationInviteEmail(params: ActivationEmailParams): 
     return { enviado: true };
   } catch (err: any) {
     console.error(`[emailService] Erro de rede ao chamar a API da Resend (destinatário ${params.to}):`, err);
+    return { enviado: false, motivo: 'Erro de rede ao tentar enviar o e-mail.' };
+  }
+}
+
+export async function sendBackofficeActivationInviteEmail(
+  params: BackofficeActivationEmailParams
+): Promise<SendEmailResult> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.RESEND_FROM_EMAIL || 'convites@arckatech.com.br';
+
+  if (!apiKey) {
+    console.warn(
+      `[emailService] RESEND_API_KEY não configurada — convite backoffice para ${params.to} não enviado.`
+    );
+    return { enviado: false, motivo: 'RESEND_API_KEY não configurada no ambiente do servidor.' };
+  }
+
+  const primeiroNome =
+    (params.nomeDestinatario || '').trim().split(/\s+/)[0] || params.nomeDestinatario;
+  const html = `<!doctype html>
+<html lang="pt-BR">
+  <body style="margin:0;padding:0;background-color:#f4f5f7;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7;padding:32px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;">
+          <tr><td style="padding:32px;">
+            <p style="margin:0 0 8px;color:#6b7280;font-size:13px;">Arckatech</p>
+            <h1 style="margin:0 0 20px;color:#111827;font-size:20px;">Ative seu acesso ao Portal Arckatech</h1>
+            <p style="color:#374151;font-size:14px;line-height:1.6;">Olá, ${primeiroNome}.</p>
+            <p style="color:#374151;font-size:14px;line-height:1.6;">
+              Você foi convidado como <strong>${params.perfil}</strong> da empresa
+              <strong>${params.razaoSocial}</strong>. Defina sua senha para ativar o acesso.
+            </p>
+            <p style="margin:24px 0;text-align:center;">
+              <a href="${params.activationUrl}" style="display:inline-block;background:#111827;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;">
+                Definir senha
+              </a>
+            </p>
+            <p style="font-size:12px;color:#9ca3af;line-height:1.6;">
+              Se o botão não funcionar, copie e cole este link:<br />
+              <span style="word-break:break-all;">${params.activationUrl}</span>
+            </p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+
+  try {
+    const response = await fetch(RESEND_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: [params.to],
+        subject: `Convite: acesso Arckatech — ${params.razaoSocial}`,
+        html
+      })
+    });
+
+    if (!response.ok) {
+      return {
+        enviado: false,
+        motivo: `A Resend recusou o envio (HTTP ${response.status}).`
+      };
+    }
+    return { enviado: true };
+  } catch {
     return { enviado: false, motivo: 'Erro de rede ao tentar enviar o e-mail.' };
   }
 }
