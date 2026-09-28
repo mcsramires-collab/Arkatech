@@ -19,6 +19,19 @@ describe('ConnectorFiscalService', () => {
     created_at: '2026-09-28T00:00:00.000Z'
   };
 
+  const cteAutorizado = `<cteProc>
+    <CTe><infCte Id="CTe35123456789012345678901234567890123456789012">
+      <ide><nCT>123</nCT><serie>1</serie><tpAmb>2</tpAmb></ide>
+      <emit><CNPJ>12345678000190</CNPJ></emit>
+      <vPrest><vRec>1000.00</vRec></vPrest>
+    </infCte></CTe>
+    <protCTe><infProt>
+      <chCTe>35123456789012345678901234567890123456789012</chCTe>
+      <nProt>135260000000123</nProt>
+      <cStat>100</cStat>
+    </infProt></protCTe>
+  </cteProc>`;
+
   beforeEach(() => {
     dbStore.policies = [];
     dbStore.policyBusinessSettings = [];
@@ -91,7 +104,7 @@ describe('ConnectorFiscalService', () => {
       provider: 'CTE',
       capture_mode: 'OUTBOUND',
       app_base_url: 'http://localhost:3000',
-      documents: [{ external_id: 'emissor-123', xml: '<cteProc />' }]
+      documents: [{ external_id: 'emissor-123', xml: cteAutorizado }]
     });
 
     expect(result?.duplicate).toBe(false);
@@ -103,6 +116,59 @@ describe('ConnectorFiscalService', () => {
         capture_mode: 'OUTBOUND',
         external_id: 'emissor-123'
       })]
+    }));
+  });
+
+  it('não averba OUTBOUND sem protocolo/status de autorização do SEFAZ', () => {
+    dbStore.policies = [{
+      id: 'p1', numero_apolice: 'AP-1', ramo: 'RCTRC', tenant_id: 'tenant-1',
+      insurer_id: 'i1', broker_id: 'b1', status: 'ATIVA', permitir_inativo_vencido: false,
+      vigencia_inicio: '2026-01-01', vigencia_fim: '2027-12-31',
+      aceita_averbacao_como_destinatario: false
+    }] as any;
+
+    const spy = jest.spyOn(DocumentIngestionService, 'processXmlBatch').mockReturnValue([{
+      fiscal_document_id: 'fd-not-authorized',
+      arquivo: 'CTE-outbound.xml',
+      aceito_em_alguma_apolice: false,
+      tentativas: []
+    }]);
+
+    ConnectorFiscalService.ingestBatch({
+      connector,
+      provider: 'CTE',
+      capture_mode: 'OUTBOUND',
+      app_base_url: 'http://localhost:3000',
+      documents: [{ external_id: 'emissor-rejeitado', xml: '<cteProc />' }]
+    });
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+      policies: [],
+      no_policy_status: 'IGNORADO',
+      no_policy_code: 'SEFAZ_NOT_AUTHORIZED'
+    }));
+  });
+
+  it('ignora XML cujo tipo não corresponde ao provider declarado', () => {
+    const spy = jest.spyOn(DocumentIngestionService, 'processXmlBatch').mockReturnValue([{
+      fiscal_document_id: 'fd-mismatch',
+      arquivo: 'NFE-10.xml',
+      aceito_em_alguma_apolice: false,
+      tentativas: []
+    }]);
+
+    ConnectorFiscalService.ingestBatch({
+      connector,
+      provider: 'NFE',
+      capture_mode: 'DISTRIBUTION',
+      app_base_url: 'http://localhost:3000',
+      documents: [{ nsu: '10', xml: cteAutorizado }]
+    });
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+      policies: [],
+      no_policy_status: 'IGNORADO',
+      no_policy_code: 'PROVIDER_DOCUMENT_MISMATCH'
     }));
   });
 
