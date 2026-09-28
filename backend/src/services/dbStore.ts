@@ -37,6 +37,7 @@ import {
   PolicySublimite,
   SupportTicket,
   SupportMessage,
+  WhatsappMessage,
   RevokedToken,
   TenantCnpjAdicional,
   PolicyPartnerHistory,
@@ -85,6 +86,7 @@ class DBStore {
   // Fase 4 — Tela de Suporte real do Portal do Segurado (backlog item, auditoria de 27/08).
   public supportTickets: SupportTicket[] = [];
   public supportMessages: SupportMessage[] = [];
+  public whatsappMessages: WhatsappMessage[] = [];
   // Fase 5 (item 3) — Login real + RBAC: revogação de sessão antes do vencimento natural
   // (ver types/index.ts, RevokedToken, para o desenho completo).
   public revokedTokens: RevokedToken[] = [];
@@ -158,6 +160,7 @@ class DBStore {
           updated_at: ticket.updated_at || ticket.created_at || new Date().toISOString()
         }));
         this.supportMessages = parsed.supportMessages || [];
+        this.whatsappMessages = parsed.whatsappMessages || [];
         this.revokedTokens = parsed.revokedTokens || [];
 
         if (this.ensureDefaultResponseTemplates()) {
@@ -245,6 +248,7 @@ class DBStore {
             policyCoverageValues: this.policyCoverageValues,
             supportTickets: this.supportTickets,
             supportMessages: this.supportMessages,
+            whatsappMessages: this.whatsappMessages,
             revokedTokens: this.revokedTokens
           },
           null,
