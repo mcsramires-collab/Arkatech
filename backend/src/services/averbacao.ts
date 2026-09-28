@@ -1,4 +1,4 @@
-import { normalizeCnpj } from '../utils/cnpj';
+import { normalizeAlphanumeric, normalizeCnpj } from '../utils/cnpj';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
 import { Tenant, Policy, RamoApolice, Averbacao, RecoverySession } from '../types';
@@ -509,7 +509,7 @@ export class AverbacaoService {
     // 6. Checagem de Deduplicação — (chave_documento, protocolo_aceitacao_sefaz, ramo) já averbados?
     const jaAverbado = dbStore.averbacoes.find(
       (a) =>
-        a.chave_documento === parsedDoc.chaveDocumento &&
+        normalizeAlphanumeric(a.chave_documento) === normalizeAlphanumeric(parsedDoc.chaveDocumento) &&
         a.protocolo_aceitacao_sefaz === parsedDoc.protocoloAceitacaoSefaz &&
         a.policy_id === policy.id &&
         a.status === 'SUCESSO'
