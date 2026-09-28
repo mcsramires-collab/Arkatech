@@ -379,6 +379,11 @@ export class ApiClient {
     return this.request('/api/v1/admin/docs');
   }
 
+  // Laboratório de Testes
+  static getTestLabCatalog() {
+    return this.request('/api/v1/admin/test-lab/catalog');
+  }
+
   // Batch Simulator Multi-Cliente
   static executeBatchSimulation(simData: any) {
     return this.request('/api/v1/admin/simulador/executar', {
