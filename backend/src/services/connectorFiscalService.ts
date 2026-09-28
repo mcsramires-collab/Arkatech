@@ -101,9 +101,21 @@ export class ConnectorFiscalService {
         // O pipeline central vai registrar o XML bruto e classificá-lo como ERRO.
       }
 
-      const policies = tipoDocumento
-        ? this.resolveAutomaticPolicies(params.connector.tenant_id, tipoDocumento)
-        : [];
+      const expectedDocumentType: TipoDocumento = params.provider;
+      const providerMismatch =
+        Boolean(tipoDocumento) && tipoDocumento !== expectedDocumentType;
+      const outboundNotAuthorized =
+        params.capture_mode === 'OUTBOUND' &&
+        Boolean(tipoDocumento) &&
+        (!XMLParserService.parse(document.xml).protocoloAceitacaoSefaz ||
+          !['100', '150'].includes(
+            XMLParserService.parse(document.xml).cStatAutorizacaoSefaz ?? ''
+          ));
+
+      const policies =
+        tipoDocumento && !providerMismatch && !outboundNotAuthorized
+          ? this.resolveAutomaticPolicies(params.connector.tenant_id, tipoDocumento)
+          : [];
 
       const reference = document.nsu ?? document.external_id ?? 'outbound';
       const externalId =
@@ -113,7 +125,11 @@ export class ConnectorFiscalService {
           : undefined);
 
       const noPolicyBecauseNotConfigured =
-        Boolean(tipoDocumento) && allTenantPolicies.length > 0 && policies.length === 0;
+        Boolean(tipoDocumento) &&
+        !providerMismatch &&
+        !outboundNotAuthorized &&
+        allTenantPolicies.length > 0 &&
+        policies.length === 0;
 
       const [ingestion] = DocumentIngestionService.processXmlBatch({
         tenant_id: params.connector.tenant_id,
@@ -128,13 +144,24 @@ export class ConnectorFiscalService {
           external_id: externalId
         }],
         policies,
-        no_policy_status: noPolicyBecauseNotConfigured ? 'IGNORADO' : 'RECUSADO',
-        no_policy_code: noPolicyBecauseNotConfigured
-          ? 'DOCUMENT_TYPE_NOT_CONFIGURED'
-          : 'NO_POLICY_CANDIDATE',
-        no_policy_message: noPolicyBecauseNotConfigured
-          ? `O documento ${tipoDocumento} foi capturado, mas nenhuma apólice do cadastro está configurada para averbar esse tipo.`
-          : 'Documento capturado, mas nenhuma apólice candidata existe para este cadastro.'
+        no_policy_status:
+          providerMismatch || outboundNotAuthorized || noPolicyBecauseNotConfigured
+            ? 'IGNORADO'
+            : 'RECUSADO',
+        no_policy_code: providerMismatch
+          ? 'PROVIDER_DOCUMENT_MISMATCH'
+          : outboundNotAuthorized
+            ? 'SEFAZ_NOT_AUTHORIZED'
+            : noPolicyBecauseNotConfigured
+              ? 'DOCUMENT_TYPE_NOT_CONFIGURED'
+              : 'NO_POLICY_CANDIDATE',
+        no_policy_message: providerMismatch
+          ? `O provider ${params.provider} não corresponde ao tipo ${tipoDocumento} do XML recebido.`
+          : outboundNotAuthorized
+            ? 'Documento OUTBOUND armazenado, mas não averbado porque o retorno não comprova autorização do SEFAZ (protocolo/cStat 100 ou 150).'
+            : noPolicyBecauseNotConfigured
+              ? `O documento ${tipoDocumento} foi capturado, mas nenhuma apólice do cadastro está configurada para averbar esse tipo.`
+              : 'Documento capturado, mas nenhuma apólice candidata existe para este cadastro.'
       });
 
       if (!ingestion) {
