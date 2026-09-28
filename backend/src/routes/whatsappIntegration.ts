@@ -31,7 +31,8 @@ router.get('/capabilities', (_req, res) => {
     },
     outbound: {
       delivery: 'polling_outbox',
-      statuses: ['SENT', 'DELIVERED', 'READ', 'FAILED']
+      statuses: ['PROCESSING', 'SENT', 'DELIVERED', 'READ', 'FAILED'],
+      delivery_contract: 'claim -> provider send -> status callback'
     }
   });
 });
@@ -307,6 +308,40 @@ router.get('/outbox', (req, res: Response) => {
       kind: item.kind,
       text: item.text,
       support_ticket_id: item.support_ticket_id,
+      attempt_count: item.attempt_count ?? 0,
+      created_at: item.created_at
+    }))
+  });
+});
+
+router.post('/outbox/claim', (req, res: Response) => {
+  const workerId = String(req.body.worker_id || '').trim();
+  if (!workerId) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'worker_id é obrigatório para reservar mensagens do outbox.'
+    });
+  }
+
+  const messages = WhatsappMessageService.claimOutbox({
+    worker_id: workerId,
+    limit: Number(req.body.limit) || undefined,
+    lease_seconds: Number(req.body.lease_seconds) || undefined
+  });
+
+  return res.json({
+    status: 'sucesso',
+    total: messages.length,
+    messages: messages.map((item) => ({
+      id: item.id,
+      tenant_id: item.tenant_id,
+      phone: item.phone,
+      kind: item.kind,
+      text: item.text,
+      support_ticket_id: item.support_ticket_id,
+      claim_token: item.claim_token,
+      claim_expires_at: item.claim_expires_at,
+      attempt_count: item.attempt_count ?? 0,
       created_at: item.created_at
     }))
   });
@@ -329,7 +364,8 @@ router.post('/outbox/:id/status', (req, res: Response) => {
     provider_message_id: req.body.provider_message_id
       ? String(req.body.provider_message_id)
       : undefined,
-    error_message: req.body.error_message ? String(req.body.error_message) : undefined
+    error_message: req.body.error_message ? String(req.body.error_message) : undefined,
+    claim_token: req.body.claim_token ? String(req.body.claim_token) : undefined
   });
 
   if (!message) {
