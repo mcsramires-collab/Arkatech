@@ -38,6 +38,7 @@ exports.up = (pgm) => {
     status: { type: 'fiscal_document_status', notNull: true, default: 'RECEBIDO' },
     content_hash_sha256: { type: 'varchar(64)', notNull: true },
     raw_xml_id: { type: 'varchar', notNull: true, references: 'raw_xml_store' },
+    duplicate_of_id: { type: 'varchar' },
     original_filename: { type: 'text' },
     tipo_documento: { type: 'tipo_documento' },
     chave_documento: { type: 'varchar(44)' },
