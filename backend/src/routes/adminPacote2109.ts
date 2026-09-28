@@ -1,3 +1,4 @@
+import { normalizeCnpj } from '../utils/cnpj';
 import { Router, Response } from 'express';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
@@ -96,9 +97,9 @@ router.post('/tenants/:id/cnpjs-adicionais', requirePermission('clientes', 'edit
   if (!cnpj || (tipo !== 'filial' && tipo !== 'adicional')) {
     return res.status(400).json({ status: 'erro', mensagem: "cnpj e tipo ('filial' ou 'adicional') são obrigatórios." });
   }
-  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
+  const cnpjLimpo = normalizeCnpj(cnpj);
   const jaExiste = dbStore.tenantCnpjsAdicionais.some(
-    (c) => c.tenant_id === id && c.cnpj.replace(/\D/g, '') === cnpjLimpo
+    (c) => c.tenant_id === id && normalizeCnpj(c.cnpj) === cnpjLimpo
   );
   if (jaExiste) {
     return res.status(409).json({ status: 'erro', mensagem: 'Este CNPJ já está cadastrado para este cliente.' });
