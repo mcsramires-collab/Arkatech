@@ -1,11 +1,11 @@
-import crypto from 'crypto';
 import { normalizeCnpj } from '../utils/cnpj';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
-import { Tenant, Policy, RamoApolice, Averbacao, RecoverySession, RawXMLStore } from '../types';
+import { Tenant, Policy, RamoApolice, Averbacao, RecoverySession } from '../types';
 import { XMLParserService } from './xmlParser';
 import { RuleEngineService } from './ruleEngine';
 import { ResponseEngine } from './responseEngine';
+import { RawDocumentService } from './rawDocumentService';
 import { efetivarInativacaoProgramadaSeNecessaria, sincronizarStatusCadastroSeNecessario } from './tenantLifecycle';
 
 export interface AverbacaoRequestDTO {
@@ -21,6 +21,8 @@ export interface AverbacaoRequestDTO {
    */
   policy_id?: string;
   xml_content: string;
+  /** Raw XML já persistido pela camada de ingestão; evita duplicar o mesmo blob por canal/apólice. */
+  raw_xml_id?: string;
   recovery_token?: string;
   supplemented_vars?: Record<string, any>;
   /**
@@ -428,15 +430,8 @@ export class AverbacaoService {
     // (antes das checagens que podem rejeitar o documento) porque ERR-4007/4008/4002/4003 já
     // conhecem o policy_id e passam a gerar um registro de Averbacao com status='ERRO', que
     // exige um raw_xml_id — precisamos do XML bruto salvo mesmo quando o documento é rejeitado.
-    const hashSHA256 = crypto.createHash('sha256').update(contentToParse).digest('hex');
-    const rawXmlRecord: RawXMLStore = {
-      id: uuidv4(),
-      content_xml: contentToParse,
-      hash_sha256: hashSHA256,
-      encrypted_aes256: true,
-      created_at: new Date().toISOString()
-    };
-    dbStore.rawXmlStore.push(rawXmlRecord);
+    const rawXmlRecord =
+      RawDocumentService.get(dto.raw_xml_id) ?? RawDocumentService.store(contentToParse);
 
     // 4c. Carrega o blob de Regras de Negócio da apólice cedo — Fase 4 do pacote de 21/09 precisa
     // dele já na checagem de titularidade (passo 5), para saber se a "fila genérica" (Bloco 2 de
