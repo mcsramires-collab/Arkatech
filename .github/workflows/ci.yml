@@ -33,6 +33,10 @@ jobs:
         run: |
           cd backend
           npm run test:lab:p0
+      - name: Run P1 Test Lab regression suite
+        run: |
+          cd backend
+          npm run test:lab:p1
 
   frontend-test:
     runs-on: ubuntu-latest
