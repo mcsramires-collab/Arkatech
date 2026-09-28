@@ -533,6 +533,59 @@ router.put('/policies/:id', requirePermission('apolices', 'editar'), (req: Backo
   });
 });
 
+// --- Coberturas disponíveis/ativas numa apólice da carteira ---
+router.get('/coverages', requirePermission('coberturas', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
+  const policyId = String(req.query.policy_id || '');
+  const broker_id = resolveBrokerId(req, res, req.query.broker_id);
+  if (!broker_id) return;
+  if (!policyId) {
+    return res.status(400).json({ status: 'erro', mensagem: 'policy_id é obrigatório.' });
+  }
+
+  const policy = dbStore.policies.find((p) => p.id === policyId);
+  if (!policy) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Apólice não encontrada.' });
+  }
+  if (!pertenceACarteira(policy, broker_id)) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Esta apólice não pertence à carteira desta corretora.'
+    });
+  }
+
+  const coverages = dbStore.insurerCoverages
+    .filter(
+      (coverage) =>
+        coverage.insurer_id === policy.insurer_id &&
+        (!coverage.ramo || coverage.ramo === policy.ramo) &&
+        (coverage.aplicar_todos_clientes || coverage.tenant_id === policy.tenant_id)
+    )
+    .map((coverage) => {
+      const value = dbStore.policyCoverageValues.find(
+        (item) =>
+          item.policy_id === policy.id &&
+          item.insurer_coverage_id === coverage.id
+      );
+      return {
+        ...coverage,
+        ativa: Boolean(value),
+        coverage_value: value
+      };
+    });
+
+  return res.json({
+    status: 'sucesso',
+    policy: {
+      id: policy.id,
+      insurer_id: policy.insurer_id,
+      tenant_id: policy.tenant_id,
+      ramo: policy.ramo,
+      numero_apolice: policy.numero_apolice
+    },
+    coverages
+  });
+});
+
 // --- Ativar Cobertura Adicional (com valor real) numa apólice da carteira ---
 router.post('/coverages', requirePermission('coberturas', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { insurer_id, policy_id, insurer_coverage_id, valor, desconta_lmi } = req.body;
