@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { dbStore } from '../services/dbStore';
 import { SupportService } from '../services/supportService';
+import { WhatsappMessageService } from '../services/whatsappMessageService';
 import { SupportChannel, SupportTicketStatus } from '../types';
 import { apenasInternalUser } from './adminHelpers';
 
@@ -106,6 +107,19 @@ router.post('/support/tickets/:id/messages', (req: BackofficeAuthenticatedReques
     return res.status(400).json({ status: 'erro', mensagem: 'channel inválido.' });
   }
 
+  let whatsappRecipient: string | undefined;
+  if (channel === 'WHATSAPP') {
+    whatsappRecipient = WhatsappMessageService.recipientForTicket(ticket.id);
+    if (!whatsappRecipient) {
+      return res.status(409).json({
+        status: 'erro',
+        codigo: 'WHATSAPP_RECIPIENT_NOT_FOUND',
+        mensagem:
+          'Este chamado ainda não possui uma conversa de WhatsApp associada. Responda por CHAT/PORTAL ou aguarde uma mensagem do cliente pelo WhatsApp.'
+      });
+    }
+  }
+
   const entry = SupportService.addInternalMessage({
     ticket,
     author_id: req.backoffice?.user_id,
@@ -114,7 +128,21 @@ router.post('/support/tickets/:id/messages', (req: BackofficeAuthenticatedReques
     channel
   });
 
-  return res.json({ status: 'sucesso', message: entry, ticket });
+  const outbound = whatsappRecipient
+    ? WhatsappMessageService.queueOutbound({
+        tenant_id: ticket.tenant_id,
+        phone: whatsappRecipient,
+        text: message,
+        support_ticket_id: ticket.id
+      })
+    : undefined;
+
+  return res.json({
+    status: 'sucesso',
+    message: entry,
+    ticket,
+    whatsapp_outbox_id: outbound?.id
+  });
 });
 
 export default router;
