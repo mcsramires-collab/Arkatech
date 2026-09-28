@@ -29,12 +29,14 @@ import {
   PolicyCoverageValue,
   ActivationToken,
   NotificationPreference,
+  OperationalNotification,
   PolicyTitularityRule,
   PolicyBypassRule,
   BusinessRuleRequest,
   PolicyBusinessSettings,
   PolicySublimite,
   SupportTicket,
+  SupportMessage,
   RevokedToken,
   TenantCnpjAdicional,
   PolicyPartnerHistory,
@@ -68,6 +70,7 @@ class DBStore {
   public approvalRequests: ApprovalRequest[] = [];
   public activationTokens: ActivationToken[] = [];
   public notificationPreferences: NotificationPreference[] = [];
+  public operationalNotifications: OperationalNotification[] = [];
   public policyTitularityRules: PolicyTitularityRule[] = [];
   public policyBypassRules: PolicyBypassRule[] = [];
   public businessRuleRequests: BusinessRuleRequest[] = [];
@@ -81,6 +84,7 @@ class DBStore {
   public policyCoverageValues: PolicyCoverageValue[] = [];
   // Fase 4 — Tela de Suporte real do Portal do Segurado (backlog item, auditoria de 27/08).
   public supportTickets: SupportTicket[] = [];
+  public supportMessages: SupportMessage[] = [];
   // Fase 5 (item 3) — Login real + RBAC: revogação de sessão antes do vencimento natural
   // (ver types/index.ts, RevokedToken, para o desenho completo).
   public revokedTokens: RevokedToken[] = [];
@@ -135,6 +139,7 @@ class DBStore {
         this.approvalRequests = parsed.approvalRequests || [];
         this.activationTokens = parsed.activationTokens || [];
         this.notificationPreferences = parsed.notificationPreferences || [];
+        this.operationalNotifications = parsed.operationalNotifications || [];
         this.policyTitularityRules = parsed.policyTitularityRules || [];
         this.policyBypassRules = parsed.policyBypassRules || [];
         this.businessRuleRequests = parsed.businessRuleRequests || [];
@@ -147,6 +152,7 @@ class DBStore {
         this.delegationExceptions = parsed.delegationExceptions || [];
         this.policyCoverageValues = parsed.policyCoverageValues || [];
         this.supportTickets = parsed.supportTickets || [];
+        this.supportMessages = parsed.supportMessages || [];
         this.revokedTokens = parsed.revokedTokens || [];
 
         if (this.ensureDefaultResponseTemplates()) {
@@ -220,6 +226,7 @@ class DBStore {
             approvalRequests: this.approvalRequests,
             activationTokens: this.activationTokens,
             notificationPreferences: this.notificationPreferences,
+            operationalNotifications: this.operationalNotifications,
             policyTitularityRules: this.policyTitularityRules,
             policyBypassRules: this.policyBypassRules,
             businessRuleRequests: this.businessRuleRequests,
@@ -232,6 +239,7 @@ class DBStore {
             delegationExceptions: this.delegationExceptions,
             policyCoverageValues: this.policyCoverageValues,
             supportTickets: this.supportTickets,
+            supportMessages: this.supportMessages,
             revokedTokens: this.revokedTokens
           },
           null,
