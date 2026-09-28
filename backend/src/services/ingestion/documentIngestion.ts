@@ -1,10 +1,11 @@
-import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { AverbacaoRequestDTO, AverbacaoResponseDTO, AverbacaoService } from '../averbacao';
 import { dbStore } from '../dbStore';
+import { RawDocumentService } from '../rawDocumentService';
 import { XMLParserService } from '../xmlParser';
 import {
   DocumentIngestionSource,
+  FiscalCaptureMode,
   FiscalDocument,
   FiscalDocumentStatus
 } from '../../types';
@@ -12,6 +13,7 @@ import {
 export interface XmlIngestionInput extends AverbacaoRequestDTO {
   source: DocumentIngestionSource;
   app_base_url: string;
+  capture_mode?: FiscalCaptureMode;
   original_filename?: string;
   nsu?: string;
   connector_id?: string;
@@ -21,6 +23,7 @@ export interface XmlIngestionInput extends AverbacaoRequestDTO {
 export interface XmlBatchItem {
   filename: string;
   xml_content: string;
+  capture_mode?: FiscalCaptureMode;
   nsu?: string;
   connector_id?: string;
   external_id?: string;
@@ -38,6 +41,9 @@ export interface BatchIngestionInput {
   app_base_url: string;
   files: XmlBatchItem[];
   policies: PolicyTarget[];
+  no_policy_status?: Extract<FiscalDocumentStatus, 'RECUSADO' | 'IGNORADO'>;
+  no_policy_code?: string;
+  no_policy_message?: string;
 }
 
 export interface BatchIngestionAttempt {
@@ -56,60 +62,98 @@ export interface BatchIngestionResult {
   fiscal_document_id: string;
   arquivo: string;
   aceito_em_alguma_apolice: boolean;
+  duplicate?: boolean;
+  duplicate_of_id?: string;
   tentativas: BatchIngestionAttempt[];
+}
+
+function defaultCaptureMode(source: DocumentIngestionSource): FiscalCaptureMode {
+  if (source === 'SEFAZ') return 'DISTRIBUTION';
+  if (source === 'PORTAL' || source === 'API') return 'MANUAL';
+  return 'INTEGRATION';
 }
 
 /**
  * Ponto único de entrada para documentos que seguem para o motor de averbação.
  *
- * O registro FiscalDocument nasce antes do motor, garantindo rastreabilidade até para arquivos
- * recusados ou inválidos. O XML bruto continua sendo responsabilidade do fluxo já existente no
- * AverbacaoService/RawXMLStore, evitando duplicação de conteúdo sensível.
+ * Todo conteúdo bruto é persistido ANTES da decisão de negócio. Isso permite reprocessar
+ * documentos sem apólice, recusados ou ignorados depois que cadastro/regras forem corrigidos.
+ * A deduplicação é multicanal: Portal, API, SEFAZ, TMS e WhatsApp passam pela mesma identidade
+ * fiscal antes de chamar o motor.
  */
 export class DocumentIngestionService {
-  private static createFiscalDocument(params: {
+  private static prepareFiscalDocument(params: {
     tenant_id: string;
     source: DocumentIngestionSource;
+    capture_mode?: FiscalCaptureMode;
     xml_content: string;
     original_filename?: string;
     nsu?: string;
     connector_id?: string;
     external_id?: string;
     policy_ids_attempted?: string[];
-  }): FiscalDocument {
+  }): { record: FiscalDocument; parsed?: ReturnType<typeof XMLParserService.parse> } {
     const now = new Date().toISOString();
-    const hash = crypto.createHash('sha256').update(params.xml_content, 'utf8').digest('hex');
+    const raw = RawDocumentService.store(params.xml_content);
 
     let parsed: ReturnType<typeof XMLParserService.parse> | undefined;
     try {
       parsed = XMLParserService.parse(params.xml_content);
     } catch {
-      // Documento inválido também precisa existir no histórico de ingestão.
+      // XML inválido também precisa existir no histórico e continuar reprocessável.
     }
+
+    const requestedPolicies = params.policy_ids_attempted ?? [];
+    const duplicate = dbStore.fiscalDocuments.find((item) => {
+      if (item.tenant_id !== params.tenant_id) return false;
+      if (!['AVERBADO', 'PENDENTE', 'DUPLICADO'].includes(item.status)) return false;
+
+      const sameRaw = item.content_hash_sha256 === raw.hash_sha256;
+      const sameFiscalIdentity =
+        Boolean(parsed?.chaveDocumento) &&
+        item.chave_documento === parsed?.chaveDocumento &&
+        (!parsed?.protocoloAceitacaoSefaz ||
+          !item.protocolo_aceitacao_sefaz ||
+          item.protocolo_aceitacao_sefaz === parsed.protocoloAceitacaoSefaz);
+
+      if (!sameRaw && !sameFiscalIdentity) return false;
+
+      // Se surgiu uma apólice nova ainda não tentada, o documento deve poder ser reprocessado.
+      return requestedPolicies.every((policyId) => item.policy_ids_attempted.includes(policyId));
+    });
 
     const record: FiscalDocument = {
       id: uuidv4(),
       tenant_id: params.tenant_id,
       source: params.source,
-      status: 'RECEBIDO',
-      content_hash_sha256: hash,
+      capture_mode: params.capture_mode ?? defaultCaptureMode(params.source),
+      status: duplicate ? 'DUPLICADO' : 'RECEBIDO',
+      content_hash_sha256: raw.hash_sha256,
+      raw_xml_id: raw.id,
+      duplicate_of_id: duplicate?.id,
       original_filename: params.original_filename,
       tipo_documento: parsed?.tipoDocumento,
       chave_documento: parsed?.chaveDocumento,
       numero_documento: parsed?.numeroDocumento,
       serie_documento: parsed?.serie,
       cnpj_emissor: parsed?.cnpjEmitente,
+      protocolo_aceitacao_sefaz: parsed?.protocoloAceitacaoSefaz,
       nsu: params.nsu,
       connector_id: params.connector_id,
       external_id: params.external_id,
-      policy_ids_attempted: params.policy_ids_attempted ?? [],
-      averbacao_ids: [],
-      received_at: now
+      policy_ids_attempted: requestedPolicies,
+      averbacao_ids: duplicate?.averbacao_ids ?? [],
+      codigo_resultado: duplicate ? 'DUPLICATE_INGESTION' : undefined,
+      mensagem_resultado: duplicate
+        ? 'Documento já recebido anteriormente pelo mesmo cadastro; processamento duplicado ignorado.'
+        : undefined,
+      received_at: now,
+      processed_at: duplicate ? now : undefined
     };
 
     dbStore.fiscalDocuments.unshift(record);
     dbStore.persist();
-    return record;
+    return { record, parsed };
   }
 
   private static markProcessing(document: FiscalDocument): void {
@@ -160,6 +204,7 @@ export class DocumentIngestionService {
     const {
       source,
       app_base_url,
+      capture_mode,
       original_filename,
       nsu,
       connector_id,
@@ -167,9 +212,10 @@ export class DocumentIngestionService {
       ...averbacaoInput
     } = input;
 
-    const document = this.createFiscalDocument({
+    const { record: document, parsed } = this.prepareFiscalDocument({
       tenant_id: input.tenant_id,
       source,
+      capture_mode,
       xml_content: input.xml_content,
       original_filename,
       nsu,
@@ -178,8 +224,33 @@ export class DocumentIngestionService {
       policy_ids_attempted: input.policy_id ? [input.policy_id] : []
     });
 
+    if (document.status === 'DUPLICADO') {
+      return {
+        status: 'aviso',
+        codigo: 'DUPLICATE_INGESTION',
+        mensagem: document.mensagem_resultado ?? 'Documento duplicado.',
+        averbacao_id: document.averbacao_ids[0]
+      };
+    }
+
+    if (!parsed) {
+      document.status = 'ERRO';
+      document.codigo_resultado = 'ERR-4005';
+      document.mensagem_resultado = 'XML inválido ou formato fiscal não reconhecido.';
+      document.processed_at = new Date().toISOString();
+      dbStore.persist();
+      return {
+        status: 'erro',
+        codigo: 'ERR-4005',
+        mensagem: document.mensagem_resultado
+      };
+    }
+
     this.markProcessing(document);
-    const result = AverbacaoService.process(averbacaoInput, app_base_url);
+    const result = AverbacaoService.process(
+      { ...averbacaoInput, raw_xml_id: document.raw_xml_id },
+      app_base_url
+    );
     this.finishFiscalDocument(document, this.statusFromResponse(result), [result]);
 
     return result;
@@ -187,14 +258,14 @@ export class DocumentIngestionService {
 
   /**
    * Processa um conjunto de XMLs contra as apólices selecionadas pelo chamador.
-   * Um único FiscalDocument é criado por arquivo, mesmo quando o arquivo é testado contra
-   * múltiplas apólices; todas as tentativas e averbações resultantes ficam vinculadas a ele.
+   * Um FiscalDocument é criado para cada recebimento, inclusive duplicados, preservando origem.
    */
   static processXmlBatch(input: BatchIngestionInput): BatchIngestionResult[] {
     return input.files.map((file) => {
-      const document = this.createFiscalDocument({
+      const { record: document, parsed } = this.prepareFiscalDocument({
         tenant_id: input.tenant_id,
         source: input.source,
+        capture_mode: file.capture_mode,
         xml_content: file.xml_content,
         original_filename: file.filename,
         nsu: file.nsu,
@@ -203,12 +274,43 @@ export class DocumentIngestionService {
         policy_ids_attempted: input.policies.map((policy) => policy.id)
       });
 
+      if (document.status === 'DUPLICADO') {
+        const original = document.duplicate_of_id
+          ? dbStore.fiscalDocuments.find((item) => item.id === document.duplicate_of_id)
+          : undefined;
+        return {
+          fiscal_document_id: document.id,
+          arquivo: file.filename,
+          aceito_em_alguma_apolice:
+            original?.status === 'AVERBADO' || original?.status === 'PENDENTE',
+          duplicate: true,
+          duplicate_of_id: document.duplicate_of_id,
+          tentativas: []
+        };
+      }
+
+      if (!parsed) {
+        document.status = 'ERRO';
+        document.codigo_resultado = 'ERR-4005';
+        document.mensagem_resultado = 'XML inválido ou formato fiscal não reconhecido.';
+        document.processed_at = new Date().toISOString();
+        dbStore.persist();
+        return {
+          fiscal_document_id: document.id,
+          arquivo: file.filename,
+          aceito_em_alguma_apolice: false,
+          tentativas: []
+        };
+      }
+
       this.markProcessing(document);
 
       if (input.policies.length === 0) {
-        document.status = 'RECUSADO';
-        document.codigo_resultado = 'NO_POLICY_CANDIDATE';
-        document.mensagem_resultado = 'Nenhuma apólice candidata foi encontrada para processamento automático.';
+        document.status = input.no_policy_status ?? 'RECUSADO';
+        document.codigo_resultado = input.no_policy_code ?? 'NO_POLICY_CANDIDATE';
+        document.mensagem_resultado =
+          input.no_policy_message ??
+          'Nenhuma apólice candidata foi encontrada para processamento automático.';
         document.processed_at = new Date().toISOString();
         dbStore.persist();
 
@@ -227,7 +329,8 @@ export class DocumentIngestionService {
             tenant_id: input.tenant_id,
             ramo: policy.ramo,
             policy_id: policy.id,
-            xml_content: file.xml_content
+            xml_content: file.xml_content,
+            raw_xml_id: document.raw_xml_id
           },
           input.app_base_url
         );
@@ -252,7 +355,10 @@ export class DocumentIngestionService {
         fiscal_document_id: document.id,
         arquivo: file.filename,
         aceito_em_alguma_apolice: tentativas.some(
-          (tentativa) => tentativa.status === 'sucesso' || tentativa.status === 'aviso'
+          (tentativa) =>
+            tentativa.status === 'sucesso' ||
+            tentativa.status === 'aviso' ||
+            tentativa.status === 'pendente'
         ),
         tentativas
       };
