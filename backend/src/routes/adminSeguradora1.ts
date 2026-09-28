@@ -220,6 +220,9 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   let clienteNovo = false;
 
   if (tenant) {
+    if (tipo_operacao !== undefined) {
+      tenant.tipo_operacao = tipoOperacao;
+    }
     // Cliente já existe — checar conflito de ramo com OUTRA seguradora
     const policyConflitante = dbStore.policies.find(
       (p) => p.tenant_id === tenant!.id && p.ramo === ramoNormalizado && p.status === 'ATIVA' && p.insurer_id !== insurer_id
