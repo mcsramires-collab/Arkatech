@@ -215,4 +215,22 @@ describe('ConnectorFiscalService', () => {
       no_policy_code: 'DOCUMENT_TYPE_NOT_CONFIGURED'
     }));
   });
+  it('recusa seleção automática quando o mesmo ramo tem seguradoras diferentes', () => {
+    dbStore.policies = [
+      {
+        id: 'p-a', numero_apolice: 'A', ramo: 'RCTRC', tenant_id: 'tenant-1',
+        insurer_id: 'insurer-a', broker_id: 'b1', status: 'ATIVA', permitir_inativo_vencido: false,
+        vigencia_inicio: '2026-01-01', vigencia_fim: '2027-12-31',
+        aceita_averbacao_como_destinatario: false
+      },
+      {
+        id: 'p-b', numero_apolice: 'B', ramo: 'RCTRC', tenant_id: 'tenant-1',
+        insurer_id: 'insurer-b', broker_id: 'b1', status: 'ATIVA', permitir_inativo_vencido: false,
+        vigencia_inicio: '2026-01-01', vigencia_fim: '2027-12-31',
+        aceita_averbacao_como_destinatario: false
+      }
+    ] as any;
+
+    expect(ConnectorFiscalService.resolveAutomaticPolicies('tenant-1', 'CTE')).toEqual([]);
+  });
 });
