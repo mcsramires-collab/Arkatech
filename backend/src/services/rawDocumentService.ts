@@ -4,15 +4,19 @@ import { RawXMLStore } from '../types';
 import { dbStore } from './dbStore';
 
 export class RawDocumentService {
-  static store(content: string): RawXMLStore {
+  static store(content: string, tenantId: string): RawXMLStore {
     const hash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
     const existing = dbStore.rawXmlStore.find(
-      (item) => item.hash_sha256 === hash && item.content_xml === content
+      (item) =>
+        item.tenant_id === tenantId &&
+        item.hash_sha256 === hash &&
+        item.content_xml === content
     );
     if (existing) return existing;
 
     const record: RawXMLStore = {
       id: uuidv4(),
+      tenant_id: tenantId,
       content_xml: content,
       hash_sha256: hash,
       encrypted_aes256: true,
