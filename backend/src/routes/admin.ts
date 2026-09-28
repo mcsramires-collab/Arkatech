@@ -1,3 +1,4 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -140,7 +141,13 @@ router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
     return res.status(400).json({ status: 'erro', mensagem: 'CNPJ e Razão Social são obrigatórios.' });
   }
 
-  const cleanCnpj = cnpj.replace(/\D/g, '');
+  const cleanCnpj = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cleanCnpj)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. Use 14 posições: 12 caracteres alfanuméricos e 2 dígitos verificadores numéricos.'
+    });
+  }
 
   const newTenant: Tenant = {
     id: `tenant_${cleanCnpj}_${Date.now()}`,
