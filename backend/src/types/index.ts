@@ -697,6 +697,39 @@ export interface SupportMessage {
   created_at: string;
 }
 
+export type WhatsappMessageDirection = 'INBOUND' | 'OUTBOUND';
+export type WhatsappMessageKind = 'TEXT' | 'DOCUMENT' | 'NOTIFICATION';
+export type WhatsappMessageStatus =
+  | 'RECEIVED'
+  | 'PROCESSED'
+  | 'PENDING'
+  | 'SENT'
+  | 'DELIVERED'
+  | 'READ'
+  | 'FAILED';
+
+export interface WhatsappMessage {
+  id: string;
+  tenant_id: string;
+  tenant_user_id?: string;
+  provider: string;
+  provider_message_id?: string;
+  direction: WhatsappMessageDirection;
+  kind: WhatsappMessageKind;
+  phone: string;
+  text?: string;
+  document_name?: string;
+  document_mime_type?: string;
+  content_hash_sha256?: string;
+  status: WhatsappMessageStatus;
+  support_ticket_id?: string;
+  fiscal_document_ids: string[];
+  error_message?: string;
+  created_at: string;
+  processed_at?: string;
+  updated_at: string;
+}
+
 // ===================== CONFIGURAÇÕES DA FICHA DO SEGURADO (PORTAL DA SEGURADORA) =====================
 
 /**
