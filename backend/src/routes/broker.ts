@@ -229,7 +229,7 @@ router.post(
       cnpj,
       razao_social,
       nome_fantasia,
-      ramo,
+      ramo: ramoNormalizado,
       numero_apolice,
       lmi,
       vigencia_inicio,
@@ -250,6 +250,10 @@ router.post(
         status: 'erro',
         mensagem: 'insurer_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
       });
+    }
+    const ramoNormalizado = normalizeRamo(ramo);
+    if (!ramoNormalizado) {
+      return res.status(400).json({ status: 'erro', mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.' });
     }
 
     const payload = {
@@ -397,7 +401,7 @@ router.post('/policies', requirePermission('apolices', 'editar'), (req: Backoffi
     tenant_id,
     co_broker_id,
     assessoria_id,
-    ramo,
+    ramo: ramoNormalizado,
     numero_apolice,
     lmi,
     vigencia_inicio,
@@ -413,6 +417,10 @@ router.post('/policies', requirePermission('apolices', 'editar'), (req: Backoffi
       status: 'erro',
       mensagem: 'insurer_id, tenant_id, ramo e numero_apolice são obrigatórios.'
     });
+  }
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return res.status(400).json({ status: 'erro', mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.' });
   }
 
   return responderAcaoDelegada(res, insurer_id, broker_id, tenant_id, 'CRIAR_APOLICE', {
