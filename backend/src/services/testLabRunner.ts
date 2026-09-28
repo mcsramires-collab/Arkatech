@@ -687,6 +687,7 @@ function defineScenarios(): ScenarioDefinition[] {
     key: string;
     label: string;
     missingLabel: string;
+    suppliedKey: string;
     value: string;
   }> = [
     {
@@ -694,6 +695,7 @@ function defineScenarios(): ScenarioDefinition[] {
       key: 'regras:placa',
       label: 'Placa obrigatória',
       missingLabel: 'Placa do Veículo',
+      suppliedKey: 'PLACA',
       value: 'ABC1D23'
     },
     {
@@ -701,6 +703,7 @@ function defineScenarios(): ScenarioDefinition[] {
       key: 'regras:motorista',
       label: 'Motorista obrigatório',
       missingLabel: 'Motorista (CPF/CNPJ)',
+      suppliedKey: 'MOTORISTA',
       value: '12345678901'
     },
     {
@@ -708,6 +711,7 @@ function defineScenarios(): ScenarioDefinition[] {
       key: 'regras:embarque',
       label: 'Data de embarque obrigatória',
       missingLabel: 'Data de Embarque',
+      suppliedKey: 'DATA_EMBARQUE',
       value: brDateFromNow(1)
     }
   ];
@@ -728,7 +732,7 @@ function defineScenarios(): ScenarioDefinition[] {
         const supplied = processAverbacao(
           ctx,
           { documentNumber: 571002 },
-          { supplemented_vars: { [item.key.split(':')[1]!.toUpperCase()]: item.value } }
+          { supplemented_vars: { [item.suppliedKey]: item.value } }
         );
         return {
           assertions: [
@@ -1222,7 +1226,7 @@ function defineScenarios(): ScenarioDefinition[] {
           timestamp: new Date().toISOString(),
           created_at: new Date().toISOString()
         }
-      ] as Averbacao[];
+      ] as any;
 
       const listA = InsurerVisibilityService.averbacoes(ctx.insurerAId);
       const listB = InsurerVisibilityService.averbacoes(ctx.insurerBId);
@@ -1274,7 +1278,7 @@ function defineScenarios(): ScenarioDefinition[] {
           timestamp: new Date().toISOString(),
           created_at: new Date().toISOString()
         }
-      ] as Averbacao[];
+      ] as any;
 
       return {
         assertions: [
@@ -1361,7 +1365,7 @@ function defineScenarios(): ScenarioDefinition[] {
           timestamp: new Date().toISOString(),
           created_at: new Date().toISOString()
         }
-      ] as Averbacao[];
+      ] as any;
 
       const filteredA = InsurerVisibilityService.averbacoes(ctx.insurerAId, {
         tenant_id: ctx.tenantId
