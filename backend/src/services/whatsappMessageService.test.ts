@@ -91,6 +91,44 @@ describe('WhatsappMessageService', () => {
     });
   });
 
+  it('faz claim exclusivo do outbox e exige claim_token no callback', () => {
+    const outbound = WhatsappMessageService.queueOutbound({
+      tenant_id: 'tenant-1',
+      phone: '19999990000',
+      text: 'Resposta'
+    });
+
+    const claimed = WhatsappMessageService.claimOutbox({
+      worker_id: 'worker-1',
+      limit: 10,
+      lease_seconds: 120
+    });
+
+    expect(claimed).toHaveLength(1);
+    expect(outbound.status).toBe('PROCESSING');
+    expect(outbound.claim_token).toBeTruthy();
+    expect(WhatsappMessageService.outbox()).toHaveLength(0);
+
+    expect(
+      WhatsappMessageService.updateOutboundStatus({
+        id: outbound.id,
+        status: 'SENT',
+        claim_token: 'token-incorreto'
+      })
+    ).toBeUndefined();
+
+    expect(
+      WhatsappMessageService.updateOutboundStatus({
+        id: outbound.id,
+        status: 'SENT',
+        claim_token: outbound.claim_token
+      })
+    ).toBeDefined();
+
+    expect(outbound.status).toBe('SENT');
+    expect(outbound.claim_token).toBeUndefined();
+  });
+
   it('recupera o último telefone associado ao ticket de suporte', () => {
     const oldMessage = WhatsappMessageService.createInbound({
       tenant_id: 'tenant-1',
