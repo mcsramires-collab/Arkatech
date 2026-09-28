@@ -11,7 +11,8 @@ import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { checkActivated } from '../services/accountActivation';
 import { CancelamentoService } from '../services/cancelamento';
-import { TenantUser, BusinessRuleRequest, SupportTicket, Policy } from '../types';
+import { SupportService } from '../services/supportService';
+import { TenantUser, BusinessRuleRequest, Policy, SupportChannel } from '../types';
 import fiscalDocumentsRouter from './fiscalDocuments';
 import connectorsRouter from './connectors';
 import fiscalSyncRouter from './fiscalSync';
@@ -728,15 +729,20 @@ router.post('/regras-solicitacoes', authMiddleware, (req: AuthenticatedRequest, 
   return res.json({ status: 'sucesso', solicitacao: newRequest });
 });
 
-// --- Chamados de Suporte (MVP) — achado da auditoria de 27/08: a tela de Suporte do Portal do
-// Segurado só disparava um toast de sucesso no cliente, sem nenhuma chamada de API. O
-// transportador/embarcador cria e consulta os próprios chamados; sem fluxo de resposta/
-// atendimento do lado da seguradora ainda (não existe tela interna de suporte hoje).
+// --- Suporte conversacional ---
+// O ticket e as mensagens usam o mesmo modelo independentemente do canal. Nesta etapa o Portal
+// pode originar PORTAL/CHAT. WhatsApp e telefonia serão integrados depois, alimentando a mesma
+// conversa sem criar um segundo sistema de chamados.
 router.get('/suporte/chamados', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const chamados = dbStore.supportTickets
-    .filter((c) => c.tenant_id === tenantId)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    .filter((ticket) => ticket.tenant_id === tenantId)
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .map((ticket) => ({
+      ...ticket,
+      mensagens: dbStore.supportMessages.filter((message) => message.ticket_id === ticket.id).length
+    }));
+
   return res.json({ status: 'sucesso', chamados });
 });
 
@@ -751,23 +757,96 @@ router.post('/suporte/chamados', authMiddleware, (req: AuthenticatedRequest, res
     });
   }
 
+  const allowedPriorities = ['BAIXA', 'NORMAL', 'ALTA', 'CRITICA'] as const;
+  const prioridade = String(req.body.prioridade || 'NORMAL').toUpperCase() as
+    (typeof allowedPriorities)[number];
+  if (!allowedPriorities.includes(prioridade)) {
+    return res.status(400).json({ status: 'erro', mensagem: 'prioridade inválida.' });
+  }
+
+  const allowedChannels: SupportChannel[] = ['PORTAL', 'CHAT'];
+  const canal = String(req.body.canal || 'PORTAL').toUpperCase() as SupportChannel;
+  if (!allowedChannels.includes(canal)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'Pelo Portal, canal deve ser PORTAL ou CHAT.'
+    });
+  }
+
   const solicitanteNome = req.tenant!.tenant_user_nome || req.tenant!.razao_social;
-
-  const newTicket: SupportTicket = {
-    id: uuidv4(),
+  const ticket = SupportService.createTicket({
     tenant_id: tenantId,
-    assunto,
-    categoria,
-    descricao,
-    status: 'ABERTO',
+    tenant_user_id: req.tenant!.tenant_user_id,
+    assunto: String(assunto),
+    categoria: String(categoria),
+    descricao: String(descricao),
     solicitante_nome: solicitanteNome,
-    created_at: new Date().toISOString()
-  };
-  dbStore.supportTickets.unshift(newTicket);
-  dbStore.persist();
+    prioridade,
+    canal_origem: canal
+  });
 
-  return res.json({ status: 'sucesso', chamado: newTicket });
+  return res.json({
+    status: 'sucesso',
+    chamado: ticket,
+    messages: SupportService.messages(ticket.id, tenantId)
+  });
 });
+
+router.get('/suporte/chamados/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const ticket = SupportService.getTicket(tenantId, req.params.id);
+  if (!ticket) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Chamado não encontrado.' });
+  }
+
+  return res.json({
+    status: 'sucesso',
+    chamado: ticket,
+    messages: SupportService.messages(ticket.id, tenantId)
+  });
+});
+
+router.post(
+  '/suporte/chamados/:id/mensagens',
+  authMiddleware,
+  (req: AuthenticatedRequest, res: Response) => {
+    const tenantId = req.tenant!.tenant_id;
+    const ticket = SupportService.getTicket(tenantId, req.params.id);
+    if (!ticket) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Chamado não encontrado.' });
+    }
+
+    const message = String(req.body.message || '').trim();
+    if (!message) {
+      return res.status(400).json({ status: 'erro', mensagem: 'message é obrigatório.' });
+    }
+
+    const entry = SupportService.addTenantMessage({
+      ticket,
+      tenant_user_id: req.tenant!.tenant_user_id,
+      author_name: req.tenant!.tenant_user_nome || req.tenant!.razao_social,
+      message,
+      channel: 'CHAT'
+    });
+
+    return res.json({ status: 'sucesso', message: entry, chamado: ticket });
+  }
+);
+
+router.put(
+  '/suporte/chamados/:id/fechar',
+  authMiddleware,
+  (req: AuthenticatedRequest, res: Response) => {
+    const tenantId = req.tenant!.tenant_id;
+    const ticket = SupportService.getTicket(tenantId, req.params.id);
+    if (!ticket) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Chamado não encontrado.' });
+    }
+
+    SupportService.updateTicket({ ticket, status: 'FECHADO' });
+    return res.json({ status: 'sucesso', chamado: ticket });
+  }
+);
 
 // --- Estatísticas do Dashboard (Início do Portal) — agregados simples sobre os dados reais do
 // próprio tenant; nada aqui é mockado, mas propositalmente não inclui nada que exija consultas
