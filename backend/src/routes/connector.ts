@@ -8,6 +8,7 @@ import { ConnectorService } from '../services/connectorService';
 import { ConnectorFiscalService } from '../services/connectorFiscalService';
 import { FiscalSyncService } from '../services/fiscalSyncService';
 import { FiscalEventService } from '../services/fiscalEventService';
+import { NotificationService } from '../services/notificationService';
 import { dbStore } from '../services/dbStore';
 import {
   ConnectorCertificateStatus,
@@ -91,6 +92,7 @@ router.put(
       }
     }
 
+    const previousCertificateStatus = connector.certificate_status;
     const updated = ConnectorService.updateCertificateStatus(connector, {
       status: normalizedStatus,
       cnpj: normalizedCertificateCnpj,
@@ -100,6 +102,30 @@ router.put(
       valid_from: valid_from ? String(valid_from) : undefined,
       valid_until: valid_until ? String(valid_until) : undefined
     });
+
+    if (
+      previousCertificateStatus !== normalizedStatus &&
+      (normalizedStatus === 'EXPIRING' || normalizedStatus === 'EXPIRED' || normalizedStatus === 'ERROR')
+    ) {
+      NotificationService.create({
+        tenant_id: connector.tenant_id,
+        type: normalizedStatus === 'EXPIRING' ? 'CERTIFICADO_EXPIRANDO' : 'CERTIFICADO_EXPIRADO',
+        severity: normalizedStatus === 'EXPIRING' ? 'WARNING' : 'ERROR',
+        title:
+          normalizedStatus === 'EXPIRING'
+            ? 'Certificado digital próximo do vencimento'
+            : 'Certificado digital indisponível',
+        message:
+          normalizedStatus === 'EXPIRING'
+            ? 'O certificado usado na automação fiscal está próximo do vencimento.'
+            : 'A automação fiscal não poderá operar normalmente até o certificado ser corrigido.',
+        context: {
+          connector_id: connector.id,
+          certificate_status: normalizedStatus,
+          certificate_valid_until: updated.certificate_valid_until
+        }
+      });
+    }
 
     return res.json({ status: 'sucesso', connector: ConnectorService.publicView(updated) });
   }
