@@ -110,6 +110,10 @@ export class DocumentIngestionService {
       if (!['AVERBADO', 'PENDENTE', 'DUPLICADO'].includes(item.status)) return false;
 
       const sameRaw = item.content_hash_sha256 === raw.hash_sha256;
+      const sameExternalIdentity =
+        Boolean(params.external_id) &&
+        item.source === params.source &&
+        item.external_id === params.external_id;
       const sameFiscalIdentity =
         Boolean(parsed?.chaveDocumento) &&
         normalizeAlphanumeric(item.chave_documento) ===
@@ -118,7 +122,7 @@ export class DocumentIngestionService {
           !item.protocolo_aceitacao_sefaz ||
           item.protocolo_aceitacao_sefaz === parsed.protocoloAceitacaoSefaz);
 
-      if (!sameRaw && !sameFiscalIdentity) return false;
+      if (!sameRaw && !sameExternalIdentity && !sameFiscalIdentity) return false;
 
       // Se surgiu uma apólice nova ainda não tentada, o documento deve poder ser reprocessado.
       return requestedPolicies.every((policyId) => item.policy_ids_attempted.includes(policyId));
