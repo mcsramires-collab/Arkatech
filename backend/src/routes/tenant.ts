@@ -14,11 +14,13 @@ import { TenantUser, BusinessRuleRequest, SupportTicket, Policy } from '../types
 import fiscalDocumentsRouter from './fiscalDocuments';
 import connectorsRouter from './connectors';
 import fiscalSyncRouter from './fiscalSync';
+import fiscalEventsRouter from './fiscalEvents';
 
 const router = Router();
 router.use('/fiscal-documents', fiscalDocumentsRouter);
 router.use('/connectors', connectorsRouter);
 router.use('/fiscal-sync', fiscalSyncRouter);
+router.use('/fiscal-events', fiscalEventsRouter);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 /**
