@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AverbacaoRequestDTO, AverbacaoResponseDTO, AverbacaoService } from '../averbacao';
 import { dbStore } from '../dbStore';
 import { RawDocumentService } from '../rawDocumentService';
+import { NotificationService } from '../notificationService';
 import { XMLParserService } from '../xmlParser';
 import { normalizeAlphanumeric } from '../../utils/cnpj';
 import {
@@ -83,6 +84,45 @@ function defaultCaptureMode(source: DocumentIngestionSource): FiscalCaptureMode 
  * fiscal antes de chamar o motor.
  */
 export class DocumentIngestionService {
+  private static notifyIfAttentionRequired(document: FiscalDocument): void {
+    if (document.status === 'PENDENTE') {
+      NotificationService.create({
+        tenant_id: document.tenant_id,
+        type: 'AVERBACAO_PENDENTE',
+        severity: 'WARNING',
+        title: 'Averbação pendente',
+        message:
+          document.mensagem_resultado ||
+          'Um documento fiscal exige complemento ou análise antes de concluir a averbação.',
+        context: {
+          fiscal_document_id: document.id,
+          tipo_documento: document.tipo_documento,
+          chave_documento: document.chave_documento,
+          source: document.source
+        }
+      });
+    }
+
+    if (document.status === 'RECUSADO' || document.status === 'ERRO') {
+      NotificationService.create({
+        tenant_id: document.tenant_id,
+        type: 'AVERBACAO_RECUSADA',
+        severity: 'ERROR',
+        title: 'Documento não averbado',
+        message:
+          document.mensagem_resultado ||
+          'Um documento fiscal não pôde ser averbado e precisa de atenção.',
+        context: {
+          fiscal_document_id: document.id,
+          tipo_documento: document.tipo_documento,
+          chave_documento: document.chave_documento,
+          source: document.source,
+          codigo: document.codigo_resultado
+        }
+      });
+    }
+  }
+
   private static prepareFiscalDocument(params: {
     tenant_id: string;
     source: DocumentIngestionSource;
@@ -190,6 +230,7 @@ export class DocumentIngestionService {
     document.mensagem_resultado = responses.map((response) => response.mensagem).filter(Boolean).join(' | ');
     document.processed_at = new Date().toISOString();
     dbStore.persist();
+    this.notifyIfAttentionRequired(document);
   }
 
   private static consolidateBatchStatus(responses: AverbacaoResponseDTO[]): FiscalDocumentStatus {
@@ -245,6 +286,7 @@ export class DocumentIngestionService {
       document.mensagem_resultado = 'XML inválido ou formato fiscal não reconhecido.';
       document.processed_at = new Date().toISOString();
       dbStore.persist();
+      this.notifyIfAttentionRequired(document);
       return {
         status: 'erro',
         codigo: 'ERR-4005',
@@ -319,6 +361,7 @@ export class DocumentIngestionService {
           'Nenhuma apólice candidata foi encontrada para processamento automático.';
         document.processed_at = new Date().toISOString();
         dbStore.persist();
+        this.notifyIfAttentionRequired(document);
 
         return {
           fiscal_document_id: document.id,
