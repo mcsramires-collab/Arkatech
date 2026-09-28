@@ -205,6 +205,21 @@ export class DocumentIngestionService {
 
       this.markProcessing(document);
 
+      if (input.policies.length === 0) {
+        document.status = 'RECUSADO';
+        document.codigo_resultado = 'NO_POLICY_CANDIDATE';
+        document.mensagem_resultado = 'Nenhuma apólice candidata foi encontrada para processamento automático.';
+        document.processed_at = new Date().toISOString();
+        dbStore.persist();
+
+        return {
+          fiscal_document_id: document.id,
+          arquivo: file.filename,
+          aceito_em_alguma_apolice: false,
+          tentativas: []
+        };
+      }
+
       const rawResponses: AverbacaoResponseDTO[] = [];
       const tentativas = input.policies.map((policy) => {
         const resultado = AverbacaoService.process(
