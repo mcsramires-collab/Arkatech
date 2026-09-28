@@ -4,6 +4,7 @@ import {
   ConnectorAuthenticatedRequest
 } from '../middleware/connectorAuthMiddleware';
 import { ConnectorService } from '../services/connectorService';
+import { dbStore } from '../services/dbStore';
 import {
   ConnectorCertificateStatus,
   ConnectorSefazStatus
@@ -78,10 +79,11 @@ router.get(
   connectorAuthMiddleware,
   (req: ConnectorAuthenticatedRequest, res: Response) => {
     const connector = req.connector!;
+    const tenant = dbStore.tenants.find((item) => item.id === connector.tenant_id);
     return res.json({
       status: 'sucesso',
       connector_id: connector.id,
-      environment: 'PRODUCAO',
+      environment: tenant?.ambiente === 'teste' ? 'HOMOLOGACAO' : 'PRODUCAO',
       providers: {
         nfe: connector.capabilities.includes('NFE_DFE'),
         cte: connector.capabilities.includes('CTE_DFE'),
