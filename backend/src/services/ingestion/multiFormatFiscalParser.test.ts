@@ -49,8 +49,20 @@ describe('MultiFormatFiscalParser', () => {
   it('lê a primeira planilha XLSX e transforma as linhas em documentos', async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Averbacoes');
-    sheet.addRow(['tipo_documento', 'numero_documento', 'valor_carga', 'cnpj_emitente']);
-    sheet.addRow(['MDFE', '456', 9999.9, '12ABC34501DE35']);
+    sheet.addRow([
+      'tipo_documento',
+      'chave_documento',
+      'numero_documento',
+      'valor_carga',
+      'cnpj_emitente'
+    ]);
+    sheet.addRow([
+      'MDFE',
+      '35123456789012345678901234567890123456789012',
+      '456',
+      9999.9,
+      '12ABC34501DE35'
+    ]);
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
 
     const docs = await MultiFormatFiscalParser.parse({
@@ -76,7 +88,10 @@ describe('MultiFormatFiscalParser', () => {
     });
 
     expect(result.content).toBeUndefined();
-    expect(result.warnings).toContain('valor_carga ausente ou inválido');
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      'chave_documento deve conter 44 posições para CT-e/NF-e/MDF-e',
+      'valor_carga ausente ou inválido'
+    ]));
   });
 
   it('mantém XML embutido em TXT sem reconstruir dados', async () => {
