@@ -1,7 +1,8 @@
 import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
-import { DelegationAction, Tenant, Policy, ApprovalRequest, PolicyCoverageValue } from '../types';
+import { DelegationAction, Tenant, Policy, ApprovalRequest, PolicyCoverageValue, TenantOperationType } from '../types';
+import { createClientCredentialsSync } from '../utils/clientCredentials';
 
 /**
  * Serviço compartilhado de ações delegadas da corretora (Permissões e Autonomia).
@@ -91,8 +92,19 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
     contato_nome,
     contato_email,
     contato_telefone_fixo,
-    contato_celular
+    contato_celular,
+    tipo_operacao
   } = payload;
+
+  const tiposOperacao: TenantOperationType[] = ['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'];
+  const tipoOperacao = String(tipo_operacao || 'TRANSPORTADOR').toUpperCase() as TenantOperationType;
+  if (!tiposOperacao.includes(tipoOperacao)) {
+    return {
+      ok: false,
+      codigo: 'erro',
+      mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+    };
+  }
 
   const cnpjLimpo = normalizeCnpj(cnpj);
   if (!isCnpjFormatValid(cnpjLimpo)) {
@@ -118,15 +130,17 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
       };
     }
   } else {
+    const integrationCredentials = createClientCredentialsSync('prod_segurado');
     tenant = {
       id: `tenant_${cnpjLimpo}_${Date.now()}`,
       cnpj,
       razao_social,
       status: 'ATIVO',
       ambiente: 'producao',
-      client_id: `client_prod_${cnpjLimpo}`,
-      client_secret_hash: `secret_${cnpjLimpo}`,
+      client_id: integrationCredentials.client_id,
+      client_secret_hash: integrationCredentials.client_secret_hash,
       role: 'TRANSPORTADOR',
+      tipo_operacao: tipoOperacao,
       token_duration_hours: 8,
       created_at: new Date().toISOString(),
       contato_nome,
@@ -136,15 +150,6 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
       conta_ativada: false
     };
     dbStore.tenants.push(tenant);
-    dbStore.activationTokens.push({
-      id: uuidv4(),
-      tenant_id: tenant.id,
-      token: `act_${uuidv4()}`,
-      termo_versao: 'v1',
-      aceite: false,
-      expira_em: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      created_at: new Date().toISOString()
-    });
   }
 
   const newPolicy: Policy = {
