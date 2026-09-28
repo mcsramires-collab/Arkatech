@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { ResponseEngine } from '../services/responseEngine';
 import { getJwtSecret } from '../utils/jwtSecret';
+import { hashClientSecret, verifyClientSecret } from '../utils/clientCredentials';
 import { backofficeAuthMiddleware, BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -13,7 +14,7 @@ const router = Router();
  * POST /api/v1/auth/token
  * Autenticação via Client Credentials (client_id + client_secret).
  */
-router.post('/token', (req: Request, res: Response) => {
+router.post('/token', async (req: Request, res: Response) => {
   const { client_id, client_secret } = req.body;
 
   if (!client_id || !client_secret) {
@@ -24,17 +25,25 @@ router.post('/token', (req: Request, res: Response) => {
     });
   }
 
-  const tenant = dbStore.tenants.find(
-    (t) => t.client_id === client_id && t.client_secret_hash === client_secret
-  );
+  const tenant = dbStore.tenants.find((t) => t.client_id === client_id);
+  const verification = tenant
+    ? await verifyClientSecret(tenant.client_secret_hash, String(client_secret))
+    : { valid: false, legacyPlaintext: false };
 
-  if (!tenant) {
+  if (!tenant || !verification.valid) {
     const errFormat = ResponseEngine.formatResponse('ERR-4001');
     return res.status(401).json({
       status: 'erro',
       codigo: errFormat.codigo,
       mensagem: 'Credenciais de client_id ou client_secret inválidas.'
     });
+  }
+
+  // Migração transparente: credenciais antigas em texto puro continuam funcionando, mas no
+  // primeiro login válido o mesmo segredo passa a ser armazenado com bcrypt.
+  if (verification.legacyPlaintext) {
+    tenant.client_secret_hash = await hashClientSecret(String(client_secret));
+    dbStore.persist();
   }
 
   const durationHours = tenant.token_duration_hours || 8;
