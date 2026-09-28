@@ -2,6 +2,7 @@ import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
+import { InsurerVisibilityService } from '../services/insurerVisibilityService';
 import { createBackofficeInvitation } from '../services/backofficeInvitationService';
 import { createAndSendInsuredInvitation } from '../services/insuredInvitationService';
 import { createClientCredentials } from '../utils/clientCredentials';
@@ -460,7 +461,7 @@ router.get('/insurer-dashboard-stats', requirePermission('relatorios', 'ver'), (
   const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
   if (!insurer_id) return;
 
-  const policiesDaSeguradora = dbStore.policies.filter((p) => p.insurer_id === insurer_id);
+  const policiesDaSeguradora = InsurerVisibilityService.policies(insurer_id);
   const tenantIds = new Set(policiesDaSeguradora.map((p) => p.tenant_id));
   const seguradosDaSeguradora = dbStore.tenants.filter((t) => tenantIds.has(t.id));
 
@@ -481,13 +482,10 @@ router.get('/insurer-dashboard-stats', requirePermission('relatorios', 'ver'), (
     return p.status !== 'INATIVA' && vencimento >= new Date() && vencimento <= em30Dias;
   }).length;
 
-  const policyIdsDaSeguradora = new Set(policiesDaSeguradora.map((p) => p.id));
-  // Achado do usuário em 29/08: "Averbações no mês" contava TODAS as averbações da seguradora,
-  // inclusive as recusadas (status='ERRO') — um documento recusado nunca deveria ser contado
-  // aqui, só os que de fato geraram um número de averbação (status='SUCESSO').
-  const averbacoesDaSeguradora = dbStore.averbacoes.filter(
-    (a) => policyIdsDaSeguradora.has(a.policy_id) && a.status === 'SUCESSO'
-  );
+  // Usa a mesma fonte de escopo do Laboratório de Testes: nenhuma consulta de seguradora
+  // pode derivar visibilidade apenas do tenant/segurado, sempre da relação Policy.insurer_id.
+  const averbacoesDaSeguradora = InsurerVisibilityService.averbacoes(insurer_id)
+    .filter((a) => a.status === 'SUCESSO');
 
   const agora = new Date();
   const inicioMesAtual = new Date(agora.getFullYear(), agora.getMonth(), 1);
@@ -519,28 +517,13 @@ router.get('/insurer-averbacoes', requirePermission('relatorios', 'ver'), (req: 
   const insurer_id = resolveInsurerId(req, res, req.query.insurer_id);
   if (!insurer_id) return;
 
-  let policies = dbStore.policies.filter((p) => p.insurer_id === insurer_id);
-  if (tenant_id) policies = policies.filter((p) => p.tenant_id === tenant_id);
-  const policyIds = new Set(policies.map((p) => p.id));
-
-  let filtered = dbStore.averbacoes.filter((a) => policyIds.has(a.policy_id));
-
-  if (status) {
-    filtered = filtered.filter((a) => a.status === String(status).toUpperCase());
-  }
-  if (tipo_documento) {
-    filtered = filtered.filter((a) => a.tipo_documento === String(tipo_documento).toUpperCase());
-  }
-  if (data_de) {
-    const from = new Date(String(data_de));
-    if (!isNaN(from.getTime())) filtered = filtered.filter((a) => new Date(a.created_at) >= from);
-  }
-  if (data_ate) {
-    const to = new Date(String(data_ate));
-    if (!isNaN(to.getTime())) filtered = filtered.filter((a) => new Date(a.created_at) <= to);
-  }
-
-  filtered = [...filtered].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const filtered = InsurerVisibilityService.averbacoes(insurer_id, {
+    tenant_id: tenant_id ? String(tenant_id) : undefined,
+    status: status ? String(status) : undefined,
+    tipo_documento: tipo_documento ? String(tipo_documento) : undefined,
+    data_de: data_de ? String(data_de) : undefined,
+    data_ate: data_ate ? String(data_ate) : undefined
+  });
 
   const totalItems = filtered.length;
   const pageRaw = Number(req.query.page);
