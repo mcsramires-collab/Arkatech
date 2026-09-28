@@ -384,6 +384,56 @@ export class ApiClient {
     return this.request('/api/v1/admin/test-lab/catalog');
   }
 
+  static getTestLabCatalogAudit() {
+    return this.request('/api/v1/admin/test-lab/catalog-audit');
+  }
+
+  static planTestLab(payload: any) {
+    return this.request('/api/v1/admin/test-lab/plan', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  static executeTestLab(payload: any) {
+    return this.request('/api/v1/admin/test-lab/execute', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  static getTestLabRuns(limit = 25) {
+    return this.request(`/api/v1/admin/test-lab/runs?limit=${limit}`);
+  }
+
+  static getTestLabRun(id: string) {
+    return this.request(`/api/v1/admin/test-lab/runs/${encodeURIComponent(id)}`);
+  }
+
+  static rerunTestLabFailed(id: string) {
+    return this.request(`/api/v1/admin/test-lab/runs/${encodeURIComponent(id)}/rerun-failed`, {
+      method: 'POST'
+    });
+  }
+
+  static async downloadTestLabCsv(id: string) {
+    const response = await fetch(
+      `${API_BASE_URL}/api/v1/admin/test-lab/runs/${encodeURIComponent(id)}/export.csv`
+    );
+    if (!response.ok) {
+      throw new Error('Não foi possível exportar o relatório do Laboratório.');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `arckatech-test-lab-${id}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
   // Batch Simulator Multi-Cliente
   static executeBatchSimulation(simData: any) {
     return this.request('/api/v1/admin/simulador/executar', {
