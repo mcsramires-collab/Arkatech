@@ -94,9 +94,11 @@ export class ConnectorFiscalService {
     );
 
     for (const document of params.documents) {
+      let parsedDocument: ReturnType<typeof XMLParserService.parse> | undefined;
       let tipoDocumento: TipoDocumento | undefined;
       try {
-        tipoDocumento = XMLParserService.parse(document.xml).tipoDocumento;
+        parsedDocument = XMLParserService.parse(document.xml);
+        tipoDocumento = parsedDocument.tipoDocumento;
       } catch {
         // O pipeline central vai registrar o XML bruto e classificá-lo como ERRO.
       }
@@ -106,11 +108,9 @@ export class ConnectorFiscalService {
         Boolean(tipoDocumento) && tipoDocumento !== expectedDocumentType;
       const outboundNotAuthorized =
         params.capture_mode === 'OUTBOUND' &&
-        Boolean(tipoDocumento) &&
-        (!XMLParserService.parse(document.xml).protocoloAceitacaoSefaz ||
-          !['100', '150'].includes(
-            XMLParserService.parse(document.xml).cStatAutorizacaoSefaz ?? ''
-          ));
+        Boolean(parsedDocument) &&
+        (!parsedDocument?.protocoloAceitacaoSefaz ||
+          !['100', '150'].includes(parsedDocument.cStatAutorizacaoSefaz ?? ''));
 
       const policies =
         tipoDocumento && !providerMismatch && !outboundNotAuthorized
