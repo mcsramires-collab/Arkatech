@@ -204,11 +204,15 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     pk: 'id',
     columns: [
       'id', 'numero_averbacao', 'protocolo_interno_averbacao', 'tenant_id', 'policy_id',
-      'status', 'codigo_resposta', 'mensagem_resposta', 'valor_carga',
-      'valor_considerado_averbacao', 'regras_internas_aplicadas', 'tp_amb_sefaz',
-      'tipo_documento', 'chave_documento', 'numero_documento', 'serie_documento',
-      'cnpj_remetente', 'cnpj_destinatario', 'cnpj_tomador', 'protocolo_aceitacao_sefaz',
-      'raw_xml_id', 'recovery_token', 'ambiente', 'timestamp', 'created_at'
+      'status', 'codigo_resposta', 'mensagem_resposta', 'motivo_pendencia',
+      'lmi_no_momento_envio', 'sublimite_no_momento_envio', 'codigo_liberacao_utilizado',
+      'decidido_por', 'decidido_em', 'protocolo_cancelamento_sefaz',
+      'justificativa_cancelamento', 'cancelado_em', 'cancelado_por',
+      'valor_carga', 'valor_considerado_averbacao', 'regras_internas_aplicadas',
+      'tp_amb_sefaz', 'tipo_documento', 'chave_documento', 'numero_documento',
+      'serie_documento', 'cnpj_emissor', 'cnpj_remetente', 'cnpj_destinatario',
+      'cnpj_tomador', 'protocolo_aceitacao_sefaz', 'raw_xml_id', 'recovery_token',
+      'ambiente', 'timestamp', 'created_at'
     ]
   },
   {
