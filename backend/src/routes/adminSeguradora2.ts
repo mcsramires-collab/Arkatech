@@ -657,6 +657,13 @@ router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
     });
   }
 
+  if (Boolean(conceder_acesso_portal) && !corretor_responsavel_email) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'corretor_responsavel_email é obrigatório quando conceder_acesso_portal=true.'
+    });
+  }
+
   const newBroker: Broker = {
     id: `brk_${cnpjLimpo}_${Date.now()}`,
     cnpj,
@@ -670,18 +677,10 @@ router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
     corretor_responsavel_celular,
     created_at: new Date().toISOString()
   };
-  dbStore.brokers.push(newBroker);
 
   let portalTenant: Tenant | undefined;
   let convite;
   if (Boolean(conceder_acesso_portal)) {
-    if (!corretor_responsavel_email) {
-      return res.status(400).json({
-        status: 'erro',
-        mensagem: 'corretor_responsavel_email é obrigatório quando conceder_acesso_portal=true.'
-      });
-    }
-
     portalTenant = {
       id: `tenant_corretora_${cnpjLimpo}_${Date.now()}`,
       cnpj,
@@ -704,6 +703,7 @@ router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
     newBroker.tenant_id = portalTenant.id;
   }
 
+  dbStore.brokers.push(newBroker);
   dbStore.persist();
 
   if (portalTenant) {
