@@ -656,8 +656,7 @@ const suites: TestLabSuiteTemplate[] = [
       'ingestion.deduplication',
       'document.autorizacao_sefaz',
       'regras:documentos-aceitos',
-      'document.tipo',
-      'document.tp_amb'
+      'document.tipo'
     ]
   },
   {
