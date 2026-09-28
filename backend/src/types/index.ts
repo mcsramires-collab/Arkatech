@@ -608,6 +608,28 @@ export interface NotificationPreference {
   ativo: boolean;
 }
 
+export type OperationalNotificationType =
+  | 'AVERBACAO_PENDENTE'
+  | 'AVERBACAO_RECUSADA'
+  | 'AVERBACAO_CANCELADA'
+  | 'CERTIFICADO_EXPIRANDO'
+  | 'CERTIFICADO_EXPIRADO'
+  | 'SINCRONIZACAO_SEFAZ'
+  | 'SUPORTE';
+
+export interface OperationalNotification {
+  id: string;
+  tenant_id: string;
+  tenant_user_id?: string;
+  type: OperationalNotificationType;
+  severity: 'INFO' | 'WARNING' | 'ERROR';
+  title: string;
+  message: string;
+  context?: Record<string, any>;
+  read_at?: string;
+  created_at: string;
+}
+
 // ===================== REGRAS DE NEGÓCIO (SOLICITAÇÃO DO TRANSPORTADOR) =====================
 
 /**
@@ -636,14 +658,42 @@ export interface BusinessRuleRequest {
  * cria e consulta os próprios chamados; sem fluxo de resposta/atendimento do lado da seguradora
  * ainda (fica para quando existir uma tela de suporte interna de verdade).
  */
+export type SupportTicketStatus =
+  | 'ABERTO'
+  | 'EM_ATENDIMENTO'
+  | 'AGUARDANDO_CLIENTE'
+  | 'RESOLVIDO'
+  | 'FECHADO';
+
+export type SupportChannel = 'PORTAL' | 'CHAT' | 'WHATSAPP' | 'TELEFONE';
+
 export interface SupportTicket {
   id: string;
   tenant_id: string;
   assunto: string;
   categoria: string;
   descricao: string;
-  status: 'ABERTO' | 'FECHADO';
+  status: SupportTicketStatus;
+  prioridade: 'BAIXA' | 'NORMAL' | 'ALTA' | 'CRITICA';
+  canal_origem: SupportChannel;
   solicitante_nome: string;
+  tenant_user_id?: string;
+  assigned_to?: string;
+  updated_at: string;
+  resolved_at?: string;
+  closed_at?: string;
+  created_at: string;
+}
+
+export interface SupportMessage {
+  id: string;
+  ticket_id: string;
+  tenant_id: string;
+  author_type: 'TENANT_USER' | 'ARCKATECH' | 'SYSTEM';
+  author_id?: string;
+  author_name: string;
+  channel: SupportChannel;
+  message: string;
   created_at: string;
 }
 
