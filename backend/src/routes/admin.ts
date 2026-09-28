@@ -121,7 +121,8 @@ router.get('/tenants', requirePermission('clientes', 'ver'), (req: BackofficeAut
   const comStatusCadastro = (tenants: Tenant[]) =>
     tenants.map((t) => ({
       ...t,
-      status_cadastro: calcularStatusCadastro(t, dbStore.policies.filter((p) => p.tenant_id === t.id))
+      status_cadastro: calcularStatusCadastro(t, dbStore.policies.filter((p) => p.tenant_id === t.id)),
+      cnpjs_adicionais: dbStore.tenantCnpjsAdicionais.filter((c) => c.tenant_id === t.id)
     }));
   if (ator?.actor_type === 'SEGURADORA') {
     if (!ator.insurer_id) {
