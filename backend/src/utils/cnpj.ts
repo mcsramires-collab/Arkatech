@@ -5,11 +5,15 @@
  * Não use replace(/\D/g, '') em CNPJ: isso destrói letras válidas.
  */
 
-export function normalizeCnpj(value: unknown): string {
+export function normalizeAlphanumeric(value: unknown): string {
   return String(value ?? '')
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '');
+}
+
+export function normalizeCnpj(value: unknown): string {
+  return normalizeAlphanumeric(value);
 }
 
 export function isCnpjFormatValid(value: unknown): boolean {
