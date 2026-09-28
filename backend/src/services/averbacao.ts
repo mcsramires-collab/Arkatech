@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { normalizeAlphanumeric, normalizeCnpj } from '../utils/cnpj';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
@@ -806,8 +807,7 @@ export class AverbacaoService {
     // 12. Gerar Número de Averbação (formato de mercado) + Protocolo Interno (nosso, independente)
     const timestampISO = new Date().toISOString();
     const testePrefix = isHomologacaoSefaz ? 'TESTE-' : '';
-    const numeroAverbacao = `${testePrefix}AVB-${dto.ramo}-${Date.now().toString().slice(-6)}-${crypto
-      .randomBytes(2)
+    const numeroAverbacao = `${testePrefix}AVB-${dto.ramo}-${Date.now().toString().slice(-6)}-${randomBytes(2)
       .toString('hex')
       .toUpperCase()}`;
     const protocoloInterno = `PI-${uuidv4()}`;
@@ -864,7 +864,7 @@ export class AverbacaoService {
       valor_considerado_averbacao: valorConsiderado,
       regras_internas_aplicadas: regrasAplicadas,
       timestamp: timestampISO,
-      hash_validacao: hashSHA256
+      hash_validacao: rawXmlRecord.hash_sha256
     };
   }
 
