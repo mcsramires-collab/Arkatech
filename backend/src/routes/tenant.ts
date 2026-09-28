@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore';
 import { AverbacaoService } from '../services/averbacao';
 import { DocumentIngestionService } from '../services/ingestion/documentIngestion';
+import { MultiFormatFiscalParser } from '../services/ingestion/multiFormatFiscalParser';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { checkActivated } from '../services/accountActivation';
@@ -256,20 +257,19 @@ router.post(
   '/importar-lote',
   authMiddleware,
   upload.array('arquivos', 200),
-  (req: AuthenticatedRequest, res: Response) => {
+  async (req: AuthenticatedRequest, res: Response) => {
     const tenantId = req.tenant!.tenant_id;
     const gate = checkActivated(tenantId);
     if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
     const files = req.files as Express.Multer.File[] | undefined;
     if (!files || files.length === 0) {
-      return res.status(400).json({ status: 'erro', mensagem: 'Nenhum arquivo XML foi enviado.' });
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'Nenhum arquivo foi enviado. Formatos aceitos: XML, CSV, XLSX, PDF e TXT.'
+      });
     }
 
-    // policy_ids pode chegar como um único campo repetido várias vezes no multipart (multer/
-    // busboy já entrega como array quando o mesmo nome de campo aparece mais de uma vez) ou como
-    // um único valor. Nunca confiamos no id sozinho — sempre resolvido contra o tenant do JWT,
-    // pra uma empresa jamais conseguir averbar contra a apólice de outra.
     const policyIdsRaw = req.body.policy_ids;
     const policyIds: string[] = Array.isArray(policyIdsRaw)
       ? policyIdsRaw.filter((v): v is string => typeof v === 'string' && v.length > 0)
@@ -278,9 +278,10 @@ router.post(
         : [];
 
     if (policyIds.length === 0) {
-      return res
-        .status(400)
-        .json({ status: 'erro', mensagem: 'Selecione ao menos uma apólice (policy_ids) para averbar os documentos.' });
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'Selecione ao menos uma apólice (policy_ids) para averbar os documentos.'
+      });
     }
 
     const policiesAlvo: Policy[] = policyIds
@@ -288,21 +289,63 @@ router.post(
       .filter((p): p is Policy => Boolean(p));
 
     if (policiesAlvo.length === 0) {
-      return res
-        .status(400)
-        .json({ status: 'erro', mensagem: 'Nenhuma das apólices informadas foi encontrada para esta empresa.' });
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'Nenhuma das apólices informadas foi encontrada para esta empresa.'
+      });
+    }
+
+    const parsedFiles: Array<{
+      filename: string;
+      xml_content: string;
+    }> = [];
+    const arquivosRejeitados: Array<{
+      arquivo: string;
+      codigo: string;
+      mensagem: string;
+    }> = [];
+    const formatos: Record<string, number> = {};
+
+    // Processamento sequencial proposital: PDF e XLSX podem ser pesados; não queremos abrir
+    // dezenas deles simultaneamente e provocar pico de memória numa única requisição.
+    for (const file of files) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const documentos = await MultiFormatFiscalParser.parse(file);
+        for (const documento of documentos) {
+          parsedFiles.push({
+            filename: documento.filename,
+            xml_content: documento.content
+          });
+          formatos[documento.format] = (formatos[documento.format] ?? 0) + 1;
+        }
+      } catch (error) {
+        const raw = error instanceof Error ? error.message : 'Falha ao interpretar arquivo.';
+        const [codigo, ...rest] = raw.split(':');
+        arquivosRejeitados.push({
+          arquivo: file.originalname,
+          codigo: codigo || 'FILE_PARSE_ERROR',
+          mensagem: rest.join(':').trim() || raw
+        });
+      }
+    }
+
+    if (parsedFiles.length === 0) {
+      return res.status(422).json({
+        status: 'erro',
+        codigo: 'NO_VALID_FISCAL_DOCUMENTS',
+        mensagem: 'Nenhum documento fiscal utilizável foi extraído dos arquivos enviados.',
+        formatos_aceitos: MultiFormatFiscalParser.supportedExtensions(),
+        arquivos_rejeitados: arquivosRejeitados
+      });
     }
 
     const appBaseUrl = `${req.protocol}://${req.get('host')}`;
-
     const resultados = DocumentIngestionService.processXmlBatch({
       tenant_id: tenantId,
       source: 'PORTAL',
       app_base_url: appBaseUrl,
-      files: files.map((file) => ({
-        filename: file.originalname,
-        xml_content: file.buffer.toString('utf-8')
-      })),
+      files: parsedFiles,
       policies: policiesAlvo.map((policy) => ({
         id: policy.id,
         numero_apolice: policy.numero_apolice,
@@ -314,10 +357,13 @@ router.post(
     const totalErro = resultados.length - totalSucesso;
 
     return res.json({
-      status: 'sucesso',
-      total: resultados.length,
+      status: arquivosRejeitados.length > 0 ? 'aviso' : 'sucesso',
+      arquivos_recebidos: files.length,
+      documentos_extraidos: resultados.length,
+      formatos,
       total_sucesso: totalSucesso,
       total_erro: totalErro,
+      arquivos_rejeitados: arquivosRejeitados,
       resultados
     });
   }
