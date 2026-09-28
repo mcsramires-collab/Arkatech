@@ -40,7 +40,7 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     pk: 'id',
     columns: [
       'id', 'cnpj', 'razao_social', 'status', 'ambiente', 'client_id', 'client_secret_hash',
-      'role', 'token_duration_hours', 'created_at', 'contato_nome', 'contato_email',
+      'role', 'tipo_operacao', 'token_duration_hours', 'created_at', 'contato_nome', 'contato_email',
       'contato_telefone_fixo', 'contato_celular', 'nome_fantasia', 'logradouro',
       'numero_endereco', 'bairro', 'cidade', 'uf', 'cep', 'conta_ativada'
     ]
