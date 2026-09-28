@@ -1,13 +1,14 @@
 import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { normalizeCnpj, isCnpjFormatValid } from '../src/utils/cnpj';
 
 const outDir = path.resolve(__dirname, '../.mock-certs');
-const cnpj = (process.env.MOCK_CERT_CNPJ || '12345678000190').replace(/\D/g, '');
+const cnpj = normalizeCnpj(process.env.MOCK_CERT_CNPJ || '12345678000190');
 const password = process.env.MOCK_PFX_PASSWORD || 'arckatech-mock';
 
-if (!/^\d{14}$/.test(cnpj)) {
-  throw new Error('MOCK_CERT_CNPJ deve conter 14 digitos.');
+if (!isCnpjFormatValid(cnpj)) {
+  throw new Error('MOCK_CERT_CNPJ deve conter 14 posições e pode ser alfanumérico nas 12 primeiras.');
 }
 
 fs.mkdirSync(outDir, { recursive: true });
