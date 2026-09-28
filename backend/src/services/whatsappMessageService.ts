@@ -28,7 +28,15 @@ export class WhatsappMessageService {
 
     if (params.tenant_cnpj) {
       const cnpj = normalizeCnpj(params.tenant_cnpj);
-      return dbStore.tenants.find((tenant) => sameCnpj(tenant.cnpj, cnpj));
+      const direct = dbStore.tenants.find((tenant) => sameCnpj(tenant.cnpj, cnpj));
+      if (direct) return direct;
+
+      const additional = dbStore.tenantCnpjsAdicionais.find(
+        (item) => item.status === 'ATIVO' && sameCnpj(item.cnpj, cnpj)
+      );
+      return additional
+        ? dbStore.tenants.find((tenant) => tenant.id === additional.tenant_id)
+        : undefined;
     }
 
     const phone = normalizePhone(params.phone);
