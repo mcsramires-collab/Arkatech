@@ -239,6 +239,7 @@ export interface FiscalDocument {
   status: FiscalDocumentStatus;
   content_hash_sha256: string;
   raw_xml_id: string;
+  duplicate_of_id?: string;
   original_filename?: string;
   tipo_documento?: TipoDocumento;
   chave_documento?: string;
