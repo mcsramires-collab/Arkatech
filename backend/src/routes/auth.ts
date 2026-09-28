@@ -193,6 +193,110 @@ router.post('/portal-login', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/v1/auth/backoffice-activation/:token
+ * Consulta pública do convite de Seguradora/Corretora/Assessoria antes da primeira senha.
+ */
+router.get('/backoffice-activation/:token', (req: Request, res: Response) => {
+  const activation = dbStore.activationTokens.find((item) => item.token === req.params.token);
+  if (!activation) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Convite inválido.' });
+  }
+
+  const tenant = dbStore.tenants.find((item) => item.id === activation.tenant_id);
+  if (!tenant || (tenant.role !== 'SEGURADORA' && tenant.role !== 'CORRETORA')) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Convite de backoffice inválido.' });
+  }
+
+  return res.json({
+    status: 'sucesso',
+    convite: {
+      razao_social: tenant.razao_social,
+      cnpj: tenant.cnpj,
+      role: tenant.role,
+      nome_convidado: activation.convite_nome,
+      email_convidado: activation.convite_email,
+      ja_aceito: activation.aceite,
+      expirado: new Date(activation.expira_em).getTime() < Date.now(),
+      expira_em: activation.expira_em
+    }
+  });
+});
+
+/**
+ * POST /api/v1/auth/backoffice-activation/:token/definir-senha
+ * Converte o convite em TenantUser real e libera o login por /backoffice-login.
+ */
+router.post('/backoffice-activation/:token/definir-senha', async (req: Request, res: Response) => {
+  const senha = String(req.body.senha || '');
+  if (senha.length < 8) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'A senha precisa ter ao menos 8 caracteres.'
+    });
+  }
+
+  const activation = dbStore.activationTokens.find((item) => item.token === req.params.token);
+  if (!activation || activation.aceite) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'Convite inválido ou já utilizado.'
+    });
+  }
+  if (new Date(activation.expira_em).getTime() < Date.now()) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Convite expirado.' });
+  }
+
+  const tenant = dbStore.tenants.find((item) => item.id === activation.tenant_id);
+  if (!tenant || (tenant.role !== 'SEGURADORA' && tenant.role !== 'CORRETORA')) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Convite não pertence a um portal de backoffice.' });
+  }
+
+  const email = String(activation.convite_email || '').trim().toLowerCase();
+  const nome = activation.convite_nome || tenant.razao_social;
+  if (!email) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Convite sem e-mail associado.' });
+  }
+
+  const passwordHash = await bcrypt.hash(senha, 10);
+  let user = dbStore.tenantUsers.find(
+    (item) => item.tenant_id === tenant.id && item.email.trim().toLowerCase() === email
+  );
+
+  if (user) {
+    user.password_hash = passwordHash;
+    user.status = 'ATIVO';
+    user.is_admin_da_conta = true;
+  } else {
+    user = {
+      id: uuidv4(),
+      tenant_id: tenant.id,
+      nome,
+      email,
+      password_hash: passwordHash,
+      is_admin_da_conta: true,
+      status: 'ATIVO',
+      created_at: new Date().toISOString()
+    };
+    dbStore.tenantUsers.push(user);
+  }
+
+  activation.aceite = true;
+  activation.aceite_em = new Date().toISOString();
+  tenant.conta_ativada = true;
+  dbStore.persist();
+
+  return res.json({
+    status: 'sucesso',
+    mensagem: 'Acesso ativado. Faça login com seu e-mail e a senha definida.',
+    empresa: {
+      tenant_id: tenant.id,
+      razao_social: tenant.razao_social,
+      role: tenant.role
+    }
+  });
+});
+
+/**
  * POST /api/v1/auth/backoffice-login
  * Login por PESSOA (email + senha) para os painéis internos — Seguradora, Corretora e a própria
  * Arckatech (ADM/Agente). É o equivalente de /portal-login (Portal do Segurado), mas para os
