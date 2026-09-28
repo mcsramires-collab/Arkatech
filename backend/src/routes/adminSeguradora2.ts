@@ -931,7 +931,7 @@ router.delete('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
 router.put(
   '/brokers/:id/portal-access',
   requirePermission('delegacao_corretora', 'editar'),
-  (req: BackofficeAuthenticatedRequest, res) => {
+  async (req: BackofficeAuthenticatedRequest, res) => {
     const ator = req.backoffice;
     if (!ator) {
       return res.status(401).json({ status: 'erro', mensagem: 'Autenticação de backoffice ausente.' });
@@ -951,7 +951,9 @@ router.put(
         });
       }
       const pertenceACarteiraDaSeguradora = dbStore.policies.some(
-        (p) => p.insurer_id === ator.insurer_id && (p.broker_id === id || p.co_broker_id === id || p.assessoria_id === id)
+        (p) =>
+          p.insurer_id === ator.insurer_id &&
+          (p.broker_id === id || p.co_broker_id === id || p.assessoria_id === id)
       );
       if (!pertenceACarteiraDaSeguradora) {
         return res.status(403).json({
@@ -966,11 +968,104 @@ router.put(
       });
     }
 
+    // Contrato novo e mais simples para o Portal da Seguradora:
+    // { enabled: true, email?, nome? } cria/vincula automaticamente o Tenant de backoffice quando
+    // necessário e já envia o convite. { enabled: false } revoga o vínculo.
+    // O contrato antigo { tenant_id: string|null } continua aceito para compatibilidade com ADM.
+    if (typeof req.body.enabled === 'boolean') {
+      if (!req.body.enabled) {
+        const previousTenantId = broker.tenant_id;
+        delete broker.tenant_id;
+        dbStore.persist();
+        return res.json({
+          status: 'sucesso',
+          broker,
+          portal_access: { enabled: false, previous_tenant_id: previousTenantId }
+        });
+      }
+
+      let portalTenant = broker.tenant_id
+        ? dbStore.tenants.find((tenant) => tenant.id === broker.tenant_id)
+        : undefined;
+
+      if (portalTenant && portalTenant.role !== 'CORRETORA') {
+        return res.status(409).json({
+          status: 'erro',
+          mensagem: 'O Tenant atualmente vinculado ao parceiro não é do tipo CORRETORA.'
+        });
+      }
+
+      if (!portalTenant) {
+        const cnpjLimpo = normalizeCnpj(broker.cnpj);
+        const integrationCredentials = await createClientCredentials('prod_corretora');
+        portalTenant = {
+          id: `tenant_corretora_${cnpjLimpo}_${Date.now()}`,
+          cnpj: broker.cnpj,
+          razao_social: broker.razao_social || broker.nome,
+          nome_fantasia: broker.nome_fantasia,
+          status: 'ATIVO',
+          ambiente: 'producao',
+          client_id: integrationCredentials.client_id,
+          client_secret_hash: integrationCredentials.client_secret_hash,
+          role: 'CORRETORA',
+          token_duration_hours: 8,
+          contato_nome: broker.corretor_responsavel_nome,
+          contato_email: broker.corretor_responsavel_email,
+          contato_telefone_fixo: broker.corretor_responsavel_telefone_fixo,
+          contato_celular: broker.corretor_responsavel_celular,
+          conta_ativada: false,
+          created_at: new Date().toISOString()
+        };
+        dbStore.tenants.push(portalTenant);
+        broker.tenant_id = portalTenant.id;
+      }
+
+      const email = String(
+        req.body.email ||
+          broker.corretor_responsavel_email ||
+          portalTenant.contato_email ||
+          ''
+      ).trim().toLowerCase();
+      const nome = String(
+        req.body.nome ||
+          broker.corretor_responsavel_nome ||
+          portalTenant.contato_nome ||
+          broker.nome_fantasia ||
+          broker.nome
+      ).trim();
+
+      if (!email) {
+        return res.status(400).json({
+          status: 'erro',
+          mensagem:
+            'Informe email para conceder acesso ao portal, ou cadastre um e-mail responsável no parceiro.'
+        });
+      }
+
+      broker.corretor_responsavel_email = email;
+      broker.corretor_responsavel_nome = nome;
+      portalTenant.contato_email = email;
+      portalTenant.contato_nome = nome;
+      portalTenant.status = 'ATIVO';
+      broker.tenant_id = portalTenant.id;
+      dbStore.persist();
+
+      const convite = await createBackofficeInvitation(portalTenant, nome, email);
+      return res.json({
+        status: 'sucesso',
+        broker,
+        portal_tenant: portalTenant,
+        portal_access: { enabled: true },
+        convite
+      });
+    }
+
     const { tenant_id } = req.body;
     if (tenant_id === undefined || (tenant_id !== null && typeof tenant_id !== 'string')) {
       return res.status(400).json({
         status: 'erro',
-        mensagem: 'tenant_id é obrigatório: string (id do Tenant role=CORRETORA) para conceder, ou null para revogar.'
+        mensagem:
+          'Informe enabled=true/false. O contrato legado tenant_id:string|null continua disponível para administração.'
       });
     }
 
