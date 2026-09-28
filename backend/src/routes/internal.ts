@@ -99,6 +99,44 @@ router.post('/insurers', async (req, res) => {
   });
 });
 
+router.post('/insurers/:id/reenviar-convite', async (req, res) => {
+  const insurer = dbStore.insurers.find((item) => item.id === req.params.id);
+  if (!insurer) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Seguradora não encontrada.' });
+  }
+
+  const tenant = insurer.tenant_id
+    ? dbStore.tenants.find((item) => item.id === insurer.tenant_id)
+    : undefined;
+  if (!tenant) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem: 'A seguradora não possui um Tenant de acesso ao portal vinculado.'
+    });
+  }
+
+  const email = String(req.body.admin_email || tenant.contato_email || '').trim().toLowerCase();
+  const nome = String(req.body.admin_nome || tenant.contato_nome || tenant.razao_social).trim();
+
+  if (!email) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'admin_email é obrigatório quando não existe e-mail de contato cadastrado.'
+    });
+  }
+
+  tenant.contato_email = email;
+  tenant.contato_nome = nome;
+  const convite = await createBackofficeInvitation(tenant, nome, email);
+
+  return res.json({
+    status: 'sucesso',
+    insurer_id: insurer.id,
+    tenant_id: tenant.id,
+    convite
+  });
+});
+
 router.put('/insurers/:id', (req, res) => {
   const { id } = req.params;
   const insurer = dbStore.insurers.find((i) => i.id === id);
