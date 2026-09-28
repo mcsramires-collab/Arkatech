@@ -16,6 +16,10 @@ export async function hashClientSecret(secret: string): Promise<string> {
   return bcrypt.hash(secret, 12);
 }
 
+export function hashClientSecretSync(secret: string): string {
+  return bcrypt.hashSync(secret, 12);
+}
+
 export async function verifyClientSecret(
   storedValue: string,
   informedSecret: string
@@ -47,5 +51,19 @@ export async function createClientCredentials(prefix = 'tenant'): Promise<{
     client_id: generateClientId(prefix),
     client_secret,
     client_secret_hash: await hashClientSecret(client_secret)
+  };
+}
+
+
+export function createClientCredentialsSync(prefix = 'tenant'): {
+  client_id: string;
+  client_secret: string;
+  client_secret_hash: string;
+} {
+  const client_secret = generateClientSecret();
+  return {
+    client_id: generateClientId(prefix),
+    client_secret,
+    client_secret_hash: hashClientSecretSync(client_secret)
   };
 }
