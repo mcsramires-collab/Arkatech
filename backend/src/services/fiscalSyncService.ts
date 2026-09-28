@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
+import { NotificationService } from './notificationService';
 import {
   Connector,
   FiscalSyncProvider,
@@ -34,6 +35,7 @@ export class FiscalSyncService {
     let state = dbStore.fiscalSyncStates.find(
       (item) => item.connector_id === connector.id && item.provider === params.provider
     );
+    const previousStatus = state?.status;
 
     const currentUlt = nsuValue(state?.ult_nsu);
     const currentMax = nsuValue(state?.max_nsu);
@@ -93,6 +95,50 @@ export class FiscalSyncService {
 
     connector.last_sync_at = now;
     dbStore.persist();
+
+    if (previousStatus !== params.status) {
+      if (params.status === 'ERROR' || params.status === 'RATE_LIMITED') {
+        NotificationService.create({
+          tenant_id: connector.tenant_id,
+          type: 'SINCRONIZACAO_SEFAZ',
+          severity: params.status === 'ERROR' ? 'ERROR' : 'WARNING',
+          title:
+            params.status === 'ERROR'
+              ? `Falha na sincronização ${params.provider}`
+              : `SEFAZ limitou temporariamente consultas ${params.provider}`,
+          message:
+            params.message ||
+            (params.status === 'ERROR'
+              ? 'A captura automática deste provedor fiscal apresentou erro.'
+              : 'As consultas foram temporariamente limitadas e serão retomadas após o intervalo permitido.'),
+          context: {
+            connector_id: connector.id,
+            provider: params.provider,
+            status: params.status,
+            cstat: params.cstat,
+            next_sync_after: nextSyncAfter
+          }
+        });
+      } else if (
+        (previousStatus === 'ERROR' || previousStatus === 'RATE_LIMITED') &&
+        (params.status === 'OK' || params.status === 'NO_DOCUMENTS')
+      ) {
+        NotificationService.create({
+          tenant_id: connector.tenant_id,
+          type: 'SINCRONIZACAO_SEFAZ',
+          severity: 'INFO',
+          title: `Sincronização ${params.provider} normalizada`,
+          message: 'A captura automática voltou a operar normalmente.',
+          context: {
+            connector_id: connector.id,
+            provider: params.provider,
+            status: params.status,
+            cstat: params.cstat
+          }
+        });
+      }
+    }
+
     return state;
   }
 
