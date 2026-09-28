@@ -6,6 +6,7 @@ import { Tenant, Policy, DelegationAction } from '../types';
 import { resolveRequiresApproval, criarApprovalRequest, aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
+import { createAndSendInsuredInvitation } from '../services/insuredInvitationService';
 
 const router = Router();
 
@@ -120,152 +121,103 @@ router.get('/averbacoes', requirePermission('relatorios', 'ver'), (req: Backoffi
 });
 
 // --- Criar Cliente em Nome da Seguradora (sujeito à matriz de delegação) ---
-router.post('/clients', requirePermission('clientes', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
-  const {
-    insurer_id,
-    co_broker_id,
-    assessoria_id,
-    cnpj,
-    razao_social,
-    nome_fantasia,
-    ramo,
-    numero_apolice,
-    lmi,
-    vigencia_inicio,
-    vigencia_fim,
-    permitir_inativo_vencido,
-    aceita_averbacao_como_destinatario,
-    contato_nome,
-    contato_email,
-    contato_telefone_fixo,
-    contato_celular
-  } = req.body;
-  const broker_id = resolveBrokerId(req, res, req.body.broker_id);
-  if (!broker_id) return;
-
-  if (!insurer_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
-    return res.status(400).json({
-      status: 'erro',
-      mensagem: 'insurer_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
-    });
-  }
-
-  const action: DelegationAction = 'CRIAR_CLIENTE';
-  const delegation = dbStore.delegationPermissions.find(
-    (d) => d.insurer_id === insurer_id && d.broker_id === broker_id && d.action === action
-  );
-  const requiresApproval = delegation ? delegation.requires_approval : true; // por padrão, exige aprovação se não configurado
-
-  if (requiresApproval) {
-    const approvalRequest = {
-      id: uuidv4(),
+router.post(
+  '/clients',
+  requirePermission('clientes', 'editar'),
+  async (req: BackofficeAuthenticatedRequest, res) => {
+    const {
       insurer_id,
-      broker_id,
-      action,
-      payload: {
-        cnpj,
-        razao_social,
-        nome_fantasia,
-        co_broker_id,
-        assessoria_id,
-        ramo,
-        numero_apolice,
-        lmi,
-        vigencia_inicio,
-        vigencia_fim,
-        permitir_inativo_vencido,
-        aceita_averbacao_como_destinatario,
-        contato_nome,
-        contato_email,
-        contato_telefone_fixo,
-        contato_celular
-      },
-      status: 'PENDENTE' as const,
-      created_at: new Date().toISOString()
-    };
-    dbStore.approvalRequests.push(approvalRequest);
-    dbStore.persist();
-
-    return res.json({
-      status: 'pendente_aprovacao',
-      mensagem: 'Esta ação exige aprovação da seguradora. Sua solicitação foi registrada e ficará pendente até ser analisada.',
-      approval_request: approvalRequest
-    });
-  }
-
-  // Sem exigência de aprovação — aplica direto (mesma lógica do cadastro pela seguradora)
-  const cnpjLimpo = normalizeCnpj(cnpj);
-  if (!isCnpjFormatValid(cnpjLimpo)) {
-    return res.status(400).json({
-      status: 'erro',
-      mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
-    });
-  }
-  let tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpjLimpo);
-
-  if (tenant) {
-    const policyConflitante = dbStore.policies.find(
-      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.status === 'ATIVA' && p.insurer_id !== insurer_id
-    );
-    if (policyConflitante) {
-      return res.status(409).json({
-        status: 'conflito',
-        mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este CNPJ vinculada a outra seguradora.`,
-        tenant_id: tenant.id,
-        ramo
-      });
-    }
-  } else {
-    tenant = {
-      id: `tenant_${cnpjLimpo}_${Date.now()}`,
+      co_broker_id,
+      assessoria_id,
       cnpj,
       razao_social,
-      status: 'ATIVO',
-      ambiente: 'producao',
-      client_id: `client_prod_${cnpjLimpo}`,
-      client_secret_hash: `secret_${cnpjLimpo}`,
-      role: 'TRANSPORTADOR',
-      token_duration_hours: 8,
-      created_at: new Date().toISOString(),
+      nome_fantasia,
+      ramo,
+      numero_apolice,
+      lmi,
+      vigencia_inicio,
+      vigencia_fim,
+      permitir_inativo_vencido,
+      aceita_averbacao_como_destinatario,
       contato_nome,
       contato_email,
       contato_telefone_fixo,
       contato_celular,
-      conta_ativada: false
+      tipo_operacao
+    } = req.body;
+    const broker_id = resolveBrokerId(req, res, req.body.broker_id);
+    if (!broker_id) return;
+
+    if (!insurer_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'insurer_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
+      });
+    }
+
+    const payload = {
+      cnpj,
+      razao_social,
+      nome_fantasia,
+      co_broker_id,
+      assessoria_id,
+      ramo,
+      numero_apolice,
+      lmi,
+      vigencia_inicio,
+      vigencia_fim,
+      permitir_inativo_vencido,
+      aceita_averbacao_como_destinatario,
+      contato_nome,
+      contato_email,
+      contato_telefone_fixo,
+      contato_celular,
+      tipo_operacao
     };
-    dbStore.tenants.push(tenant);
-    dbStore.activationTokens.push({
-      id: uuidv4(),
-      tenant_id: tenant.id,
-      token: `act_${uuidv4()}`,
-      termo_versao: 'v1',
-      aceite: false,
-      expira_em: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      created_at: new Date().toISOString()
-    });
+
+    const action: DelegationAction = 'CRIAR_CLIENTE';
+    const resolucao = resolveRequiresApproval(insurer_id, broker_id, undefined, action);
+
+    if (resolucao.blocked) {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'A seguradora bloqueou esta ação para a corretora.'
+      });
+    }
+
+    if (resolucao.requiresApproval) {
+      const approvalRequest = criarApprovalRequest(insurer_id, broker_id, action, payload);
+      return res.json({
+        status: 'pendente_aprovacao',
+        mensagem:
+          'Esta ação exige aprovação da seguradora. Sua solicitação foi registrada e ficará pendente até ser analisada.',
+        approval_request: approvalRequest
+      });
+    }
+
+    const resultado = aplicarAcaoDelegada(action, insurer_id, broker_id, payload);
+    if (!resultado.ok) {
+      const httpStatus =
+        resultado.codigo === 'nao_encontrado'
+          ? 404
+          : resultado.codigo === 'conflito'
+            ? 409
+            : 400;
+      return res.status(httpStatus).json({ ...resultado, status: resultado.codigo });
+    }
+
+    const convite =
+      resultado.cliente_novo && resultado.tenant
+        ? await createAndSendInsuredInvitation(
+            resultado.tenant,
+            contato_nome,
+            contato_email
+          )
+        : undefined;
+
+    return res.json({ status: 'sucesso', ...resultado, convite });
   }
-
-  const newPolicy: Policy = {
-    id: `pol_${String(ramo).toLowerCase()}_${Date.now()}`,
-    numero_apolice,
-    ramo,
-    tenant_id: tenant.id,
-    insurer_id,
-    broker_id,
-    co_broker_id,
-    assessoria_id,
-    status: 'ATIVA',
-    permitir_inativo_vencido: Boolean(permitir_inativo_vencido),
-    vigencia_inicio: vigencia_inicio || new Date().toISOString(),
-    vigencia_fim: vigencia_fim || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-    lmi: lmi !== undefined ? Number(lmi) : undefined,
-    aceita_averbacao_como_destinatario: Boolean(aceita_averbacao_como_destinatario)
-  };
-  dbStore.policies.push(newPolicy);
-  dbStore.persist();
-
-  return res.json({ status: 'sucesso', tenant, policy: newPolicy });
-});
+);
 
 // =====================================================================
 // Enforcement das demais 5 ações de delegação (EDITAR_CLIENTE, CRIAR_APOLICE, EDITAR_APOLICE,
