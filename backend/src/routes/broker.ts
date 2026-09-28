@@ -1,8 +1,6 @@
-import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { Tenant, Policy, DelegationAction } from '../types';
+import { Policy, DelegationAction } from '../types';
 import { resolveRequiresApproval, criarApprovalRequest, aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
