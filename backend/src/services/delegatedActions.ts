@@ -128,7 +128,6 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
   let cliente_novo = false;
 
   if (tenant) {
-    if (tipo_operacao !== undefined) tenant.tipo_operacao = tipoOperacao;
     const policyConflitante = dbStore.policies.find(
       (p) => p.tenant_id === tenant!.id && p.ramo === ramoNormalizado && p.status === 'ATIVA' && p.insurer_id !== insurerId
     );
