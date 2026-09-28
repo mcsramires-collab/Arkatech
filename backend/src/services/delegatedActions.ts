@@ -189,17 +189,51 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
 // --- EDITAR_CLIENTE — campos cadastrais/contato do segurado (não inclui status/ambiente/cnpj,
 // que seguem exclusivos do Portal ARCKATECH via /admin/tenants/:id) ---
 function aplicarEditarCliente(payload: Record<string, any>): AplicarResultado {
-  const { tenant_id, razao_social, contato_nome, contato_email, contato_telefone_fixo, contato_celular } = payload;
+  const {
+    tenant_id,
+    razao_social,
+    nome_fantasia,
+    tipo_operacao,
+    contato_nome,
+    contato_email,
+    contato_telefone_fixo,
+    contato_celular,
+    logradouro,
+    numero_endereco,
+    bairro,
+    cidade,
+    uf,
+    cep
+  } = payload;
   const tenant = dbStore.tenants.find((t) => t.id === tenant_id);
   if (!tenant) {
     return { ok: false, codigo: 'nao_encontrado', mensagem: 'Segurado não encontrado.' };
   }
 
+  if (tipo_operacao !== undefined) {
+    const tipoOperacao = String(tipo_operacao).toUpperCase() as TenantOperationType;
+    if (!['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'].includes(tipoOperacao)) {
+      return {
+        ok: false,
+        codigo: 'erro',
+        mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+      };
+    }
+    tenant.tipo_operacao = tipoOperacao;
+  }
+
   if (razao_social !== undefined) tenant.razao_social = razao_social;
+  if (nome_fantasia !== undefined) tenant.nome_fantasia = nome_fantasia;
   if (contato_nome !== undefined) tenant.contato_nome = contato_nome;
   if (contato_email !== undefined) tenant.contato_email = contato_email;
   if (contato_telefone_fixo !== undefined) tenant.contato_telefone_fixo = contato_telefone_fixo;
   if (contato_celular !== undefined) tenant.contato_celular = contato_celular;
+  if (logradouro !== undefined) tenant.logradouro = logradouro;
+  if (numero_endereco !== undefined) tenant.numero_endereco = numero_endereco;
+  if (bairro !== undefined) tenant.bairro = bairro;
+  if (cidade !== undefined) tenant.cidade = cidade;
+  if (uf !== undefined) tenant.uf = uf;
+  if (cep !== undefined) tenant.cep = cep;
 
   dbStore.persist();
   return { ok: true, tenant };
