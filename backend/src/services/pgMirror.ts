@@ -156,7 +156,7 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     storeKey: 'fiscalDocuments',
     pk: 'id',
     columns: [
-      'id', 'tenant_id', 'source', 'capture_mode', 'status', 'content_hash_sha256', 'raw_xml_id',
+      'id', 'tenant_id', 'source', 'capture_mode', 'status', 'content_hash_sha256', 'raw_xml_id', 'duplicate_of_id',
       'original_filename', 'tipo_documento', 'chave_documento', 'numero_documento',
       'serie_documento', 'cnpj_emissor', 'protocolo_aceitacao_sefaz', 'nsu',
       'connector_id', 'external_id', 'policy_ids_attempted',
