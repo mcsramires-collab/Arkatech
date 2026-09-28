@@ -724,6 +724,101 @@ router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
   });
 });
 
+router.post(
+  '/brokers/:id/reenviar-convite',
+  requirePermission('delegacao_corretora', 'editar'),
+  async (req: BackofficeAuthenticatedRequest, res) => {
+    const broker = dbStore.brokers.find((item) => item.id === req.params.id);
+    if (!broker) {
+      return res.status(404).json({
+        status: 'erro',
+        mensagem: 'Corretora/Assessoria não encontrada.'
+      });
+    }
+
+    const ator = req.backoffice;
+    if (ator?.actor_type === 'SEGURADORA') {
+      if (!ator.insurer_id) {
+        return res.status(403).json({
+          status: 'erro',
+          mensagem: 'Seu usuário não está vinculado a nenhuma seguradora.'
+        });
+      }
+
+      const pertenceACarteira = dbStore.policies.some(
+        (policy) =>
+          policy.insurer_id === ator.insurer_id &&
+          (
+            policy.broker_id === broker.id ||
+            policy.co_broker_id === broker.id ||
+            policy.assessoria_id === broker.id
+          )
+      );
+      if (!pertenceACarteira) {
+        return res.status(403).json({
+          status: 'erro',
+          mensagem: 'Este parceiro não pertence à carteira da sua seguradora.'
+        });
+      }
+    } else if (ator?.actor_type !== 'INTERNAL_USER') {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Somente seguradora responsável ou administração Arckatech podem reenviar este convite.'
+      });
+    }
+
+    if (!broker.tenant_id) {
+      return res.status(409).json({
+        status: 'erro',
+        codigo: 'PARTNER_PORTAL_ACCESS_NOT_CONFIGURED',
+        mensagem:
+          'Este parceiro ainda não possui acesso ao portal. Conceda o acesso ao portal antes de reenviar o convite.'
+      });
+    }
+
+    const tenant = dbStore.tenants.find((item) => item.id === broker.tenant_id);
+    if (!tenant || tenant.role !== 'CORRETORA') {
+      return res.status(409).json({
+        status: 'erro',
+        mensagem: 'O Tenant de portal vinculado ao parceiro é inválido.'
+      });
+    }
+
+    const email = String(
+      req.body.email || broker.corretor_responsavel_email || tenant.contato_email || ''
+    ).trim().toLowerCase();
+    const nome = String(
+      req.body.nome ||
+      broker.corretor_responsavel_nome ||
+      tenant.contato_nome ||
+      broker.nome_fantasia ||
+      broker.nome
+    ).trim();
+
+    if (!email) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'email é obrigatório quando o parceiro não possui e-mail responsável cadastrado.'
+      });
+    }
+
+    broker.corretor_responsavel_email = email;
+    broker.corretor_responsavel_nome = nome;
+    tenant.contato_email = email;
+    tenant.contato_nome = nome;
+
+    const convite = await createBackofficeInvitation(tenant, nome, email);
+
+    return res.json({
+      status: 'sucesso',
+      broker_id: broker.id,
+      partner_type: broker.partner_type ?? 'CORRETORA',
+      tenant_id: tenant.id,
+      convite
+    });
+  }
+);
+
 router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const { id } = req.params;
