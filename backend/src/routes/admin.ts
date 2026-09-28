@@ -1,3 +1,4 @@
+import { normalizeRamo } from '../utils/ramo';
 import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { createClientCredentials, generateClientSecret, hashClientSecret } from '../utils/clientCredentials';
 import { Router, Response } from 'express';
@@ -431,11 +432,18 @@ router.post('/policies', requirePermission('apolices', 'editar'), (req: Backoffi
       mensagem: 'numero_apolice, ramo, tenant_id e broker_id são obrigatórios.'
     });
   }
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    });
+  }
 
   const newPolicy: Policy = {
-    id: `pol_${ramo.toLowerCase()}_${Date.now()}`,
+    id: `pol_${ramoNormalizado.toLowerCase()}_${Date.now()}`,
     numero_apolice,
-    ramo,
+    ramo: ramoNormalizado,
     tenant_id,
     insurer_id,
     broker_id,
@@ -469,7 +477,16 @@ router.put('/policies/:id', requirePermission('apolices', 'editar'), (req: Backo
   if (status !== undefined) policy.status = status;
   if (permitir_inativo_vencido !== undefined) policy.permitir_inativo_vencido = Boolean(permitir_inativo_vencido);
   if (numero_apolice !== undefined) policy.numero_apolice = numero_apolice;
-  if (ramo !== undefined) policy.ramo = ramo;
+  if (ramo !== undefined) {
+    const ramoNormalizado = normalizeRamo(ramo);
+    if (!ramoNormalizado) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+      });
+    }
+    policy.ramo = ramoNormalizado;
+  }
   // Trocar a apólice de seguradora só é permitido para ADM — uma SEGURADORA não pode "empurrar"
   // uma apólice da própria carteira para outra seguradora.
   if (insurer_id !== undefined && req.backoffice?.actor_type === 'INTERNAL_USER') policy.insurer_id = insurer_id;
