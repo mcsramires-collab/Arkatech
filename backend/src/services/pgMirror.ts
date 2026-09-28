@@ -280,6 +280,16 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     columns: ['id', 'tenant_user_id', 'canal', 'ativo']
   },
   {
+    table: 'operational_notifications',
+    storeKey: 'operationalNotifications',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'tenant_user_id', 'type', 'severity', 'title', 'message',
+      'context', 'read_at', 'created_at'
+    ],
+    jsonbColumns: ['context']
+  },
+  {
     table: 'business_rule_requests',
     storeKey: 'businessRuleRequests',
     pk: 'id',
@@ -304,7 +314,20 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     table: 'support_tickets',
     storeKey: 'supportTickets',
     pk: 'id',
-    columns: ['id', 'tenant_id', 'assunto', 'categoria', 'descricao', 'status', 'solicitante_nome', 'created_at']
+    columns: [
+      'id', 'tenant_id', 'assunto', 'categoria', 'descricao', 'status', 'prioridade',
+      'canal_origem', 'solicitante_nome', 'tenant_user_id', 'assigned_to', 'updated_at',
+      'resolved_at', 'closed_at', 'created_at'
+    ]
+  },
+  {
+    table: 'support_messages',
+    storeKey: 'supportMessages',
+    pk: 'id',
+    columns: [
+      'id', 'ticket_id', 'tenant_id', 'author_type', 'author_id', 'author_name',
+      'channel', 'message', 'created_at'
+    ]
   }
 ];
 
