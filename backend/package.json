@@ -14,7 +14,10 @@
     "migrate:down": "node-pg-migrate down -m migrations",
     "migrate:create": "node-pg-migrate create -m migrations",
     "validate:mirror": "ts-node scripts/validarEspelhamento.ts",
-    "sync:inicial": "ts-node scripts/sincronizarInicial.ts"
+    "sync:inicial": "ts-node scripts/sincronizarInicial.ts",
+    "mock:sefaz": "ts-node src/mockSefaz/server.ts",
+    "mock:connector:e2e": "ts-node scripts/mockConnectorE2E.ts",
+    "mock:certs": "ts-node scripts/generateMockCertificates.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
