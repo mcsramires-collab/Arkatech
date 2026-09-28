@@ -714,6 +714,7 @@ export type WhatsappMessageStatus =
   | 'RECEIVED'
   | 'PROCESSED'
   | 'PENDING'
+  | 'PROCESSING'
   | 'SENT'
   | 'DELIVERED'
   | 'READ'
@@ -736,6 +737,10 @@ export interface WhatsappMessage {
   support_ticket_id?: string;
   fiscal_document_ids: string[];
   error_message?: string;
+  claimed_by?: string;
+  claim_token?: string;
+  claim_expires_at?: string;
+  attempt_count?: number;
   created_at: string;
   processed_at?: string;
   updated_at: string;
