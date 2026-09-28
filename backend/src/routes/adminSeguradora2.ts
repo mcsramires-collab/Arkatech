@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { createBackofficeInvitation } from '../services/backofficeInvitationService';
+import { createClientCredentials } from '../utils/clientCredentials';
 import { Broker, Tenant, DelegationException, DelegationExceptionLevel, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, PolicyCoverageValue } from '../types';
 import { aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
@@ -681,6 +682,7 @@ router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
   let portalTenant: Tenant | undefined;
   let convite;
   if (Boolean(conceder_acesso_portal)) {
+    const integrationCredentials = await createClientCredentials('prod_corretora');
     portalTenant = {
       id: `tenant_corretora_${cnpjLimpo}_${Date.now()}`,
       cnpj,
@@ -688,8 +690,8 @@ router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
       nome_fantasia,
       status: 'ATIVO',
       ambiente: 'producao',
-      client_id: `client_prod_corretora_${cnpjLimpo}`,
-      client_secret_hash: `secret_${cnpjLimpo}`,
+      client_id: integrationCredentials.client_id,
+      client_secret_hash: integrationCredentials.client_secret_hash,
       role: 'CORRETORA',
       token_duration_hours: 8,
       contato_nome: corretor_responsavel_nome,
