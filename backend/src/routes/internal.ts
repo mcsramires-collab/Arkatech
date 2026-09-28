@@ -1,3 +1,4 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
@@ -38,7 +39,13 @@ router.post('/insurers', (req, res) => {
     return res.status(400).json({ status: 'erro', mensagem: 'cnpj e razao_social são obrigatórios.' });
   }
 
-  const cnpjLimpo = cnpj.replace(/\D/g, '');
+  const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+    });
+  }
   const newTenant: Tenant = {
     id: `tenant_seguradora_${cnpjLimpo}_${Date.now()}`,
     cnpj,
