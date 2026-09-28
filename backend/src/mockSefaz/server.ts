@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import https from 'https';
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { TLSSocket } from 'tls';
 import { MockSefazService } from './mockSefazService';
 import { MockProvider } from './fixtures';
@@ -47,7 +48,7 @@ app.post('/distribution/:provider', (req, res) => {
     extractTag(rawBody, 'ultNSU') ||
     (typeof req.body === 'object' ? String(req.body.ult_nsu || '0') : '0');
 
-  if (!/^\d{14}$/.test(cnpj.replace(/\D/g, ''))) {
+  if (!isCnpjFormatValid(cnpj)) {
     return res.status(400).json({ status: 'erro', mensagem: 'CNPJ inválido no pedido de distribuição.' });
   }
 
@@ -58,12 +59,12 @@ app.post('/distribution/:provider', (req, res) => {
   const peerCertificate =
     typeof tlsSocket.getPeerCertificate === 'function' ? tlsSocket.getPeerCertificate() : undefined;
   const certificateCnpjFromTls = peerCertificate?.subject?.CN
-    ? String(peerCertificate.subject.CN).replace(/\D/g, '')
+    ? normalizeCnpj(peerCertificate.subject.CN)
     : '';
-  const certificateCnpjFromHeader = String(req.headers['x-mock-certificate-cnpj'] || '').replace(/\D/g, '');
+  const certificateCnpjFromHeader = normalizeCnpj(req.headers['x-mock-certificate-cnpj'] || '');
   const certificateCnpj = certificateCnpjFromTls || certificateCnpjFromHeader;
 
-  if (certificateCnpj && certificateCnpj !== cnpj.replace(/\D/g, '')) {
+  if (certificateCnpj && certificateCnpj !== normalizeCnpj(cnpj)) {
     return res.status(403).type('application/xml').send(
       '<?xml version="1.0"?><retDistDFeInt><cStat>280</cStat><xMotivo>Certificado nao pertence ao CNPJ consultado</xMotivo></retDistDFeInt>'
     );
