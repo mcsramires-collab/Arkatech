@@ -40,16 +40,13 @@ router.put('/read-all', authMiddleware, (req: AuthenticatedRequest, res: Respons
 });
 
 router.put('/:id/read', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
-  const notification = NotificationService.markRead(req.tenant!.tenant_id, req.params.id);
+  const notification = NotificationService.markRead(
+    req.tenant!.tenant_id,
+    req.params.id,
+    req.tenant!.tenant_user_id
+  );
   if (!notification) {
     return res.status(404).json({ status: 'erro', mensagem: 'Notificação não encontrada.' });
-  }
-
-  if (
-    notification.tenant_user_id &&
-    notification.tenant_user_id !== req.tenant!.tenant_user_id
-  ) {
-    return res.status(403).json({ status: 'erro', mensagem: 'Notificação pertence a outro usuário.' });
   }
 
   return res.json({ status: 'sucesso', notification });
