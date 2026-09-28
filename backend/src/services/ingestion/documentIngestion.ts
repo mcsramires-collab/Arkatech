@@ -3,6 +3,7 @@ import { AverbacaoRequestDTO, AverbacaoResponseDTO, AverbacaoService } from '../
 import { dbStore } from '../dbStore';
 import { RawDocumentService } from '../rawDocumentService';
 import { XMLParserService } from '../xmlParser';
+import { normalizeAlphanumeric } from '../../utils/cnpj';
 import {
   DocumentIngestionSource,
   FiscalCaptureMode,
@@ -111,7 +112,8 @@ export class DocumentIngestionService {
       const sameRaw = item.content_hash_sha256 === raw.hash_sha256;
       const sameFiscalIdentity =
         Boolean(parsed?.chaveDocumento) &&
-        item.chave_documento === parsed?.chaveDocumento &&
+        normalizeAlphanumeric(item.chave_documento) ===
+          normalizeAlphanumeric(parsed?.chaveDocumento) &&
         (!parsed?.protocoloAceitacaoSefaz ||
           !item.protocolo_aceitacao_sefaz ||
           item.protocolo_aceitacao_sefaz === parsed.protocoloAceitacaoSefaz);
