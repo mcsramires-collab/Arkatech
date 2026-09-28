@@ -1,4 +1,5 @@
 import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
+import { createClientCredentials } from '../utils/clientCredentials';
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -286,14 +287,15 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   } else {
     // Cliente novo — cria o tenant
     clienteNovo = true;
+    const integrationCredentials = await createClientCredentials('prod_segurado');
     tenant = {
       id: `tenant_${cnpjLimpo}_${Date.now()}`,
       cnpj,
       razao_social,
       status: 'ATIVO',
       ambiente: 'producao',
-      client_id: `client_prod_${cnpjLimpo}`,
-      client_secret_hash: `secret_${cnpjLimpo}`,
+      client_id: integrationCredentials.client_id,
+      client_secret_hash: integrationCredentials.client_secret_hash,
       role: 'TRANSPORTADOR',
       tipo_operacao: tipoOperacao,
       token_duration_hours: 8,
