@@ -95,8 +95,6 @@ export interface Insurer {
   id: string;
   tenant_id?: string; // vínculo com o tenant (role=SEGURADORA) dono deste perfil
   cnpj: string;
-  /** Tipo da empresa parceira. Cocorretora é um papel da apólice, não um tipo separado. */
-  partner_type?: BrokerPartnerType;
   nome: string; // mantido por compatibilidade; preferir razao_social/nome_fantasia
   razao_social?: string;
   nome_fantasia?: string;
@@ -109,6 +107,8 @@ export interface Broker {
   id: string;
   tenant_id?: string; // vínculo com o tenant (role=CORRETORA) dono deste perfil
   cnpj: string;
+  /** Tipo da empresa parceira. Cocorretora é um papel da apólice, não um tipo separado. */
+  partner_type?: BrokerPartnerType;
   nome: string; // mantido por compatibilidade; preferir razao_social/nome_fantasia
   razao_social?: string;
   nome_fantasia?: string;
