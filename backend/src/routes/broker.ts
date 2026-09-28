@@ -199,7 +199,22 @@ router.get('/averbacoes', requirePermission('relatorios', 'ver'), (req: Backoffi
     averbacoes = averbacoes.filter((a) => a.status === 'ERRO');
   }
 
-  return res.json({ status: 'sucesso', averbacoes });
+  const enriched = averbacoes.map((averbacao) => {
+    const policy = dbStore.policies.find((item) => item.id === averbacao.policy_id);
+    const tenant = policy
+      ? dbStore.tenants.find((item) => item.id === policy.tenant_id)
+      : undefined;
+
+    return {
+      ...averbacao,
+      segurado_nome: tenant?.razao_social || 'Segurado não encontrado',
+      numero_apolice: policy?.numero_apolice,
+      ramo: policy?.ramo,
+      insurer_id: policy?.insurer_id
+    };
+  });
+
+  return res.json({ status: 'sucesso', averbacoes: enriched });
 });
 
 // --- Criar Cliente em Nome da Seguradora (sujeito à matriz de delegação) ---
