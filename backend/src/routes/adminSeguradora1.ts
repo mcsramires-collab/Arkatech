@@ -158,7 +158,7 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
     cnpj,
     razao_social,
     nome_fantasia,
-    ramo: ramoNormalizado,
+    ramo,
     numero_apolice,
     lmi,
     vigencia_inicio,
@@ -228,7 +228,7 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
     if (policyConflitante) {
       return res.status(409).json({
         status: 'conflito',
-        mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este CNPJ vinculada a outra seguradora.`,
+        mensagem: `Já existe uma apólice ativa do ramo ${ramoNormalizado} para este CNPJ vinculada a outra seguradora.`,
         tenant_id: tenant.id,
         ramo: ramoNormalizado,
         instrucao: 'Use POST /admin/insurer-clients/:tenantId/assume-policy para assumir a responsabilidade desta apólice.'
@@ -373,7 +373,17 @@ router.post('/insurer-clients/:tenantId/assume-policy', requirePermission('apoli
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
 
-  const policy = dbStore.policies.find((p) => p.tenant_id === tenantId && p.ramo === ramoNormalizado && p.status === 'ATIVA');
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    });
+  }
+
+  const policy = dbStore.policies.find(
+    (p) => p.tenant_id === tenantId && p.ramo === ramoNormalizado && p.status === 'ATIVA'
+  );
   if (!policy) {
     return res.status(404).json({ status: 'erro', mensagem: 'Nenhuma apólice ativa encontrada para este cliente/ramo.' });
   }
@@ -416,10 +426,18 @@ router.post('/insurer-coverages', requirePermission('coberturas', 'editar'), (re
     });
   }
 
+  const ramoCobertura = ramo ? normalizeRamo(ramo) : undefined;
+  if (ramo && !ramoCobertura) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    });
+  }
+
   const newCoverage: InsurerCoverage = {
     id: uuidv4(),
     insurer_id,
-    ramo: ramoNormalizado,
+    ramo: ramoCobertura,
     titulo,
     exemplo_preenchimento,
     obrigatoria: Boolean(obrigatoria),
