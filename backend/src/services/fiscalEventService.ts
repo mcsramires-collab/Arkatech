@@ -29,7 +29,7 @@ export class FiscalEventService {
   }): FiscalEventResult {
     const { connector, provider, event } = params;
     const now = new Date().toISOString();
-    const raw = RawDocumentService.store(event.xml);
+    const raw = RawDocumentService.store(event.xml, connector.tenant_id);
     const hash = crypto.createHash('sha256').update(event.xml, 'utf8').digest('hex');
 
     const duplicate = dbStore.fiscalEvents.find(
