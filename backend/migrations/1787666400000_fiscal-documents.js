@@ -34,14 +34,17 @@ exports.up = (pgm) => {
     id: { type: 'varchar', primaryKey: true },
     tenant_id: { type: 'varchar', notNull: true, references: 'tenants', onDelete: 'CASCADE' },
     source: { type: 'document_ingestion_source', notNull: true },
+    capture_mode: { type: 'varchar', notNull: true, default: 'MANUAL' },
     status: { type: 'fiscal_document_status', notNull: true, default: 'RECEBIDO' },
     content_hash_sha256: { type: 'varchar(64)', notNull: true },
+    raw_xml_id: { type: 'varchar', notNull: true, references: 'raw_xml_store' },
     original_filename: { type: 'text' },
     tipo_documento: { type: 'tipo_documento' },
     chave_documento: { type: 'varchar(44)' },
     numero_documento: { type: 'varchar' },
     serie_documento: { type: 'varchar' },
     cnpj_emissor: { type: 'varchar(14)' },
+    protocolo_aceitacao_sefaz: { type: 'varchar' },
     nsu: { type: 'varchar' },
     connector_id: { type: 'varchar' },
     external_id: { type: 'varchar' },
@@ -58,6 +61,7 @@ exports.up = (pgm) => {
   pgm.createIndex('fiscal_documents', 'source');
   pgm.createIndex('fiscal_documents', 'content_hash_sha256');
   pgm.createIndex('fiscal_documents', 'chave_documento');
+  pgm.createIndex('fiscal_documents', 'raw_xml_id');
   pgm.createIndex('fiscal_documents', ['tenant_id', 'received_at']);
 };
 
