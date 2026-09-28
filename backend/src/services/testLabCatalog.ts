@@ -392,6 +392,21 @@ const flags: TestLabFlagDefinition[] = [
     tags: ['deadline', 'cancellation']
   },
   {
+    key: 'regras:prazo-cancelamento-unidade',
+    group: 'deadlines',
+    label: 'Unidade do prazo de cancelamento',
+    description: 'Horas ou dias usados pela janela de cancelamento self-service.',
+    source: { kind: 'BUSINESS_SETTING', path: 'PolicyBusinessSettings.config["regras:prazo-cancelamento-unidade"]' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'Horas', label: 'Horas' },
+      { value: 'Dias', label: 'Dias' }
+    ],
+    tags: ['deadline', 'cancellation']
+  },
+  {
     key: 'sublimit.tipo_condicao',
     group: 'limits',
     label: 'Tipo de sublimite',
@@ -662,6 +677,55 @@ const suites: TestLabSuiteTemplate[] = [
       'sublimit.valor',
       'document.valor_carga'
     ]
+  }
+,
+  {
+    key: 'p1-required-data',
+    label: 'P1 — Dados obrigatórios e recuperação',
+    description: 'Valida placa, motorista, embarque e preenchimento suplementar.',
+    priority: 'P1',
+    tags: ['required-data', 'recovery'],
+    flag_keys: ['regras:placa', 'regras:motorista', 'regras:embarque']
+  },
+  {
+    key: 'p1-deadlines',
+    label: 'P1 — Prazos e cancelamento',
+    description: 'Valida fronteiras de emissão, embarque e cancelamento self-service.',
+    priority: 'P1',
+    tags: ['deadline', 'cancellation'],
+    flag_keys: [
+      'regras:prazo-valor',
+      'regras:prazo-unidade',
+      'regras:prazo-campo',
+      'regras:dias-apos',
+      'regras:prazo-embarque',
+      'regras:prazo-cancelamento-valor',
+      'regras:prazo-cancelamento-unidade'
+    ]
+  },
+  {
+    key: 'p1-coverages',
+    label: 'P1 — Coberturas adicionais',
+    description: 'Valida obrigatoriedade, soma monetária e gaps conhecidos de cobertura.',
+    priority: 'P1',
+    tags: ['coverage'],
+    flag_keys: ['coverage.valor', 'coverage.desconta_lmi']
+  },
+  {
+    key: 'p1-sefaz-contract',
+    label: 'P1 — Contrato SEFAZ/Connector',
+    description: 'Valida distribuição mock, NSU, consumo indevido e OUTBOUND autorizado/não autorizado.',
+    priority: 'P1',
+    tags: ['sefaz', 'connector'],
+    flag_keys: ['document.autorizacao_sefaz', 'document.tp_amb', 'ingestion.channel']
+  },
+  {
+    key: 'p1-catalog-governance',
+    label: 'P1 — Governança do catálogo',
+    description: 'Detecta regra de negócio nova sem definição correspondente no Laboratório.',
+    priority: 'P1',
+    tags: ['catalog', 'ci'],
+    flag_keys: []
   }
 ];
 
