@@ -1,4 +1,5 @@
 import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
+import { normalizeRamo } from '../utils/ramo';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
 import { DelegationAction, Tenant, Policy, ApprovalRequest, PolicyCoverageValue, TenantOperationType } from '../types';
@@ -106,6 +107,15 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
     };
   }
 
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return {
+      ok: false,
+      codigo: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    };
+  }
+
   const cnpjLimpo = normalizeCnpj(cnpj);
   if (!isCnpjFormatValid(cnpjLimpo)) {
     return {
@@ -118,16 +128,17 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
   let cliente_novo = false;
 
   if (tenant) {
+    if (tipo_operacao !== undefined) tenant.tipo_operacao = tipoOperacao;
     const policyConflitante = dbStore.policies.find(
-      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.status === 'ATIVA' && p.insurer_id !== insurerId
+      (p) => p.tenant_id === tenant!.id && p.ramo === ramoNormalizado && p.status === 'ATIVA' && p.insurer_id !== insurerId
     );
     if (policyConflitante) {
       return {
         ok: false,
         codigo: 'conflito',
-        mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este CNPJ vinculada a outra seguradora.`,
+        mensagem: `Já existe uma apólice ativa do ramo ${ramoNormalizado} para este CNPJ vinculada a outra seguradora.`,
         tenant_id: tenant.id,
-        ramo
+        ramo: ramoNormalizado
       };
     }
   } else {
@@ -155,7 +166,7 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
   }
 
   const newPolicy: Policy = {
-    id: `pol_${String(ramo).toLowerCase()}_${Date.now()}`,
+    id: `pol_${String(ramoNormalizado).toLowerCase()}_${Date.now()}`,
     numero_apolice,
     ramo,
     tenant_id: tenant.id,
@@ -211,28 +222,37 @@ function aplicarCriarApolice(insurerId: string, brokerId: string, payload: Recor
     aceita_averbacao_como_destinatario
   } = payload;
 
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return {
+      ok: false,
+      codigo: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    };
+  }
+
   const tenant = dbStore.tenants.find((t) => t.id === tenant_id);
   if (!tenant) {
     return { ok: false, codigo: 'nao_encontrado', mensagem: 'Segurado não encontrado.' };
   }
 
   const policyConflitante = dbStore.policies.find(
-    (p) => p.tenant_id === tenant_id && p.ramo === ramo && p.status === 'ATIVA' && p.insurer_id !== insurerId
+    (p) => p.tenant_id === tenant_id && p.ramo === ramoNormalizado && p.status === 'ATIVA' && p.insurer_id !== insurerId
   );
   if (policyConflitante) {
     return {
       ok: false,
       codigo: 'conflito',
-      mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este segurado vinculada a outra seguradora.`,
+      mensagem: `Já existe uma apólice ativa do ramo ${ramoNormalizado} para este segurado vinculada a outra seguradora.`,
       tenant_id,
       ramo
     };
   }
 
   const newPolicy: Policy = {
-    id: `pol_${String(ramo).toLowerCase()}_${Date.now()}`,
+    id: `pol_${String(ramoNormalizado).toLowerCase()}_${Date.now()}`,
     numero_apolice,
-    ramo,
+    ramo: ramoNormalizado,
     tenant_id,
     insurer_id: insurerId,
     broker_id: brokerId,
