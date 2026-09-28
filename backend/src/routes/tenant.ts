@@ -16,12 +16,14 @@ import fiscalDocumentsRouter from './fiscalDocuments';
 import connectorsRouter from './connectors';
 import fiscalSyncRouter from './fiscalSync';
 import fiscalEventsRouter from './fiscalEvents';
+import notificationsRouter from './notifications';
 
 const router = Router();
 router.use('/fiscal-documents', fiscalDocumentsRouter);
 router.use('/connectors', connectorsRouter);
 router.use('/fiscal-sync', fiscalSyncRouter);
 router.use('/fiscal-events', fiscalEventsRouter);
+router.use('/notifications', notificationsRouter);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 /**
@@ -641,32 +643,48 @@ router.post('/recovery/:token/corrigir', (req, res) => {
   return res.status(statusCode).json(result);
 });
 
-// --- Preferências de Notificação (MVP: apenas e-mail + portal; WhatsApp/SMS fora por ora) ---
-router.get('/notification-preferences', (req, res) => {
-  const tenantUserId = String(req.query.tenant_user_id || '');
+// --- Preferências pessoais de Notificação ---
+// Diferente da versão antiga, o usuário NÃO informa tenant_user_id livremente. A identidade
+// individual vem do JWT emitido por /auth/portal-login, impedindo leitura/alteração da
+// preferência de outra pessoa da mesma empresa.
+router.get('/notification-preferences', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantUserId = req.tenant!.tenant_user_id;
+  if (!tenantUserId) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Preferências individuais exigem login de usuário pelo Portal.'
+    });
+  }
+
   const prefs = dbStore.notificationPreferences.filter((p) => p.tenant_user_id === tenantUserId);
   return res.json({ status: 'sucesso', preferences: prefs });
 });
 
-router.put('/notification-preferences', (req, res) => {
-  const { tenant_user_id, canal, ativo } = req.body;
+router.put('/notification-preferences', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantUserId = req.tenant!.tenant_user_id;
+  const canal = String(req.body.canal || '').toUpperCase();
+  const ativo = Boolean(req.body.ativo);
 
-  if (!tenant_user_id || !canal) {
-    return res.status(400).json({ status: 'erro', mensagem: 'tenant_user_id e canal são obrigatórios.' });
+  if (!tenantUserId) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Preferências individuais exigem login de usuário pelo Portal.'
+    });
   }
-
-  if (canal === 'SMS') {
+  if (canal !== 'EMAIL' && canal !== 'PORTAL') {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'Canal SMS ainda não disponível nesta versão — apenas E-mail e notificação no Portal.'
+      mensagem: 'Nesta etapa, canal deve ser EMAIL ou PORTAL. WhatsApp será ligado na etapa de integração externa.'
     });
   }
 
-  let pref = dbStore.notificationPreferences.find((p) => p.tenant_user_id === tenant_user_id && p.canal === canal);
+  let pref = dbStore.notificationPreferences.find(
+    (p) => p.tenant_user_id === tenantUserId && p.canal === canal
+  );
   if (pref) {
-    pref.ativo = Boolean(ativo);
+    pref.ativo = ativo;
   } else {
-    pref = { id: `np_${Date.now()}`, tenant_user_id, canal, ativo: Boolean(ativo) };
+    pref = { id: uuidv4(), tenant_user_id: tenantUserId, canal: canal as 'EMAIL' | 'PORTAL', ativo };
     dbStore.notificationPreferences.push(pref);
   }
 
