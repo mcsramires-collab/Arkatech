@@ -115,6 +115,7 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
     };
   }
   let tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpjLimpo);
+  let cliente_novo = false;
 
   if (tenant) {
     const policyConflitante = dbStore.policies.find(
@@ -130,6 +131,7 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
       };
     }
   } else {
+    cliente_novo = true;
     const integrationCredentials = createClientCredentialsSync('prod_segurado');
     tenant = {
       id: `tenant_${cnpjLimpo}_${Date.now()}`,
@@ -171,7 +173,7 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
   dbStore.policies.push(newPolicy);
   dbStore.persist();
 
-  return { ok: true, tenant, policy: newPolicy };
+  return { ok: true, tenant, policy: newPolicy, cliente_novo };
 }
 
 // --- EDITAR_CLIENTE — campos cadastrais/contato do segurado (não inclui status/ambiente/cnpj,
