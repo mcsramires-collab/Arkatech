@@ -2,7 +2,8 @@ import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { Broker, DelegationException, DelegationExceptionLevel, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, PolicyCoverageValue } from '../types';
+import { createBackofficeInvitation } from '../services/backofficeInvitationService';
+import { Broker, Tenant, DelegationException, DelegationExceptionLevel, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, PolicyCoverageValue } from '../types';
 import { aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
@@ -610,7 +611,7 @@ function concederOuRevogarAcessoBroker(
   return { ok: true };
 }
 
-router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const {
     cnpj,
@@ -620,7 +621,8 @@ router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
     corretor_responsavel_nome,
     corretor_responsavel_email,
     corretor_responsavel_telefone_fixo,
-    corretor_responsavel_celular
+    corretor_responsavel_celular,
+    conceder_acesso_portal
   } = req.body;
   if (!cnpj || !razao_social) {
     return res.status(400).json({ status: 'erro', mensagem: 'cnpj e razao_social são obrigatórios.' });
@@ -631,6 +633,17 @@ router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
     return res.status(400).json({
       status: 'erro',
       mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+    });
+  }
+
+  const brokerExistente = dbStore.brokers.find(
+    (item) => normalizeCnpj(item.cnpj) === cnpjLimpo
+  );
+  if (brokerExistente) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem: 'Já existe uma corretora/assessoria cadastrada com este CNPJ.',
+      broker_id: brokerExistente.id
     });
   }
 
@@ -658,8 +671,55 @@ router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
     created_at: new Date().toISOString()
   };
   dbStore.brokers.push(newBroker);
+
+  let portalTenant: Tenant | undefined;
+  let convite;
+  if (Boolean(conceder_acesso_portal)) {
+    if (!corretor_responsavel_email) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'corretor_responsavel_email é obrigatório quando conceder_acesso_portal=true.'
+      });
+    }
+
+    portalTenant = {
+      id: `tenant_corretora_${cnpjLimpo}_${Date.now()}`,
+      cnpj,
+      razao_social,
+      nome_fantasia,
+      status: 'ATIVO',
+      ambiente: 'producao',
+      client_id: `client_prod_corretora_${cnpjLimpo}`,
+      client_secret_hash: `secret_${cnpjLimpo}`,
+      role: 'CORRETORA',
+      token_duration_hours: 8,
+      contato_nome: corretor_responsavel_nome,
+      contato_email: corretor_responsavel_email,
+      contato_telefone_fixo: corretor_responsavel_telefone_fixo,
+      contato_celular: corretor_responsavel_celular,
+      conta_ativada: false,
+      created_at: new Date().toISOString()
+    };
+    dbStore.tenants.push(portalTenant);
+    newBroker.tenant_id = portalTenant.id;
+  }
+
   dbStore.persist();
-  return res.json({ status: 'sucesso', broker: newBroker });
+
+  if (portalTenant) {
+    convite = await createBackofficeInvitation(
+      portalTenant,
+      corretor_responsavel_nome || razao_social,
+      corretor_responsavel_email
+    );
+  }
+
+  return res.json({
+    status: 'sucesso',
+    broker: newBroker,
+    portal_tenant: portalTenant,
+    convite
+  });
 });
 
 router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
