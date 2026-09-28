@@ -120,6 +120,14 @@ router.get(
         cte: connector.capabilities.includes('CTE_DFE'),
         mdfe: connector.capabilities.includes('MDFE_DFE')
       },
+      capture_modes: {
+        distribution: true,
+        /**
+         * OUTBOUND = XML autorizado/enviado pelo próprio cliente ao SEFAZ.
+         * A extensão/agent futuro captura esse retorno local e envia ao mesmo pipeline.
+         */
+        outbound: true
+      },
       max_batch_size: 50,
       sync_state: FiscalSyncService.publicResumeState(connector)
     });
