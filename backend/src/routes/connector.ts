@@ -262,19 +262,37 @@ router.post(
       }
     }
 
-    const state = FiscalSyncService.report(connector, {
-      provider,
-      status: syncStatus,
-      ult_nsu: req.body.ult_nsu !== undefined ? String(req.body.ult_nsu) : undefined,
-      max_nsu: req.body.max_nsu !== undefined ? String(req.body.max_nsu) : undefined,
-      cstat,
-      message: req.body.message !== undefined ? String(req.body.message) : undefined,
-      document_count: documentCount,
-      next_sync_after:
-        req.body.next_sync_after !== undefined ? String(req.body.next_sync_after) : undefined
-    });
+    try {
+      const state = FiscalSyncService.report(connector, {
+        provider,
+        status: syncStatus,
+        ult_nsu: req.body.ult_nsu !== undefined ? String(req.body.ult_nsu) : undefined,
+        max_nsu: req.body.max_nsu !== undefined ? String(req.body.max_nsu) : undefined,
+        cstat,
+        message: req.body.message !== undefined ? String(req.body.message) : undefined,
+        document_count: documentCount,
+        next_sync_after:
+          req.body.next_sync_after !== undefined ? String(req.body.next_sync_after) : undefined
+      });
 
-    return res.json({ status: 'sucesso', sync: state });
+      return res.json({ status: 'sucesso', sync: state });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'SYNC_STATE_ERROR';
+      const conflicts = ['NSU_REGRESSION', 'MAX_NSU_REGRESSION'];
+      const messages: Record<string, string> = {
+        NSU_REGRESSION: 'ult_nsu não pode regredir em relação ao último estado confirmado.',
+        MAX_NSU_REGRESSION: 'max_nsu não pode regredir em relação ao último estado confirmado.',
+        INVALID_NSU_RANGE: 'ult_nsu não pode ser maior que max_nsu.',
+        INVALID_NSU: 'NSU deve conter somente dígitos.',
+        SYNC_STATUS_CSTAT_MISMATCH: 'O status informado não corresponde ao cStat recebido do provedor.'
+      };
+
+      return res.status(conflicts.includes(code) ? 409 : 400).json({
+        status: 'erro',
+        codigo: code,
+        mensagem: messages[code] ?? 'Estado de sincronização fiscal inválido.'
+      });
+    }
   }
 );
 
