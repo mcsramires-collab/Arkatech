@@ -129,7 +129,7 @@ export class MockGeneratorService {
         </infResp>
         <infSeg>
           <xSeg>${insurer?.nome_fantasia || insurer?.nome || 'SEGURADORA DE TESTE'}</xSeg>
-          <CNPJ>${insurer ? normalizeCnpj(insurer.cnpj) : undefined || '33444555000166'}</CNPJ>
+          <CNPJ>${insurer ? normalizeCnpj(insurer.cnpj) : '33444555000166'}</CNPJ>
         </infSeg>
         <nApol>${policy?.numero_apolice || 'APOLICE-TESTE'}</nApol>
         <nAver>ARCK${docNum}${Date.now().toString().slice(-6)}</nAver>
