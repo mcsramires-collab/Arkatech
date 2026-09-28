@@ -67,12 +67,21 @@ export class ConnectorFiscalService {
       const candidates = policies.filter((policy) => policy.ramo === ramo);
       if (candidates.length === 0) return [];
 
-      const usable = candidates.find(
+      const usableCandidates = candidates.filter(
         (policy) =>
           policy.status === 'ATIVA' &&
           !(policy.vigencia_fim && new Date(policy.vigencia_fim).getTime() < now)
       );
-      const selected: Policy = usable ?? candidates[0]!;
+      const pool = usableCandidates.length > 0 ? usableCandidates : candidates;
+
+      // Segurança P0: se o mesmo segurado chegar a ter mais de uma seguradora candidata
+      // para o MESMO ramo (estado que pode surgir por migração/importação mesmo que o cadastro
+      // normal tente impedir), nunca escolher "a primeira". Sem um insurer_id explícito não existe
+      // informação suficiente para decidir a quem pertence a averbação.
+      const insurerIds = new Set(pool.map((policy) => policy.insurer_id));
+      if (insurerIds.size > 1) return [];
+
+      const selected: Policy = pool[0]!;
       return [{
         id: selected.id,
         numero_apolice: selected.numero_apolice,
