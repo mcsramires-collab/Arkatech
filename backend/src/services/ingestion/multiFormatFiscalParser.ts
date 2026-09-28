@@ -227,6 +227,13 @@ export class MultiFormatFiscalParser {
     return ['.xml', '.csv', '.xlsx', '.pdf', '.txt'];
   }
 
+  static fromStructuredRow(row: Record<string, unknown>): {
+    content?: string;
+    warnings: string[];
+  } {
+    return buildCanonicalContent(row);
+  }
+
   static async parse(file: {
     originalname: string;
     mimetype?: string;
