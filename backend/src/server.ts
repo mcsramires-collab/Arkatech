@@ -9,6 +9,7 @@ import tenantRoutes from './routes/tenant';
 import internalRoutes from './routes/internal';
 import connectorRoutes from './routes/connector';
 import tmsRoutes from './routes/tms';
+import whatsappIntegrationRoutes from './routes/whatsappIntegration';
 import { internalApiKeyMiddleware } from './middleware/internalApiKeyMiddleware';
 import { backofficeOrInternalKeyMiddleware } from './middleware/backofficeOrInternalKeyMiddleware';
 
@@ -53,6 +54,8 @@ app.use('/api/v1/tenant', tenantRoutes);
 app.use('/api/v1/connector', connectorRoutes);
 // Integração máquina-a-máquina para TMS: mesmo motor e regras do Portal/SEFAZ.
 app.use('/api/v1/tms', tmsRoutes);
+// Contrato interno, agnóstico de fornecedor, consumido pelo futuro adapter de WhatsApp.
+app.use('/api/v1/integrations/whatsapp', whatsappIntegrationRoutes);
 
 // Servidor HTTP
 app.listen(PORT, () => {
