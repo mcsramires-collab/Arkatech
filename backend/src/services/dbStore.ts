@@ -18,6 +18,7 @@ import {
   FiscalEvent,
   RecoverySession,
   BatchTestRun,
+  TestLabRun,
   InternalUser,
   RbacProfile,
   TenantUser,
@@ -61,6 +62,7 @@ class DBStore {
   public fiscalEvents: FiscalEvent[] = [];
   public recoverySessions: RecoverySession[] = [];
   public batchTestRuns: BatchTestRun[] = [];
+  public testLabRuns: TestLabRun[] = [];
   // Fase 1 — novas entidades (visão empresa, RBAC, coberturas, delegação, ativação)
   public internalUsers: InternalUser[] = [];
   public rbacProfiles: RbacProfile[] = [];
@@ -132,6 +134,7 @@ class DBStore {
         this.fiscalEvents = parsed.fiscalEvents || [];
         this.recoverySessions = parsed.recoverySessions || [];
         this.batchTestRuns = parsed.batchTestRuns || [];
+        this.testLabRuns = parsed.testLabRuns || [];
         this.internalUsers = parsed.internalUsers || [];
         this.rbacProfiles = parsed.rbacProfiles || [];
         this.tenantUsers = parsed.tenantUsers || [];
@@ -225,6 +228,7 @@ class DBStore {
             fiscalEvents: this.fiscalEvents,
             recoverySessions: this.recoverySessions,
             batchTestRuns: this.batchTestRuns,
+            testLabRuns: this.testLabRuns,
             internalUsers: this.internalUsers,
             rbacProfiles: this.rbacProfiles,
             tenantUsers: this.tenantUsers,
