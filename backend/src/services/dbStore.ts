@@ -13,6 +13,7 @@ import {
   Averbacao,
   RawXMLStore,
   FiscalDocument,
+  Connector,
   RecoverySession,
   BatchTestRun,
   InternalUser,
@@ -50,6 +51,7 @@ class DBStore {
   public averbacoes: Averbacao[] = [];
   public rawXmlStore: RawXMLStore[] = [];
   public fiscalDocuments: FiscalDocument[] = [];
+  public connectors: Connector[] = [];
   public recoverySessions: RecoverySession[] = [];
   public batchTestRuns: BatchTestRun[] = [];
   // Fase 1 — novas entidades (visão empresa, RBAC, coberturas, delegação, ativação)
@@ -115,6 +117,7 @@ class DBStore {
         this.averbacoes = parsed.averbacoes || [];
         this.rawXmlStore = parsed.rawXmlStore || [];
         this.fiscalDocuments = parsed.fiscalDocuments || [];
+        this.connectors = parsed.connectors || [];
         this.recoverySessions = parsed.recoverySessions || [];
         this.batchTestRuns = parsed.batchTestRuns || [];
         this.internalUsers = parsed.internalUsers || [];
@@ -197,6 +200,7 @@ class DBStore {
             averbacoes: this.averbacoes,
             rawXmlStore: this.rawXmlStore,
             fiscalDocuments: this.fiscalDocuments,
+            connectors: this.connectors,
             recoverySessions: this.recoverySessions,
             batchTestRuns: this.batchTestRuns,
             internalUsers: this.internalUsers,
