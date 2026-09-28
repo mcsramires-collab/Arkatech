@@ -149,7 +149,7 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     table: 'raw_xml_store',
     storeKey: 'rawXmlStore',
     pk: 'id',
-    columns: ['id', 'content_xml', 'hash_sha256', 'encrypted_aes256', 'created_at']
+    columns: ['id', 'tenant_id', 'content_xml', 'hash_sha256', 'encrypted_aes256', 'created_at']
   },
   {
     table: 'fiscal_documents',
