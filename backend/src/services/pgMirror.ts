@@ -164,6 +164,19 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     jsonbColumns: ['policy_ids_attempted', 'averbacao_ids']
   },
   {
+    table: 'connectors',
+    storeKey: 'connectors',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'device_id', 'device_name', 'version', 'os', 'capabilities',
+      'status', 'device_token_hash', 'sefaz_status', 'last_heartbeat_at', 'last_sync_at',
+      'certificate_status', 'certificate_cnpj', 'certificate_type', 'certificate_issuer',
+      'certificate_serial_hash', 'certificate_valid_from', 'certificate_valid_until',
+      'created_at', 'revoked_at'
+    ],
+    jsonbColumns: ['capabilities']
+  },
+  {
     table: 'averbacoes',
     storeKey: 'averbacoes',
     pk: 'id',
