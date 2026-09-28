@@ -614,6 +614,7 @@ router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const {
     cnpj,
+    partner_type,
     razao_social,
     nome_fantasia,
     corretor_responsavel_nome,
@@ -626,9 +627,27 @@ router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
   }
 
   const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+    });
+  }
+
+  const partnerTypes = ['CORRETORA', 'ASSESSORIA', 'AMBOS'] as const;
+  const partnerType = String(partner_type || 'CORRETORA').toUpperCase() as
+    (typeof partnerTypes)[number];
+  if (!partnerTypes.includes(partnerType)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'partner_type deve ser CORRETORA, ASSESSORIA ou AMBOS.'
+    });
+  }
+
   const newBroker: Broker = {
     id: `brk_${cnpjLimpo}_${Date.now()}`,
     cnpj,
+    partner_type: partnerType,
     nome: razao_social,
     razao_social,
     nome_fantasia,
@@ -652,6 +671,7 @@ router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
   }
   const {
     cnpj,
+    partner_type,
     razao_social,
     nome_fantasia,
     corretor_responsavel_nome,
@@ -676,7 +696,26 @@ router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
     }
   }
 
-  if (cnpj !== undefined) broker.cnpj = cnpj;
+  if (cnpj !== undefined) {
+    const normalized = normalizeCnpj(cnpj);
+    if (!isCnpjFormatValid(normalized)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+      });
+    }
+    broker.cnpj = cnpj;
+  }
+  if (partner_type !== undefined) {
+    const normalizedPartnerType = String(partner_type).toUpperCase();
+    if (!['CORRETORA', 'ASSESSORIA', 'AMBOS'].includes(normalizedPartnerType)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'partner_type deve ser CORRETORA, ASSESSORIA ou AMBOS.'
+      });
+    }
+    broker.partner_type = normalizedPartnerType as Broker['partner_type'];
+  }
   if (razao_social !== undefined) {
     broker.razao_social = razao_social;
     broker.nome = razao_social;
