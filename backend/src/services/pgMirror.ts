@@ -328,6 +328,18 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
       'id', 'ticket_id', 'tenant_id', 'author_type', 'author_id', 'author_name',
       'channel', 'message', 'created_at'
     ]
+  },
+  {
+    table: 'whatsapp_messages',
+    storeKey: 'whatsappMessages',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'tenant_user_id', 'provider', 'provider_message_id',
+      'direction', 'kind', 'phone', 'text', 'document_name', 'document_mime_type',
+      'content_hash_sha256', 'status', 'support_ticket_id', 'fiscal_document_ids',
+      'error_message', 'created_at', 'processed_at', 'updated_at'
+    ],
+    jsonbColumns: ['fiscal_document_ids']
   }
 ];
 
