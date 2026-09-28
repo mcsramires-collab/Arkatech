@@ -80,6 +80,54 @@ function policyPertenceAoAtor(req: BackofficeAuthenticatedRequest, res: Response
   return true;
 }
 
+
+/**
+ * Confirma que um tenant/segurado pertence à carteira da seguradora autenticada.
+ * ADM interno pode acessar qualquer tenant. Corretoras usam as rotas /broker, não estas rotas
+ * administrativas de seguradora.
+ */
+function tenantPertenceAoAtor(
+  req: BackofficeAuthenticatedRequest,
+  res: Response,
+  tenantId: unknown
+): boolean {
+  const ator = req.backoffice;
+  if (!ator) {
+    res.status(401).json({ status: 'erro', mensagem: 'Autenticação de backoffice ausente.' });
+    return false;
+  }
+  if (ator.actor_type === 'INTERNAL_USER') return true;
+  if (ator.actor_type !== 'SEGURADORA') {
+    res.status(403).json({
+      status: 'erro',
+      mensagem: 'Esta área é exclusiva de seguradoras e da administração Arckatech.'
+    });
+    return false;
+  }
+  if (!ator.insurer_id) {
+    res.status(403).json({
+      status: 'erro',
+      mensagem: 'Seu usuário não está vinculado a nenhuma seguradora — sem acesso a esta área.'
+    });
+    return false;
+  }
+  if (!tenantId || typeof tenantId !== 'string') {
+    res.status(400).json({ status: 'erro', mensagem: 'tenant_id é obrigatório.' });
+    return false;
+  }
+  const pertence = dbStore.policies.some(
+    (p) => p.tenant_id === tenantId && p.insurer_id === ator.insurer_id
+  );
+  if (!pertence) {
+    res.status(403).json({
+      status: 'erro',
+      mensagem: 'Este cliente não pertence à sua seguradora.'
+    });
+    return false;
+  }
+  return true;
+}
+
 /** Rotas de administração interna sem consumidor no Portal da Seguradora hoje — ver comentário acima. */
 function apenasInternalUser(req: BackofficeAuthenticatedRequest, res: Response): boolean {
   if (req.backoffice?.actor_type === 'INTERNAL_USER') return true;
@@ -90,4 +138,4 @@ function apenasInternalUser(req: BackofficeAuthenticatedRequest, res: Response):
   return false;
 }
 
-export { resolveInsurerId, policyPertenceAoAtor, apenasInternalUser };
+export { resolveInsurerId, policyPertenceAoAtor, tenantPertenceAoAtor, apenasInternalUser };

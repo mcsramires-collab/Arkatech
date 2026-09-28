@@ -1,3 +1,6 @@
+import { normalizeRamo } from '../utils/ramo';
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
+import { createClientCredentials } from '../utils/clientCredentials';
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -7,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { Tenant, Policy, InsurerCoverage, RbacProfile, TenantUser, DelegationException, DelegationExceptionLevel } from '../types';
 import { PurgeService } from '../services/purgeService';
-import { sendActivationInviteEmail } from '../services/emailService';
+import { createAndSendInsuredInvitation } from '../services/insuredInvitationService';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
 import { resolveInsurerId, apenasInternalUser } from './adminHelpers';
@@ -123,12 +126,12 @@ router.get('/dashboard-stats', (req: BackofficeAuthenticatedRequest, res) => {
 
 // --- A. Lookup de CNPJ com visibilidade mínima (só números de ramo vigentes) ---
 router.get('/tenants/lookup', (req, res) => {
-  const cnpj = String(req.query.cnpj || '').replace(/\D/g, '');
+  const cnpj = normalizeCnpj(req.query.cnpj || '');
   if (!cnpj) {
     return res.status(400).json({ status: 'erro', mensagem: 'Informe o CNPJ para consulta.' });
   }
 
-  const tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpj);
+  const tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpj);
   if (!tenant) {
     return res.json({ status: 'sucesso', encontrado: false, ramos_vigentes: [] });
   }
@@ -145,54 +148,6 @@ router.get('/tenants/lookup', (req, res) => {
   return res.json({ status: 'sucesso', encontrado: true, ramos_vigentes: ramosVigentes });
 });
 
-// URL pública do Portal do Segurado, usada para montar o link do e-mail de convite abaixo.
-// PUBLIC_APP_URL já é a variável documentada em .env.production.example para "a URL pública do
-// app"; localhost:5173 como fallback cobre o dev local do arckatech-cargo-portal (vite dev).
-function portalSeguradoBaseUrl(): string {
-  return process.env.PUBLIC_APP_URL || 'http://localhost:5173';
-}
-
-/**
- * Gera um novo ActivationToken de convite (Termo de Uso + primeira senha) para o tenant, e tenta
- * enviar o e-mail via Resend — usado tanto na criação de um cliente novo (POST /insurer-clients)
- * quanto no reenvio manual (POST /insurer-clients/:tenantId/reenviar-convite, abaixo). Nunca
- * lança: se o e-mail não puder ser enviado, devolve o motivo para quem chamou decidir o que
- * mostrar na tela (o convite/token continua criado e válido de qualquer forma — só o e-mail
- * automático que pode ter falhado).
- */
-async function criarEEnviarConvite(
-  tenant: Tenant,
-  nomeConvidado: string | undefined,
-  emailConvidado: string | undefined
-): Promise<{ enviado: boolean; destino?: string; motivo?: string }> {
-  const activationToken = {
-    id: uuidv4(),
-    tenant_id: tenant.id,
-    token: `act_${uuidv4()}`,
-    termo_versao: 'v1',
-    aceite: false,
-    expira_em: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    created_at: new Date().toISOString(),
-    convite_nome: nomeConvidado,
-    convite_email: emailConvidado
-  };
-  dbStore.activationTokens.push(activationToken);
-  dbStore.persist();
-
-  const destino = (emailConvidado || tenant.contato_email || '').trim();
-  if (!destino) {
-    return { enviado: false, motivo: 'Nenhum e-mail de contato informado para este cliente.' };
-  }
-
-  const resultado = await sendActivationInviteEmail({
-    to: destino,
-    nomeDestinatario: nomeConvidado || tenant.contato_nome || tenant.razao_social,
-    razaoSocial: tenant.razao_social,
-    activationUrl: `${portalSeguradoBaseUrl()}/ativacao/${activationToken.token}`
-  });
-
-  return { ...resultado, destino };
-}
 
 // --- B. Cadastro de Cliente pela Seguradora (cria tenant + apólice, ou detecta conflito) ---
 router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (req: BackofficeAuthenticatedRequest, res) => {
@@ -214,6 +169,7 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
     contato_email,
     contato_telefone_fixo,
     contato_celular,
+    tipo_operacao,
     logradouro,
     numero_endereco,
     bairro,
@@ -229,35 +185,60 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
 
+  const tiposOperacao = ['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'] as const;
+  const tipoOperacao = String(tipo_operacao || 'TRANSPORTADOR').toUpperCase() as
+    (typeof tiposOperacao)[number];
+  if (!tiposOperacao.includes(tipoOperacao)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+    });
+  }
+
   if (!broker_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
     return res.status(400).json({
       status: 'erro',
       mensagem: 'broker_id, cnpj, razao_social, ramo e numero_apolice são obrigatórios.'
     });
   }
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    });
+  }
 
-  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
-  let tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpjLimpo);
+  const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. O CNPJ deve ter 14 posições e aceitar letras de A a Z nas 12 primeiras posições.'
+    });
+  }
+  let tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpjLimpo);
   let clienteNovo = false;
 
   if (tenant) {
+    // Nova apólice não reclassifica automaticamente o perfil operacional já definido.
+    // Alterações de TRANSPORTADOR/EMBARCADOR/AMBOS devem ocorrer por edição explícita do cadastro.
     // Cliente já existe — checar conflito de ramo com OUTRA seguradora
     const policyConflitante = dbStore.policies.find(
-      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.status === 'ATIVA' && p.insurer_id !== insurer_id
+      (p) => p.tenant_id === tenant!.id && p.ramo === ramoNormalizado && p.status === 'ATIVA' && p.insurer_id !== insurer_id
     );
 
     if (policyConflitante) {
       return res.status(409).json({
         status: 'conflito',
-        mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este CNPJ vinculada a outra seguradora.`,
+        mensagem: `Já existe uma apólice ativa do ramo ${ramoNormalizado} para este CNPJ vinculada a outra seguradora.`,
         tenant_id: tenant.id,
-        ramo,
+        ramo: ramoNormalizado,
         instrucao: 'Use POST /admin/insurer-clients/:tenantId/assume-policy para assumir a responsabilidade desta apólice.'
       });
     }
 
     const jaTemEsseRamoComEstaSeguradora = dbStore.policies.some(
-      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.insurer_id === insurer_id
+      (p) => p.tenant_id === tenant!.id && p.ramo === ramoNormalizado && p.insurer_id === insurer_id
     );
     if (jaTemEsseRamoComEstaSeguradora) {
       return res.status(400).json({
@@ -268,15 +249,17 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   } else {
     // Cliente novo — cria o tenant
     clienteNovo = true;
+    const integrationCredentials = await createClientCredentials('prod_segurado');
     tenant = {
       id: `tenant_${cnpjLimpo}_${Date.now()}`,
       cnpj,
       razao_social,
       status: 'ATIVO',
       ambiente: 'producao',
-      client_id: `client_prod_${cnpjLimpo}`,
-      client_secret_hash: `secret_${cnpjLimpo}`,
+      client_id: integrationCredentials.client_id,
+      client_secret_hash: integrationCredentials.client_secret_hash,
       role: 'TRANSPORTADOR',
+      tipo_operacao: tipoOperacao,
       token_duration_hours: 8,
       created_at: new Date().toISOString(),
       contato_nome,
@@ -296,9 +279,9 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   }
 
   const newPolicy: Policy = {
-    id: `pol_${String(ramo).toLowerCase()}_${Date.now()}`,
+    id: `pol_${String(ramoNormalizado).toLowerCase()}_${Date.now()}`,
     numero_apolice,
-    ramo,
+    ramo: ramoNormalizado,
     tenant_id: tenant.id,
     insurer_id,
     broker_id,
@@ -318,9 +301,9 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   if (Array.isArray(cnpjs_adicionais)) {
     for (const item of cnpjs_adicionais) {
       if (!item?.cnpj || (item.tipo !== 'filial' && item.tipo !== 'adicional')) continue;
-      const cnpjItemLimpo = String(item.cnpj).replace(/\D/g, '');
+      const cnpjItemLimpo = normalizeCnpj(item.cnpj);
       const jaExiste = dbStore.tenantCnpjsAdicionais.some(
-        (c) => c.tenant_id === tenant!.id && c.cnpj.replace(/\D/g, '') === cnpjItemLimpo
+        (c) => c.tenant_id === tenant!.id && normalizeCnpj(c.cnpj) === cnpjItemLimpo
       );
       if (jaExiste) continue;
       dbStore.tenantCnpjsAdicionais.push({
@@ -342,10 +325,81 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   // toda vez (senão a pessoa recebe um e-mail de "defina sua senha" repetido a cada apólice nova).
   let convite: { enviado: boolean; destino?: string; motivo?: string } | undefined;
   if (clienteNovo) {
-    convite = await criarEEnviarConvite(tenant, contato_nome, contato_email);
+    convite = await createAndSendInsuredInvitation(tenant, contato_nome, contato_email);
   }
 
   return res.json({ status: 'sucesso', tenant, policy: newPolicy, convite });
+});
+
+/**
+ * PUT /admin/insurer-clients/:tenantId
+ * Edição cadastral do segurado pela seguradora responsável pela carteira.
+ *
+ * Não permite trocar CNPJ, status, ambiente, credenciais nem campos internos. A autorização é
+ * feita pelo vínculo Policy.tenant_id + Policy.insurer_id, porque Tenant não guarda insurer_id.
+ */
+router.put('/insurer-clients/:tenantId', requirePermission('clientes', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
+  const { tenantId } = req.params;
+  const tenant = dbStore.tenants.find((t) => t.id === tenantId);
+  if (!tenant) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cliente não encontrado.' });
+  }
+
+  const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
+  if (!insurer_id) return;
+
+  const pertence = dbStore.policies.some(
+    (p) => p.tenant_id === tenantId && p.insurer_id === insurer_id
+  );
+  if (!pertence) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Este cliente não pertence à carteira desta seguradora.'
+    });
+  }
+
+  const {
+    razao_social,
+    nome_fantasia,
+    tipo_operacao,
+    contato_nome,
+    contato_email,
+    contato_telefone_fixo,
+    contato_celular,
+    logradouro,
+    numero_endereco,
+    bairro,
+    cidade,
+    uf,
+    cep
+  } = req.body;
+
+  if (tipo_operacao !== undefined) {
+    const normalizedTipo = String(tipo_operacao).toUpperCase();
+    if (!['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'].includes(normalizedTipo)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+      });
+    }
+    tenant.tipo_operacao = normalizedTipo as Tenant['tipo_operacao'];
+  }
+
+  if (razao_social !== undefined) tenant.razao_social = String(razao_social);
+  if (nome_fantasia !== undefined) tenant.nome_fantasia = String(nome_fantasia);
+  if (contato_nome !== undefined) tenant.contato_nome = String(contato_nome);
+  if (contato_email !== undefined) tenant.contato_email = String(contato_email);
+  if (contato_telefone_fixo !== undefined) tenant.contato_telefone_fixo = String(contato_telefone_fixo);
+  if (contato_celular !== undefined) tenant.contato_celular = String(contato_celular);
+  if (logradouro !== undefined) tenant.logradouro = String(logradouro);
+  if (numero_endereco !== undefined) tenant.numero_endereco = String(numero_endereco);
+  if (bairro !== undefined) tenant.bairro = String(bairro);
+  if (cidade !== undefined) tenant.cidade = String(cidade);
+  if (uf !== undefined) tenant.uf = String(uf);
+  if (cep !== undefined) tenant.cep = String(cep);
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', tenant });
 });
 
 /**
@@ -380,7 +434,7 @@ router.post('/insurer-clients/:tenantId/reenviar-convite', requirePermission('cl
     });
   }
 
-  const convite = await criarEEnviarConvite(tenant, tenant.contato_nome, email || tenant.contato_email);
+  const convite = await createAndSendInsuredInvitation(tenant, tenant.contato_nome, email || tenant.contato_email);
   return res.json({ status: 'sucesso', convite });
 });
 
@@ -392,7 +446,17 @@ router.post('/insurer-clients/:tenantId/assume-policy', requirePermission('apoli
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
 
-  const policy = dbStore.policies.find((p) => p.tenant_id === tenantId && p.ramo === ramo && p.status === 'ATIVA');
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    });
+  }
+
+  const policy = dbStore.policies.find(
+    (p) => p.tenant_id === tenantId && p.ramo === ramoNormalizado && p.status === 'ATIVA'
+  );
   if (!policy) {
     return res.status(404).json({ status: 'erro', mensagem: 'Nenhuma apólice ativa encontrada para este cliente/ramo.' });
   }
@@ -435,10 +499,18 @@ router.post('/insurer-coverages', requirePermission('coberturas', 'editar'), (re
     });
   }
 
+  const ramoCobertura = ramo ? normalizeRamo(ramo) : undefined;
+  if (ramo && !ramoCobertura) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    });
+  }
+
   const newCoverage: InsurerCoverage = {
     id: uuidv4(),
     insurer_id,
-    ramo,
+    ramo: ramoCobertura,
     titulo,
     exemplo_preenchimento,
     obrigatoria: Boolean(obrigatoria),

@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
-import { AverbacaoService } from '../services/averbacao';
+import { DocumentIngestionService } from '../services/ingestion/documentIngestion';
 import { dbStore } from '../services/dbStore';
 import { ResponseEngine } from '../services/responseEngine';
 import { checkActivated } from '../services/accountActivation';
@@ -42,16 +42,15 @@ router.post('/', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
 
   const appBaseUrl = `${req.protocol}://${req.get('host')}`;
 
-  const result = AverbacaoService.process(
-    {
-      tenant_id: tenantId,
-      ramo,
-      xml_content,
-      recovery_token,
-      supplemented_vars
-    },
-    appBaseUrl
-  );
+  const result = DocumentIngestionService.processXml({
+    tenant_id: tenantId,
+    source: 'API',
+    app_base_url: appBaseUrl,
+    ramo,
+    xml_content,
+    recovery_token,
+    supplemented_vars
+  });
 
   const statusCode = result.status === 'erro' ? 400 : 200;
   return res.status(statusCode).json(result);
@@ -117,16 +116,15 @@ router.post('/recuperar', (req, res) => {
 
   const appBaseUrl = `${req.protocol}://${req.get('host')}`;
 
-  const result = AverbacaoService.process(
-    {
-      tenant_id: session.tenant_id,
-      ramo: policy.ramo,
-      xml_content: session.raw_xml_content,
-      recovery_token,
-      supplemented_vars
-    },
-    appBaseUrl
-  );
+  const result = DocumentIngestionService.processXml({
+    tenant_id: session.tenant_id,
+    source: 'API',
+    app_base_url: appBaseUrl,
+    ramo: policy.ramo,
+    xml_content: session.raw_xml_content,
+    recovery_token,
+    supplemented_vars
+  });
 
   const statusCode = result.status === 'erro' ? 400 : 200;
   return res.status(statusCode).json(result);

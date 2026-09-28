@@ -1,3 +1,4 @@
+import { normalizeCnpj } from '../utils/cnpj';
 import { dbStore } from './dbStore';
 import { TipoDocumento, FuncaoDocumento } from '../types';
 
@@ -38,7 +39,7 @@ export class MockGeneratorService {
   }
 
   private static randomChave(cnpj: string, docNum: number, cUF = '35', mod = '57'): string {
-    const cnpjLimpo = cnpj.replace(/\D/g, '').padStart(14, '0');
+    const cnpjLimpo = normalizeCnpj(cnpj).padStart(14, '0');
     const aamm = '2603';
     const serie = '001';
     const nDoc = String(docNum).padStart(9, '0');
@@ -92,7 +93,7 @@ export class MockGeneratorService {
     // Contraparte fictícia (usada em toda função do documento onde o tenant NÃO está)
     const contraparteCNPJ = '98765432000188';
     const contraparteNome = 'INDUSTRIAS REUNIDAS TESTE SA';
-    const tenantCNPJ = tenant.cnpj.replace(/\D/g, '');
+    const tenantCNPJ = normalizeCnpj(tenant.cnpj);
 
     // Função efetiva do tenant no documento (comoDestinatario é atalho legado)
     const funcao = omitirCnpjTenant ? undefined : comoDestinatario ? 'DESTINATARIO' : funcaoTenant || 'EMISSOR';
@@ -128,7 +129,7 @@ export class MockGeneratorService {
         </infResp>
         <infSeg>
           <xSeg>${insurer?.nome_fantasia || insurer?.nome || 'SEGURADORA DE TESTE'}</xSeg>
-          <CNPJ>${insurer?.cnpj.replace(/\D/g, '') || '33444555000166'}</CNPJ>
+          <CNPJ>${insurer ? normalizeCnpj(insurer.cnpj) : '33444555000166'}</CNPJ>
         </infSeg>
         <nApol>${policy?.numero_apolice || 'APOLICE-TESTE'}</nApol>
         <nAver>ARCK${docNum}${Date.now().toString().slice(-6)}</nAver>

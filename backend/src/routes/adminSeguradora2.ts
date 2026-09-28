@@ -1,7 +1,11 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
-import { Broker, DelegationException, DelegationExceptionLevel, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, PolicyCoverageValue } from '../types';
+import { createBackofficeInvitation } from '../services/backofficeInvitationService';
+import { createAndSendInsuredInvitation } from '../services/insuredInvitationService';
+import { createClientCredentials } from '../utils/clientCredentials';
+import { Broker, Tenant, DelegationException, DelegationExceptionLevel, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, PolicyCoverageValue } from '../types';
 import { aplicarAcaoDelegada } from '../services/delegatedActions';
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
@@ -35,7 +39,7 @@ router.get('/approval-requests', requirePermission('delegacao_corretora', 'ver')
   return res.json({ status: 'sucesso', requests: items });
 });
 
-router.post('/approval-requests/:id/resolve', requirePermission('delegacao_corretora', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/approval-requests/:id/resolve', requirePermission('delegacao_corretora', 'editar'), async (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const { status, resolved_by } = req.body;
 
@@ -71,7 +75,20 @@ router.post('/approval-requests/:id/resolve', requirePermission('delegacao_corre
         mensagem: `Solicitação aprovada, mas a ação não pôde ser aplicada: ${resultado.mensagem}`
       });
     }
-    resultadoAplicacao = resultado;
+    if (
+      request.action === 'CRIAR_CLIENTE' &&
+      resultado.cliente_novo &&
+      resultado.tenant
+    ) {
+      const convite = await createAndSendInsuredInvitation(
+        resultado.tenant,
+        request.payload.contato_nome,
+        request.payload.contato_email
+      );
+      resultadoAplicacao = { ...resultado, convite };
+    } else {
+      resultadoAplicacao = resultado;
+    }
   }
 
   request.status = status;
@@ -609,25 +626,152 @@ function concederOuRevogarAcessoBroker(
   return { ok: true };
 }
 
-router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
+router.post(
+  '/brokers/register',
+  requirePermission('clientes', 'editar'),
+  (req: BackofficeAuthenticatedRequest, res) => {
+    const ator = req.backoffice;
+    if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'INTERNAL_USER') {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Somente seguradora ou administração Arckatech podem registrar parceiros.'
+      });
+    }
+
+    const {
+      cnpj,
+      partner_type,
+      razao_social,
+      nome_fantasia,
+      corretor_responsavel_nome,
+      corretor_responsavel_email,
+      corretor_responsavel_telefone_fixo,
+      corretor_responsavel_celular
+    } = req.body;
+
+    if (!cnpj || !razao_social) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'cnpj e razao_social são obrigatórios.'
+      });
+    }
+
+    const cnpjLimpo = normalizeCnpj(cnpj);
+    if (!isCnpjFormatValid(cnpjLimpo)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+      });
+    }
+
+    const existente = dbStore.brokers.find(
+      (item) => normalizeCnpj(item.cnpj) === cnpjLimpo
+    );
+    if (existente) {
+      return res.status(409).json({
+        status: 'erro',
+        mensagem: 'Já existe uma corretora/assessoria cadastrada com este CNPJ.',
+        broker_id: existente.id,
+        broker: existente
+      });
+    }
+
+    const partnerTypes = ['CORRETORA', 'ASSESSORIA', 'AMBOS'] as const;
+    const partnerType = String(partner_type || 'CORRETORA').toUpperCase() as
+      (typeof partnerTypes)[number];
+    if (!partnerTypes.includes(partnerType)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'partner_type deve ser CORRETORA, ASSESSORIA ou AMBOS.'
+      });
+    }
+
+    const broker: Broker = {
+      id: `brk_${cnpjLimpo}_${Date.now()}`,
+      cnpj,
+      partner_type: partnerType,
+      nome: razao_social,
+      razao_social,
+      nome_fantasia,
+      corretor_responsavel_nome,
+      corretor_responsavel_email,
+      corretor_responsavel_telefone_fixo,
+      corretor_responsavel_celular,
+      created_at: new Date().toISOString()
+    };
+
+    dbStore.brokers.push(broker);
+    dbStore.persist();
+
+    return res.json({
+      status: 'sucesso',
+      broker,
+      portal_access: {
+        enabled: false,
+        instrucao:
+          'Vincule o parceiro a uma apólice e então conceda acesso em PUT /admin/brokers/:id/portal-access.'
+      }
+    });
+  }
+);
+
+router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const {
     cnpj,
+    partner_type,
     razao_social,
     nome_fantasia,
     corretor_responsavel_nome,
     corretor_responsavel_email,
     corretor_responsavel_telefone_fixo,
-    corretor_responsavel_celular
+    corretor_responsavel_celular,
+    conceder_acesso_portal
   } = req.body;
   if (!cnpj || !razao_social) {
     return res.status(400).json({ status: 'erro', mensagem: 'cnpj e razao_social são obrigatórios.' });
   }
 
-  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
+  const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+    });
+  }
+
+  const brokerExistente = dbStore.brokers.find(
+    (item) => normalizeCnpj(item.cnpj) === cnpjLimpo
+  );
+  if (brokerExistente) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem: 'Já existe uma corretora/assessoria cadastrada com este CNPJ.',
+      broker_id: brokerExistente.id
+    });
+  }
+
+  const partnerTypes = ['CORRETORA', 'ASSESSORIA', 'AMBOS'] as const;
+  const partnerType = String(partner_type || 'CORRETORA').toUpperCase() as
+    (typeof partnerTypes)[number];
+  if (!partnerTypes.includes(partnerType)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'partner_type deve ser CORRETORA, ASSESSORIA ou AMBOS.'
+    });
+  }
+
+  if (Boolean(conceder_acesso_portal) && !corretor_responsavel_email) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'corretor_responsavel_email é obrigatório quando conceder_acesso_portal=true.'
+    });
+  }
+
   const newBroker: Broker = {
     id: `brk_${cnpjLimpo}_${Date.now()}`,
     cnpj,
+    partner_type: partnerType,
     nome: razao_social,
     razao_social,
     nome_fantasia,
@@ -637,10 +781,146 @@ router.post('/brokers', (req: BackofficeAuthenticatedRequest, res) => {
     corretor_responsavel_celular,
     created_at: new Date().toISOString()
   };
+
+  let portalTenant: Tenant | undefined;
+  let convite;
+  if (Boolean(conceder_acesso_portal)) {
+    const integrationCredentials = await createClientCredentials('prod_corretora');
+    portalTenant = {
+      id: `tenant_corretora_${cnpjLimpo}_${Date.now()}`,
+      cnpj,
+      razao_social,
+      nome_fantasia,
+      status: 'ATIVO',
+      ambiente: 'producao',
+      client_id: integrationCredentials.client_id,
+      client_secret_hash: integrationCredentials.client_secret_hash,
+      role: 'CORRETORA',
+      token_duration_hours: 8,
+      contato_nome: corretor_responsavel_nome,
+      contato_email: corretor_responsavel_email,
+      contato_telefone_fixo: corretor_responsavel_telefone_fixo,
+      contato_celular: corretor_responsavel_celular,
+      conta_ativada: false,
+      created_at: new Date().toISOString()
+    };
+    dbStore.tenants.push(portalTenant);
+    newBroker.tenant_id = portalTenant.id;
+  }
+
   dbStore.brokers.push(newBroker);
   dbStore.persist();
-  return res.json({ status: 'sucesso', broker: newBroker });
+
+  if (portalTenant) {
+    convite = await createBackofficeInvitation(
+      portalTenant,
+      corretor_responsavel_nome || razao_social,
+      corretor_responsavel_email
+    );
+  }
+
+  return res.json({
+    status: 'sucesso',
+    broker: newBroker,
+    portal_tenant: portalTenant,
+    convite
+  });
 });
+
+router.post(
+  '/brokers/:id/reenviar-convite',
+  requirePermission('delegacao_corretora', 'editar'),
+  async (req: BackofficeAuthenticatedRequest, res) => {
+    const broker = dbStore.brokers.find((item) => item.id === req.params.id);
+    if (!broker) {
+      return res.status(404).json({
+        status: 'erro',
+        mensagem: 'Corretora/Assessoria não encontrada.'
+      });
+    }
+
+    const ator = req.backoffice;
+    if (ator?.actor_type === 'SEGURADORA') {
+      if (!ator.insurer_id) {
+        return res.status(403).json({
+          status: 'erro',
+          mensagem: 'Seu usuário não está vinculado a nenhuma seguradora.'
+        });
+      }
+
+      const pertenceACarteira = dbStore.policies.some(
+        (policy) =>
+          policy.insurer_id === ator.insurer_id &&
+          (
+            policy.broker_id === broker.id ||
+            policy.co_broker_id === broker.id ||
+            policy.assessoria_id === broker.id
+          )
+      );
+      if (!pertenceACarteira) {
+        return res.status(403).json({
+          status: 'erro',
+          mensagem: 'Este parceiro não pertence à carteira da sua seguradora.'
+        });
+      }
+    } else if (ator?.actor_type !== 'INTERNAL_USER') {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Somente seguradora responsável ou administração Arckatech podem reenviar este convite.'
+      });
+    }
+
+    if (!broker.tenant_id) {
+      return res.status(409).json({
+        status: 'erro',
+        codigo: 'PARTNER_PORTAL_ACCESS_NOT_CONFIGURED',
+        mensagem:
+          'Este parceiro ainda não possui acesso ao portal. Conceda o acesso ao portal antes de reenviar o convite.'
+      });
+    }
+
+    const tenant = dbStore.tenants.find((item) => item.id === broker.tenant_id);
+    if (!tenant || tenant.role !== 'CORRETORA') {
+      return res.status(409).json({
+        status: 'erro',
+        mensagem: 'O Tenant de portal vinculado ao parceiro é inválido.'
+      });
+    }
+
+    const email = String(
+      req.body.email || broker.corretor_responsavel_email || tenant.contato_email || ''
+    ).trim().toLowerCase();
+    const nome = String(
+      req.body.nome ||
+      broker.corretor_responsavel_nome ||
+      tenant.contato_nome ||
+      broker.nome_fantasia ||
+      broker.nome
+    ).trim();
+
+    if (!email) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'email é obrigatório quando o parceiro não possui e-mail responsável cadastrado.'
+      });
+    }
+
+    broker.corretor_responsavel_email = email;
+    broker.corretor_responsavel_nome = nome;
+    tenant.contato_email = email;
+    tenant.contato_nome = nome;
+
+    const convite = await createBackofficeInvitation(tenant, nome, email);
+
+    return res.json({
+      status: 'sucesso',
+      broker_id: broker.id,
+      partner_type: broker.partner_type ?? 'CORRETORA',
+      tenant_id: tenant.id,
+      convite
+    });
+  }
+);
 
 router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
@@ -651,6 +931,7 @@ router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
   }
   const {
     cnpj,
+    partner_type,
     razao_social,
     nome_fantasia,
     corretor_responsavel_nome,
@@ -675,7 +956,26 @@ router.put('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
     }
   }
 
-  if (cnpj !== undefined) broker.cnpj = cnpj;
+  if (cnpj !== undefined) {
+    const normalized = normalizeCnpj(cnpj);
+    if (!isCnpjFormatValid(normalized)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+      });
+    }
+    broker.cnpj = cnpj;
+  }
+  if (partner_type !== undefined) {
+    const normalizedPartnerType = String(partner_type).toUpperCase();
+    if (!['CORRETORA', 'ASSESSORIA', 'AMBOS'].includes(normalizedPartnerType)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'partner_type deve ser CORRETORA, ASSESSORIA ou AMBOS.'
+      });
+    }
+    broker.partner_type = normalizedPartnerType as Broker['partner_type'];
+  }
   if (razao_social !== undefined) {
     broker.razao_social = razao_social;
     broker.nome = razao_social;
@@ -734,7 +1034,7 @@ router.delete('/brokers/:id', (req: BackofficeAuthenticatedRequest, res) => {
 router.put(
   '/brokers/:id/portal-access',
   requirePermission('delegacao_corretora', 'editar'),
-  (req: BackofficeAuthenticatedRequest, res) => {
+  async (req: BackofficeAuthenticatedRequest, res) => {
     const ator = req.backoffice;
     if (!ator) {
       return res.status(401).json({ status: 'erro', mensagem: 'Autenticação de backoffice ausente.' });
@@ -754,7 +1054,9 @@ router.put(
         });
       }
       const pertenceACarteiraDaSeguradora = dbStore.policies.some(
-        (p) => p.insurer_id === ator.insurer_id && (p.broker_id === id || p.co_broker_id === id || p.assessoria_id === id)
+        (p) =>
+          p.insurer_id === ator.insurer_id &&
+          (p.broker_id === id || p.co_broker_id === id || p.assessoria_id === id)
       );
       if (!pertenceACarteiraDaSeguradora) {
         return res.status(403).json({
@@ -769,11 +1071,104 @@ router.put(
       });
     }
 
+    // Contrato novo e mais simples para o Portal da Seguradora:
+    // { enabled: true, email?, nome? } cria/vincula automaticamente o Tenant de backoffice quando
+    // necessário e já envia o convite. { enabled: false } revoga o vínculo.
+    // O contrato antigo { tenant_id: string|null } continua aceito para compatibilidade com ADM.
+    if (typeof req.body.enabled === 'boolean') {
+      if (!req.body.enabled) {
+        const previousTenantId = broker.tenant_id;
+        delete broker.tenant_id;
+        dbStore.persist();
+        return res.json({
+          status: 'sucesso',
+          broker,
+          portal_access: { enabled: false, previous_tenant_id: previousTenantId }
+        });
+      }
+
+      let portalTenant = broker.tenant_id
+        ? dbStore.tenants.find((tenant) => tenant.id === broker.tenant_id)
+        : undefined;
+
+      if (portalTenant && portalTenant.role !== 'CORRETORA') {
+        return res.status(409).json({
+          status: 'erro',
+          mensagem: 'O Tenant atualmente vinculado ao parceiro não é do tipo CORRETORA.'
+        });
+      }
+
+      if (!portalTenant) {
+        const cnpjLimpo = normalizeCnpj(broker.cnpj);
+        const integrationCredentials = await createClientCredentials('prod_corretora');
+        portalTenant = {
+          id: `tenant_corretora_${cnpjLimpo}_${Date.now()}`,
+          cnpj: broker.cnpj,
+          razao_social: broker.razao_social || broker.nome,
+          nome_fantasia: broker.nome_fantasia,
+          status: 'ATIVO',
+          ambiente: 'producao',
+          client_id: integrationCredentials.client_id,
+          client_secret_hash: integrationCredentials.client_secret_hash,
+          role: 'CORRETORA',
+          token_duration_hours: 8,
+          contato_nome: broker.corretor_responsavel_nome,
+          contato_email: broker.corretor_responsavel_email,
+          contato_telefone_fixo: broker.corretor_responsavel_telefone_fixo,
+          contato_celular: broker.corretor_responsavel_celular,
+          conta_ativada: false,
+          created_at: new Date().toISOString()
+        };
+        dbStore.tenants.push(portalTenant);
+        broker.tenant_id = portalTenant.id;
+      }
+
+      const email = String(
+        req.body.email ||
+          broker.corretor_responsavel_email ||
+          portalTenant.contato_email ||
+          ''
+      ).trim().toLowerCase();
+      const nome = String(
+        req.body.nome ||
+          broker.corretor_responsavel_nome ||
+          portalTenant.contato_nome ||
+          broker.nome_fantasia ||
+          broker.nome
+      ).trim();
+
+      if (!email) {
+        return res.status(400).json({
+          status: 'erro',
+          mensagem:
+            'Informe email para conceder acesso ao portal, ou cadastre um e-mail responsável no parceiro.'
+        });
+      }
+
+      broker.corretor_responsavel_email = email;
+      broker.corretor_responsavel_nome = nome;
+      portalTenant.contato_email = email;
+      portalTenant.contato_nome = nome;
+      portalTenant.status = 'ATIVO';
+      broker.tenant_id = portalTenant.id;
+      dbStore.persist();
+
+      const convite = await createBackofficeInvitation(portalTenant, nome, email);
+      return res.json({
+        status: 'sucesso',
+        broker,
+        portal_tenant: portalTenant,
+        portal_access: { enabled: true },
+        convite
+      });
+    }
+
     const { tenant_id } = req.body;
     if (tenant_id === undefined || (tenant_id !== null && typeof tenant_id !== 'string')) {
       return res.status(400).json({
         status: 'erro',
-        mensagem: 'tenant_id é obrigatório: string (id do Tenant role=CORRETORA) para conceder, ou null para revogar.'
+        mensagem:
+          'Informe enabled=true/false. O contrato legado tenant_id:string|null continua disponível para administração.'
       });
     }
 

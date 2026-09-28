@@ -80,6 +80,7 @@ export interface BackofficeAuthenticatedRequest extends Request {
     tenant_id?: string; // Tenant.id — só para SEGURADORA/CORRETORA
     insurer_id?: string; // Insurer.id — só para actor_type=SEGURADORA
     broker_id?: string; // Broker.id — só para actor_type=CORRETORA
+    partner_type?: 'CORRETORA' | 'ASSESSORIA' | 'AMBOS'; // classificação comercial do Broker
     // Fase 5 (item 3) — Login real + RBAC: presentes só em tokens emitidos por
     // POST /auth/backoffice-login (têm claims jti/exp reais); o ator sintético da chave interna
     // (ver backofficeOrInternalKeyMiddleware) não tem token nenhum por trás, então fica sem os
@@ -130,6 +131,7 @@ export function backofficeAuthMiddleware(
       tenant_id: decoded.tenant_id,
       insurer_id: decoded.insurer_id,
       broker_id: decoded.broker_id,
+      partner_type: decoded.partner_type,
       jti: decoded.jti,
       exp: decoded.exp
     };

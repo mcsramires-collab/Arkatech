@@ -1,3 +1,6 @@
+import { normalizeRamo } from '../utils/ramo';
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
+import { createClientCredentials, generateClientSecret, hashClientSecret } from '../utils/clientCredentials';
 import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -21,9 +24,11 @@ import { resolveInsurerId, policyPertenceAoAtor, apenasInternalUser } from './ad
 import adminSeguradora1Router from './adminSeguradora1';
 import adminSeguradora2Router from './adminSeguradora2';
 import partnerNotificationsRouter from './partnerNotifications';
+import supportAdminRouter from './supportAdmin';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+router.use(supportAdminRouter);
 
 /**
  * Fase 4 do item "Login real + RBAC" (Backlog, seção 4) para admin.ts — ao contrário de
@@ -116,7 +121,8 @@ router.get('/tenants', requirePermission('clientes', 'ver'), (req: BackofficeAut
   const comStatusCadastro = (tenants: Tenant[]) =>
     tenants.map((t) => ({
       ...t,
-      status_cadastro: calcularStatusCadastro(t, dbStore.policies.filter((p) => p.tenant_id === t.id))
+      status_cadastro: calcularStatusCadastro(t, dbStore.policies.filter((p) => p.tenant_id === t.id)),
+      cnpjs_adicionais: dbStore.tenantCnpjsAdicionais.filter((c) => c.tenant_id === t.id)
     }));
   if (ator?.actor_type === 'SEGURADORA') {
     if (!ator.insurer_id) {
@@ -132,15 +138,44 @@ router.get('/tenants', requirePermission('clientes', 'ver'), (req: BackofficeAut
 });
 
 
-router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/tenants', async (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
-  const { cnpj, razao_social, ambiente, status, role, token_duration_hours, token_duration_max_hours } = req.body;
+  const {
+    cnpj,
+    razao_social,
+    ambiente,
+    status,
+    role,
+    tipo_operacao,
+    token_duration_hours,
+    token_duration_max_hours
+  } = req.body;
 
   if (!cnpj || !razao_social) {
     return res.status(400).json({ status: 'erro', mensagem: 'CNPJ e Razão Social são obrigatórios.' });
   }
 
-  const cleanCnpj = cnpj.replace(/\D/g, '');
+  const cleanCnpj = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cleanCnpj)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. Use 14 posições: 12 caracteres alfanuméricos e 2 dígitos verificadores numéricos.'
+    });
+  }
+
+  const tiposOperacao = ['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'] as const;
+  const tipoOperacao = String(tipo_operacao || 'TRANSPORTADOR').toUpperCase() as
+    (typeof tiposOperacao)[number];
+  if (!tiposOperacao.includes(tipoOperacao)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+    });
+  }
+
+  const integrationCredentials = await createClientCredentials(
+    ambiente === 'producao' ? 'prod' : 'teste'
+  );
 
   const newTenant: Tenant = {
     id: `tenant_${cleanCnpj}_${Date.now()}`,
@@ -148,9 +183,10 @@ router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
     razao_social,
     status: status || 'ATIVO',
     ambiente: ambiente === 'producao' ? 'producao' : 'teste',
-    client_id: `client_${ambiente === 'producao' ? 'prod' : 'teste'}_${cleanCnpj}`,
-    client_secret_hash: `secret_${cleanCnpj}`,
+    client_id: integrationCredentials.client_id,
+    client_secret_hash: integrationCredentials.client_secret_hash,
     role: role || 'TRANSPORTADOR',
+    tipo_operacao: tipoOperacao,
     token_duration_hours: Number(token_duration_hours || 8),
     ...(token_duration_max_hours ? { token_duration_max_hours: Number(token_duration_max_hours) } : {}),
     created_at: new Date().toISOString()
@@ -175,6 +211,7 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
     status,
     ambiente,
     razao_social,
+    tipo_operacao,
     token_duration_hours,
     token_duration_max_hours,
     nome_fantasia,
@@ -221,6 +258,16 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
   }
   if (ambiente) tenant.ambiente = ambiente;
   if (razao_social) tenant.razao_social = razao_social;
+  if (tipo_operacao !== undefined) {
+    const normalizedTipo = String(tipo_operacao).toUpperCase();
+    if (!['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'].includes(normalizedTipo)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+      });
+    }
+    tenant.tipo_operacao = normalizedTipo as Tenant['tipo_operacao'];
+  }
   if (token_duration_hours) tenant.token_duration_hours = Number(token_duration_hours);
   // Fase 5 do item "Login real + RBAC" (Backlog, seção 4) — só ADM pode alterar o teto (ver
   // POST/PUT abaixo, /tenants/me/session-duration, para o autoatendimento da própria
@@ -317,6 +364,42 @@ router.put('/tenants/me/session-duration', (req: BackofficeAuthenticatedRequest,
   return res.json({ status: 'sucesso', tenant: { ...tenant, token_duration_max_hours: teto } });
 });
 
+/**
+ * POST /admin/tenants/me/integration-credentials/rotate
+ * Autoatendimento de credencial M2M para Seguradora/Corretora autenticada.
+ */
+router.post(
+  '/tenants/me/integration-credentials/rotate',
+  async (req: BackofficeAuthenticatedRequest, res) => {
+    const ator = req.backoffice;
+    if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'CORRETORA') {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Esta ação é exclusiva da própria seguradora/corretora autenticada.'
+      });
+    }
+    if (!ator.tenant_id) {
+      return res.status(403).json({ status: 'erro', mensagem: 'Usuário sem empresa vinculada.' });
+    }
+
+    const tenant = dbStore.tenants.find((item) => item.id === ator.tenant_id);
+    if (!tenant) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Empresa não localizada.' });
+    }
+
+    const clientSecret = generateClientSecret();
+    tenant.client_secret_hash = await hashClientSecret(clientSecret);
+    dbStore.persist();
+
+    return res.json({
+      status: 'sucesso',
+      client_id: tenant.client_id,
+      client_secret: clientSecret,
+      aviso: 'Copie o client_secret agora. Ele não poderá ser consultado novamente.'
+    });
+  }
+);
+
 // --- 2. GESTÃO DE SEGURADORAS & CORRETORAS ---
 router.get('/insurers', (req, res) => res.json({ status: 'sucesso', insurers: dbStore.insurers }));
 router.get('/brokers', (req, res) => res.json({ status: 'sucesso', brokers: dbStore.brokers }));
@@ -350,11 +433,18 @@ router.post('/policies', requirePermission('apolices', 'editar'), (req: Backoffi
       mensagem: 'numero_apolice, ramo, tenant_id e broker_id são obrigatórios.'
     });
   }
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    });
+  }
 
   const newPolicy: Policy = {
-    id: `pol_${ramo.toLowerCase()}_${Date.now()}`,
+    id: `pol_${ramoNormalizado.toLowerCase()}_${Date.now()}`,
     numero_apolice,
-    ramo,
+    ramo: ramoNormalizado,
     tenant_id,
     insurer_id,
     broker_id,
@@ -388,7 +478,16 @@ router.put('/policies/:id', requirePermission('apolices', 'editar'), (req: Backo
   if (status !== undefined) policy.status = status;
   if (permitir_inativo_vencido !== undefined) policy.permitir_inativo_vencido = Boolean(permitir_inativo_vencido);
   if (numero_apolice !== undefined) policy.numero_apolice = numero_apolice;
-  if (ramo !== undefined) policy.ramo = ramo;
+  if (ramo !== undefined) {
+    const ramoNormalizado = normalizeRamo(ramo);
+    if (!ramoNormalizado) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+      });
+    }
+    policy.ramo = ramoNormalizado;
+  }
   // Trocar a apólice de seguradora só é permitido para ADM — uma SEGURADORA não pode "empurrar"
   // uma apólice da própria carteira para outra seguradora.
   if (insurer_id !== undefined && req.backoffice?.actor_type === 'INTERNAL_USER') policy.insurer_id = insurer_id;

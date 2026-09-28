@@ -5,13 +5,27 @@ import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore';
 import { AverbacaoService } from '../services/averbacao';
+import { DocumentIngestionService } from '../services/ingestion/documentIngestion';
+import { MultiFormatFiscalParser } from '../services/ingestion/multiFormatFiscalParser';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { checkActivated } from '../services/accountActivation';
 import { CancelamentoService } from '../services/cancelamento';
-import { TenantUser, BusinessRuleRequest, SupportTicket, Policy } from '../types';
+import { SupportService } from '../services/supportService';
+import { TenantUser, BusinessRuleRequest, Policy, SupportChannel } from '../types';
+import fiscalDocumentsRouter from './fiscalDocuments';
+import connectorsRouter from './connectors';
+import fiscalSyncRouter from './fiscalSync';
+import fiscalEventsRouter from './fiscalEvents';
+import { generateClientSecret, hashClientSecret } from '../utils/clientCredentials';
+import notificationsRouter from './notifications';
 
 const router = Router();
+router.use('/fiscal-documents', fiscalDocumentsRouter);
+router.use('/connectors', connectorsRouter);
+router.use('/fiscal-sync', fiscalSyncRouter);
+router.use('/fiscal-events', fiscalEventsRouter);
+router.use('/notifications', notificationsRouter);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 /**
@@ -231,6 +245,44 @@ router.get('/policies', authMiddleware, (req: AuthenticatedRequest, res: Respons
   return res.json({ status: 'sucesso', policies });
 });
 
+/**
+ * POST /tenant/integration-credentials/rotate
+ * Gera um novo segredo M2M para TMS/API. Só o administrador humano da conta pode rotacionar.
+ * O segredo em texto puro é devolvido UMA única vez e nunca é persistido.
+ */
+router.post(
+  '/integration-credentials/rotate',
+  authMiddleware,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const tenantId = req.tenant!.tenant_id;
+    if (!req.tenant!.tenant_user_id || !req.tenant!.is_admin_da_conta) {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Somente o administrador da conta pode rotacionar credenciais de integração.'
+      });
+    }
+
+    const gate = checkActivated(tenantId);
+    if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
+
+    const tenant = dbStore.tenants.find((item) => item.id === tenantId);
+    if (!tenant) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Empresa não encontrada.' });
+    }
+
+    const clientSecret = generateClientSecret();
+    tenant.client_secret_hash = await hashClientSecret(clientSecret);
+    dbStore.persist();
+
+    return res.json({
+      status: 'sucesso',
+      client_id: tenant.client_id,
+      client_secret: clientSecret,
+      aviso: 'Copie o client_secret agora. Ele não poderá ser consultado novamente.'
+    });
+  }
+);
+
 // --- Importação de Documentos Fiscais em Lote (equivalente ao /admin/importar-lote,
 // porém sem tenant_id livre no body: o tenant vem sempre do próprio JWT, então uma
 // empresa jamais consegue importar documentos "em nome" de outro tenant) ---
@@ -247,20 +299,19 @@ router.post(
   '/importar-lote',
   authMiddleware,
   upload.array('arquivos', 200),
-  (req: AuthenticatedRequest, res: Response) => {
+  async (req: AuthenticatedRequest, res: Response) => {
     const tenantId = req.tenant!.tenant_id;
     const gate = checkActivated(tenantId);
     if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
     const files = req.files as Express.Multer.File[] | undefined;
     if (!files || files.length === 0) {
-      return res.status(400).json({ status: 'erro', mensagem: 'Nenhum arquivo XML foi enviado.' });
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'Nenhum arquivo foi enviado. Formatos aceitos: XML, CSV, XLSX, PDF e TXT.'
+      });
     }
 
-    // policy_ids pode chegar como um único campo repetido várias vezes no multipart (multer/
-    // busboy já entrega como array quando o mesmo nome de campo aparece mais de uma vez) ou como
-    // um único valor. Nunca confiamos no id sozinho — sempre resolvido contra o tenant do JWT,
-    // pra uma empresa jamais conseguir averbar contra a apólice de outra.
     const policyIdsRaw = req.body.policy_ids;
     const policyIds: string[] = Array.isArray(policyIdsRaw)
       ? policyIdsRaw.filter((v): v is string => typeof v === 'string' && v.length > 0)
@@ -269,9 +320,10 @@ router.post(
         : [];
 
     if (policyIds.length === 0) {
-      return res
-        .status(400)
-        .json({ status: 'erro', mensagem: 'Selecione ao menos uma apólice (policy_ids) para averbar os documentos.' });
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'Selecione ao menos uma apólice (policy_ids) para averbar os documentos.'
+      });
     }
 
     const policiesAlvo: Policy[] = policyIds
@@ -279,47 +331,81 @@ router.post(
       .filter((p): p is Policy => Boolean(p));
 
     if (policiesAlvo.length === 0) {
-      return res
-        .status(400)
-        .json({ status: 'erro', mensagem: 'Nenhuma das apólices informadas foi encontrada para esta empresa.' });
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'Nenhuma das apólices informadas foi encontrada para esta empresa.'
+      });
+    }
+
+    const parsedFiles: Array<{
+      filename: string;
+      xml_content: string;
+    }> = [];
+    const arquivosRejeitados: Array<{
+      arquivo: string;
+      codigo: string;
+      mensagem: string;
+    }> = [];
+    const formatos: Record<string, number> = {};
+
+    // Processamento sequencial proposital: PDF e XLSX podem ser pesados; não queremos abrir
+    // dezenas deles simultaneamente e provocar pico de memória numa única requisição.
+    for (const file of files) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const documentos = await MultiFormatFiscalParser.parse(file);
+        for (const documento of documentos) {
+          parsedFiles.push({
+            filename: documento.filename,
+            xml_content: documento.content
+          });
+          formatos[documento.format] = (formatos[documento.format] ?? 0) + 1;
+        }
+      } catch (error) {
+        const raw = error instanceof Error ? error.message : 'Falha ao interpretar arquivo.';
+        const [codigo, ...rest] = raw.split(':');
+        arquivosRejeitados.push({
+          arquivo: file.originalname,
+          codigo: codigo || 'FILE_PARSE_ERROR',
+          mensagem: rest.join(':').trim() || raw
+        });
+      }
+    }
+
+    if (parsedFiles.length === 0) {
+      return res.status(422).json({
+        status: 'erro',
+        codigo: 'NO_VALID_FISCAL_DOCUMENTS',
+        mensagem: 'Nenhum documento fiscal utilizável foi extraído dos arquivos enviados.',
+        formatos_aceitos: MultiFormatFiscalParser.supportedExtensions(),
+        arquivos_rejeitados: arquivosRejeitados
+      });
     }
 
     const appBaseUrl = `${req.protocol}://${req.get('host')}`;
-
-    const resultados = files.map((file) => {
-      const xmlContent = file.buffer.toString('utf-8');
-      const tentativas = policiesAlvo.map((policy) => {
-        const resultado = AverbacaoService.process(
-          { tenant_id: tenantId, ramo: policy.ramo, policy_id: policy.id, xml_content: xmlContent },
-          appBaseUrl
-        );
-        return {
-          policy_id: policy.id,
-          numero_apolice: policy.numero_apolice,
-          ramo: policy.ramo,
-          status: resultado.status,
-          codigo: resultado.codigo,
-          mensagem: resultado.mensagem,
-          numero_averbacao: resultado.numero_averbacao,
-          variaveis_faltantes: resultado.variaveis_faltantes
-        };
-      });
-      const aceitoEmAlgumaApolice = tentativas.some((t) => t.status === 'sucesso' || t.status === 'aviso');
-      return {
-        arquivo: file.originalname,
-        aceito_em_alguma_apolice: aceitoEmAlgumaApolice,
-        tentativas
-      };
+    const resultados = DocumentIngestionService.processXmlBatch({
+      tenant_id: tenantId,
+      source: 'PORTAL',
+      app_base_url: appBaseUrl,
+      files: parsedFiles,
+      policies: policiesAlvo.map((policy) => ({
+        id: policy.id,
+        numero_apolice: policy.numero_apolice,
+        ramo: policy.ramo
+      }))
     });
 
     const totalSucesso = resultados.filter((r) => r.aceito_em_alguma_apolice).length;
     const totalErro = resultados.length - totalSucesso;
 
     return res.json({
-      status: 'sucesso',
-      total: resultados.length,
+      status: arquivosRejeitados.length > 0 ? 'aviso' : 'sucesso',
+      arquivos_recebidos: files.length,
+      documentos_extraidos: resultados.length,
+      formatos,
       total_sucesso: totalSucesso,
       total_erro: totalErro,
+      arquivos_rejeitados: arquivosRejeitados,
       resultados
     });
   }
@@ -597,32 +683,48 @@ router.post('/recovery/:token/corrigir', (req, res) => {
   return res.status(statusCode).json(result);
 });
 
-// --- Preferências de Notificação (MVP: apenas e-mail + portal; WhatsApp/SMS fora por ora) ---
-router.get('/notification-preferences', (req, res) => {
-  const tenantUserId = String(req.query.tenant_user_id || '');
+// --- Preferências pessoais de Notificação ---
+// Diferente da versão antiga, o usuário NÃO informa tenant_user_id livremente. A identidade
+// individual vem do JWT emitido por /auth/portal-login, impedindo leitura/alteração da
+// preferência de outra pessoa da mesma empresa.
+router.get('/notification-preferences', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantUserId = req.tenant!.tenant_user_id;
+  if (!tenantUserId) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Preferências individuais exigem login de usuário pelo Portal.'
+    });
+  }
+
   const prefs = dbStore.notificationPreferences.filter((p) => p.tenant_user_id === tenantUserId);
   return res.json({ status: 'sucesso', preferences: prefs });
 });
 
-router.put('/notification-preferences', (req, res) => {
-  const { tenant_user_id, canal, ativo } = req.body;
+router.put('/notification-preferences', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantUserId = req.tenant!.tenant_user_id;
+  const canal = String(req.body.canal || '').toUpperCase();
+  const ativo = Boolean(req.body.ativo);
 
-  if (!tenant_user_id || !canal) {
-    return res.status(400).json({ status: 'erro', mensagem: 'tenant_user_id e canal são obrigatórios.' });
+  if (!tenantUserId) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Preferências individuais exigem login de usuário pelo Portal.'
+    });
   }
-
-  if (canal === 'SMS') {
+  if (canal !== 'EMAIL' && canal !== 'PORTAL') {
     return res.status(400).json({
       status: 'erro',
-      mensagem: 'Canal SMS ainda não disponível nesta versão — apenas E-mail e notificação no Portal.'
+      mensagem: 'Nesta etapa, canal deve ser EMAIL ou PORTAL. WhatsApp será ligado na etapa de integração externa.'
     });
   }
 
-  let pref = dbStore.notificationPreferences.find((p) => p.tenant_user_id === tenant_user_id && p.canal === canal);
+  let pref = dbStore.notificationPreferences.find(
+    (p) => p.tenant_user_id === tenantUserId && p.canal === canal
+  );
   if (pref) {
-    pref.ativo = Boolean(ativo);
+    pref.ativo = ativo;
   } else {
-    pref = { id: `np_${Date.now()}`, tenant_user_id, canal, ativo: Boolean(ativo) };
+    pref = { id: uuidv4(), tenant_user_id: tenantUserId, canal: canal as 'EMAIL' | 'PORTAL', ativo };
     dbStore.notificationPreferences.push(pref);
   }
 
@@ -666,15 +768,20 @@ router.post('/regras-solicitacoes', authMiddleware, (req: AuthenticatedRequest, 
   return res.json({ status: 'sucesso', solicitacao: newRequest });
 });
 
-// --- Chamados de Suporte (MVP) — achado da auditoria de 27/08: a tela de Suporte do Portal do
-// Segurado só disparava um toast de sucesso no cliente, sem nenhuma chamada de API. O
-// transportador/embarcador cria e consulta os próprios chamados; sem fluxo de resposta/
-// atendimento do lado da seguradora ainda (não existe tela interna de suporte hoje).
+// --- Suporte conversacional ---
+// O ticket e as mensagens usam o mesmo modelo independentemente do canal. Nesta etapa o Portal
+// pode originar PORTAL/CHAT. WhatsApp e telefonia serão integrados depois, alimentando a mesma
+// conversa sem criar um segundo sistema de chamados.
 router.get('/suporte/chamados', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const chamados = dbStore.supportTickets
-    .filter((c) => c.tenant_id === tenantId)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    .filter((ticket) => ticket.tenant_id === tenantId)
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .map((ticket) => ({
+      ...ticket,
+      mensagens: dbStore.supportMessages.filter((message) => message.ticket_id === ticket.id).length
+    }));
+
   return res.json({ status: 'sucesso', chamados });
 });
 
@@ -689,23 +796,96 @@ router.post('/suporte/chamados', authMiddleware, (req: AuthenticatedRequest, res
     });
   }
 
+  const allowedPriorities = ['BAIXA', 'NORMAL', 'ALTA', 'CRITICA'] as const;
+  const prioridade = String(req.body.prioridade || 'NORMAL').toUpperCase() as
+    (typeof allowedPriorities)[number];
+  if (!allowedPriorities.includes(prioridade)) {
+    return res.status(400).json({ status: 'erro', mensagem: 'prioridade inválida.' });
+  }
+
+  const allowedChannels: SupportChannel[] = ['PORTAL', 'CHAT'];
+  const canal = String(req.body.canal || 'PORTAL').toUpperCase() as SupportChannel;
+  if (!allowedChannels.includes(canal)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'Pelo Portal, canal deve ser PORTAL ou CHAT.'
+    });
+  }
+
   const solicitanteNome = req.tenant!.tenant_user_nome || req.tenant!.razao_social;
-
-  const newTicket: SupportTicket = {
-    id: uuidv4(),
+  const ticket = SupportService.createTicket({
     tenant_id: tenantId,
-    assunto,
-    categoria,
-    descricao,
-    status: 'ABERTO',
+    tenant_user_id: req.tenant!.tenant_user_id,
+    assunto: String(assunto),
+    categoria: String(categoria),
+    descricao: String(descricao),
     solicitante_nome: solicitanteNome,
-    created_at: new Date().toISOString()
-  };
-  dbStore.supportTickets.unshift(newTicket);
-  dbStore.persist();
+    prioridade,
+    canal_origem: canal
+  });
 
-  return res.json({ status: 'sucesso', chamado: newTicket });
+  return res.json({
+    status: 'sucesso',
+    chamado: ticket,
+    messages: SupportService.messages(ticket.id, tenantId)
+  });
 });
+
+router.get('/suporte/chamados/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenant_id;
+  const ticket = SupportService.getTicket(tenantId, req.params.id);
+  if (!ticket) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Chamado não encontrado.' });
+  }
+
+  return res.json({
+    status: 'sucesso',
+    chamado: ticket,
+    messages: SupportService.messages(ticket.id, tenantId)
+  });
+});
+
+router.post(
+  '/suporte/chamados/:id/mensagens',
+  authMiddleware,
+  (req: AuthenticatedRequest, res: Response) => {
+    const tenantId = req.tenant!.tenant_id;
+    const ticket = SupportService.getTicket(tenantId, req.params.id);
+    if (!ticket) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Chamado não encontrado.' });
+    }
+
+    const message = String(req.body.message || '').trim();
+    if (!message) {
+      return res.status(400).json({ status: 'erro', mensagem: 'message é obrigatório.' });
+    }
+
+    const entry = SupportService.addTenantMessage({
+      ticket,
+      tenant_user_id: req.tenant!.tenant_user_id,
+      author_name: req.tenant!.tenant_user_nome || req.tenant!.razao_social,
+      message,
+      channel: 'CHAT'
+    });
+
+    return res.json({ status: 'sucesso', message: entry, chamado: ticket });
+  }
+);
+
+router.put(
+  '/suporte/chamados/:id/fechar',
+  authMiddleware,
+  (req: AuthenticatedRequest, res: Response) => {
+    const tenantId = req.tenant!.tenant_id;
+    const ticket = SupportService.getTicket(tenantId, req.params.id);
+    if (!ticket) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Chamado não encontrado.' });
+    }
+
+    SupportService.updateTicket({ ticket, status: 'FECHADO' });
+    return res.json({ status: 'sucesso', chamado: ticket });
+  }
+);
 
 // --- Estatísticas do Dashboard (Início do Portal) — agregados simples sobre os dados reais do
 // próprio tenant; nada aqui é mockado, mas propositalmente não inclui nada que exija consultas

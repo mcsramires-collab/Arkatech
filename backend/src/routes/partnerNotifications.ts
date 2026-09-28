@@ -85,7 +85,7 @@ export async function criarNotificacaoSeRetroativa(
 // Corretora vê só as suas (via broker_id do próprio token); ADM/seguradora podem listar mais
 // amplo (seguradora não filtra por padrão — a notificação é entre Arckatech/corretora, não tem
 // insurer_id direto; fica como filtro opcional igual a outras listagens administrativas).
-router.get('/partner-change-notifications', requirePermission('delegacao_corretora', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
+router.get('/partner-change-notifications', requirePermission('clientes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const ator = req.backoffice;
   let items = dbStore.partnerChangeNotifications;
 
@@ -110,7 +110,7 @@ router.get('/partner-change-notifications', requirePermission('delegacao_correto
 // --- POST /admin/partner-change-notifications/:id/responder ---
 router.post(
   '/partner-change-notifications/:id/responder',
-  requirePermission('delegacao_corretora', 'editar'),
+  requirePermission('clientes', 'editar'),
   (req: BackofficeAuthenticatedRequest, res) => {
     const { id } = req.params;
     const notif = dbStore.partnerChangeNotifications.find((n) => n.id === id);

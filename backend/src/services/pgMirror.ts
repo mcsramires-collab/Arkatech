@@ -40,7 +40,7 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     pk: 'id',
     columns: [
       'id', 'cnpj', 'razao_social', 'status', 'ambiente', 'client_id', 'client_secret_hash',
-      'role', 'token_duration_hours', 'created_at', 'contato_nome', 'contato_email',
+      'role', 'tipo_operacao', 'token_duration_hours', 'created_at', 'contato_nome', 'contato_email',
       'contato_telefone_fixo', 'contato_celular', 'nome_fantasia', 'logradouro',
       'numero_endereco', 'bairro', 'cidade', 'uf', 'cep', 'conta_ativada'
     ]
@@ -56,7 +56,7 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     storeKey: 'brokers',
     pk: 'id',
     columns: [
-      'id', 'tenant_id', 'cnpj', 'nome', 'razao_social', 'nome_fantasia',
+      'id', 'tenant_id', 'cnpj', 'partner_type', 'nome', 'razao_social', 'nome_fantasia',
       'corretor_responsavel_nome', 'corretor_responsavel_email',
       'corretor_responsavel_telefone_fixo', 'corretor_responsavel_celular', 'created_at'
     ]
@@ -149,7 +149,54 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     table: 'raw_xml_store',
     storeKey: 'rawXmlStore',
     pk: 'id',
-    columns: ['id', 'content_xml', 'hash_sha256', 'encrypted_aes256', 'created_at']
+    columns: ['id', 'tenant_id', 'content_xml', 'hash_sha256', 'encrypted_aes256', 'created_at']
+  },
+  {
+    table: 'fiscal_documents',
+    storeKey: 'fiscalDocuments',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'source', 'capture_mode', 'status', 'content_hash_sha256', 'raw_xml_id', 'duplicate_of_id',
+      'original_filename', 'tipo_documento', 'chave_documento', 'numero_documento',
+      'serie_documento', 'cnpj_emissor', 'protocolo_aceitacao_sefaz', 'nsu',
+      'connector_id', 'external_id', 'policy_ids_attempted',
+      'averbacao_ids', 'codigo_resultado', 'mensagem_resultado', 'received_at', 'processed_at'
+    ],
+    jsonbColumns: ['policy_ids_attempted', 'averbacao_ids']
+  },
+  {
+    table: 'connectors',
+    storeKey: 'connectors',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'device_id', 'device_name', 'version', 'os', 'capabilities',
+      'status', 'device_token_hash', 'sefaz_status', 'last_heartbeat_at', 'last_sync_at',
+      'certificate_status', 'certificate_cnpj', 'certificate_type', 'certificate_issuer',
+      'certificate_serial_hash', 'certificate_valid_from', 'certificate_valid_until',
+      'created_at', 'revoked_at'
+    ],
+    jsonbColumns: ['capabilities']
+  },
+  {
+    table: 'fiscal_sync_states',
+    storeKey: 'fiscalSyncStates',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'connector_id', 'provider', 'status', 'ult_nsu', 'max_nsu',
+      'last_cstat', 'last_message', 'last_document_count', 'last_sync_at',
+      'next_sync_after', 'created_at', 'updated_at'
+    ]
+  },
+  {
+    table: 'fiscal_events',
+    storeKey: 'fiscalEvents',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'connector_id', 'provider', 'nsu', 'tipo_evento',
+      'chave_documento', 'status', 'content_hash_sha256', 'raw_xml_id',
+      'averbacao_ids', 'mensagem', 'received_at', 'processed_at'
+    ],
+    jsonbColumns: ['averbacao_ids']
   },
   {
     table: 'averbacoes',
@@ -157,11 +204,15 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     pk: 'id',
     columns: [
       'id', 'numero_averbacao', 'protocolo_interno_averbacao', 'tenant_id', 'policy_id',
-      'status', 'codigo_resposta', 'mensagem_resposta', 'valor_carga',
-      'valor_considerado_averbacao', 'regras_internas_aplicadas', 'tp_amb_sefaz',
-      'tipo_documento', 'chave_documento', 'numero_documento', 'serie_documento',
-      'cnpj_remetente', 'cnpj_destinatario', 'cnpj_tomador', 'protocolo_aceitacao_sefaz',
-      'raw_xml_id', 'recovery_token', 'ambiente', 'timestamp', 'created_at'
+      'status', 'codigo_resposta', 'mensagem_resposta', 'motivo_pendencia',
+      'lmi_no_momento_envio', 'sublimite_no_momento_envio', 'codigo_liberacao_utilizado',
+      'decidido_por', 'decidido_em', 'protocolo_cancelamento_sefaz',
+      'justificativa_cancelamento', 'cancelado_em', 'cancelado_por',
+      'valor_carga', 'valor_considerado_averbacao', 'regras_internas_aplicadas',
+      'tp_amb_sefaz', 'tipo_documento', 'chave_documento', 'numero_documento',
+      'serie_documento', 'cnpj_emissor', 'cnpj_remetente', 'cnpj_destinatario',
+      'cnpj_tomador', 'protocolo_aceitacao_sefaz', 'raw_xml_id', 'recovery_token',
+      'ambiente', 'timestamp', 'created_at'
     ]
   },
   {
@@ -229,6 +280,16 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     columns: ['id', 'tenant_user_id', 'canal', 'ativo']
   },
   {
+    table: 'operational_notifications',
+    storeKey: 'operationalNotifications',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'tenant_user_id', 'type', 'severity', 'title', 'message',
+      'context', 'read_at', 'created_at'
+    ],
+    jsonbColumns: ['context']
+  },
+  {
     table: 'business_rule_requests',
     storeKey: 'businessRuleRequests',
     pk: 'id',
@@ -253,7 +314,33 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     table: 'support_tickets',
     storeKey: 'supportTickets',
     pk: 'id',
-    columns: ['id', 'tenant_id', 'assunto', 'categoria', 'descricao', 'status', 'solicitante_nome', 'created_at']
+    columns: [
+      'id', 'tenant_id', 'assunto', 'categoria', 'descricao', 'status', 'prioridade',
+      'canal_origem', 'solicitante_nome', 'tenant_user_id', 'assigned_to', 'updated_at',
+      'resolved_at', 'closed_at', 'created_at'
+    ]
+  },
+  {
+    table: 'support_messages',
+    storeKey: 'supportMessages',
+    pk: 'id',
+    columns: [
+      'id', 'ticket_id', 'tenant_id', 'author_type', 'author_id', 'author_name',
+      'channel', 'message', 'created_at'
+    ]
+  },
+  {
+    table: 'whatsapp_messages',
+    storeKey: 'whatsappMessages',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'tenant_user_id', 'provider', 'provider_message_id',
+      'direction', 'kind', 'phone', 'text', 'document_name', 'document_mime_type',
+      'content_hash_sha256', 'status', 'support_ticket_id', 'fiscal_document_ids',
+      'error_message', 'claimed_by', 'claim_token', 'claim_expires_at', 'attempt_count',
+      'created_at', 'processed_at', 'updated_at'
+    ],
+    jsonbColumns: ['fiscal_document_ids']
   }
 ];
 

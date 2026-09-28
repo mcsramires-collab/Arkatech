@@ -12,6 +12,10 @@ import {
   ResponseTemplate,
   Averbacao,
   RawXMLStore,
+  FiscalDocument,
+  Connector,
+  FiscalSyncState,
+  FiscalEvent,
   RecoverySession,
   BatchTestRun,
   InternalUser,
@@ -25,12 +29,15 @@ import {
   PolicyCoverageValue,
   ActivationToken,
   NotificationPreference,
+  OperationalNotification,
   PolicyTitularityRule,
   PolicyBypassRule,
   BusinessRuleRequest,
   PolicyBusinessSettings,
   PolicySublimite,
   SupportTicket,
+  SupportMessage,
+  WhatsappMessage,
   RevokedToken,
   TenantCnpjAdicional,
   PolicyPartnerHistory,
@@ -48,6 +55,10 @@ class DBStore {
   public responseTemplates: ResponseTemplate[] = [];
   public averbacoes: Averbacao[] = [];
   public rawXmlStore: RawXMLStore[] = [];
+  public fiscalDocuments: FiscalDocument[] = [];
+  public connectors: Connector[] = [];
+  public fiscalSyncStates: FiscalSyncState[] = [];
+  public fiscalEvents: FiscalEvent[] = [];
   public recoverySessions: RecoverySession[] = [];
   public batchTestRuns: BatchTestRun[] = [];
   // Fase 1 — novas entidades (visão empresa, RBAC, coberturas, delegação, ativação)
@@ -60,6 +71,7 @@ class DBStore {
   public approvalRequests: ApprovalRequest[] = [];
   public activationTokens: ActivationToken[] = [];
   public notificationPreferences: NotificationPreference[] = [];
+  public operationalNotifications: OperationalNotification[] = [];
   public policyTitularityRules: PolicyTitularityRule[] = [];
   public policyBypassRules: PolicyBypassRule[] = [];
   public businessRuleRequests: BusinessRuleRequest[] = [];
@@ -73,6 +85,8 @@ class DBStore {
   public policyCoverageValues: PolicyCoverageValue[] = [];
   // Fase 4 — Tela de Suporte real do Portal do Segurado (backlog item, auditoria de 27/08).
   public supportTickets: SupportTicket[] = [];
+  public supportMessages: SupportMessage[] = [];
+  public whatsappMessages: WhatsappMessage[] = [];
   // Fase 5 (item 3) — Login real + RBAC: revogação de sessão antes do vencimento natural
   // (ver types/index.ts, RevokedToken, para o desenho completo).
   public revokedTokens: RevokedToken[] = [];
@@ -112,6 +126,10 @@ class DBStore {
         this.responseTemplates = parsed.responseTemplates || [];
         this.averbacoes = parsed.averbacoes || [];
         this.rawXmlStore = parsed.rawXmlStore || [];
+        this.fiscalDocuments = parsed.fiscalDocuments || [];
+        this.connectors = parsed.connectors || [];
+        this.fiscalSyncStates = parsed.fiscalSyncStates || [];
+        this.fiscalEvents = parsed.fiscalEvents || [];
         this.recoverySessions = parsed.recoverySessions || [];
         this.batchTestRuns = parsed.batchTestRuns || [];
         this.internalUsers = parsed.internalUsers || [];
@@ -123,6 +141,7 @@ class DBStore {
         this.approvalRequests = parsed.approvalRequests || [];
         this.activationTokens = parsed.activationTokens || [];
         this.notificationPreferences = parsed.notificationPreferences || [];
+        this.operationalNotifications = parsed.operationalNotifications || [];
         this.policyTitularityRules = parsed.policyTitularityRules || [];
         this.policyBypassRules = parsed.policyBypassRules || [];
         this.businessRuleRequests = parsed.businessRuleRequests || [];
@@ -134,7 +153,14 @@ class DBStore {
         this.partnerChangeNotifications = parsed.partnerChangeNotifications || [];
         this.delegationExceptions = parsed.delegationExceptions || [];
         this.policyCoverageValues = parsed.policyCoverageValues || [];
-        this.supportTickets = parsed.supportTickets || [];
+        this.supportTickets = (parsed.supportTickets || []).map((ticket: any) => ({
+          ...ticket,
+          prioridade: ticket.prioridade || 'NORMAL',
+          canal_origem: ticket.canal_origem || 'PORTAL',
+          updated_at: ticket.updated_at || ticket.created_at || new Date().toISOString()
+        }));
+        this.supportMessages = parsed.supportMessages || [];
+        this.whatsappMessages = parsed.whatsappMessages || [];
         this.revokedTokens = parsed.revokedTokens || [];
 
         if (this.ensureDefaultResponseTemplates()) {
@@ -193,6 +219,10 @@ class DBStore {
             responseTemplates: this.responseTemplates,
             averbacoes: this.averbacoes,
             rawXmlStore: this.rawXmlStore,
+            fiscalDocuments: this.fiscalDocuments,
+            connectors: this.connectors,
+            fiscalSyncStates: this.fiscalSyncStates,
+            fiscalEvents: this.fiscalEvents,
             recoverySessions: this.recoverySessions,
             batchTestRuns: this.batchTestRuns,
             internalUsers: this.internalUsers,
@@ -204,6 +234,7 @@ class DBStore {
             approvalRequests: this.approvalRequests,
             activationTokens: this.activationTokens,
             notificationPreferences: this.notificationPreferences,
+            operationalNotifications: this.operationalNotifications,
             policyTitularityRules: this.policyTitularityRules,
             policyBypassRules: this.policyBypassRules,
             businessRuleRequests: this.businessRuleRequests,
@@ -216,6 +247,8 @@ class DBStore {
             delegationExceptions: this.delegationExceptions,
             policyCoverageValues: this.policyCoverageValues,
             supportTickets: this.supportTickets,
+            supportMessages: this.supportMessages,
+            whatsappMessages: this.whatsappMessages,
             revokedTokens: this.revokedTokens
           },
           null,

@@ -1,8 +1,20 @@
 export type TenantEnvironment = 'teste' | 'producao';
 export type TenantStatus = 'ATIVO' | 'INATIVO';
+export type TenantOperationType = 'TRANSPORTADOR' | 'EMBARCADOR' | 'AMBOS';
 export type UserRole = 'ADMIN' | 'SEGURADORA' | 'CORRETORA' | 'TRANSPORTADOR';
 export type RamoApolice = 'RCTRC' | 'RCDC' | 'RCV';
 export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE' | 'MDFE';
+export type DocumentIngestionSource = 'API' | 'PORTAL' | 'SEFAZ' | 'TMS' | 'WHATSAPP' | 'INTERNAL';
+export type FiscalCaptureMode = 'DISTRIBUTION' | 'OUTBOUND' | 'MANUAL' | 'INTEGRATION';
+export type FiscalDocumentStatus =
+  | 'RECEBIDO'
+  | 'PROCESSANDO'
+  | 'AVERBADO'
+  | 'PENDENTE'
+  | 'RECUSADO'
+  | 'IGNORADO'
+  | 'DUPLICADO'
+  | 'ERRO';
 export type InternalUserRole = 'ADM' | 'AGENTE';
 // 'TRANSPORTADOR' — item 6.6.2 do relatório técnico de 20/09 (compartilhado pelo usuário):
 // segurado que é o transportador de uma NF-e sem ser quem a emite. Extraído do grupo
@@ -33,6 +45,12 @@ export interface Tenant {
   client_id: string;
   client_secret_hash: string;
   role: UserRole;
+  /**
+   * Perfil operacional do segurado. Não é papel de autenticação: transportadores e embarcadores
+   * usam o mesmo Portal do Segurado, mas o produto precisa distinguir suas jornadas/regras.
+   * Opcional para compatibilidade com cadastros antigos; ausência equivale a TRANSPORTADOR.
+   */
+  tipo_operacao?: TenantOperationType;
   token_duration_hours: number;
   /**
    * Teto (em horas) até onde a própria seguradora/corretora pode ajustar seu
@@ -83,10 +101,14 @@ export interface Insurer {
   created_at: string;
 }
 
+export type BrokerPartnerType = 'CORRETORA' | 'ASSESSORIA' | 'AMBOS';
+
 export interface Broker {
   id: string;
   tenant_id?: string; // vínculo com o tenant (role=CORRETORA) dono deste perfil
   cnpj: string;
+  /** Tipo da empresa parceira. Cocorretora é um papel da apólice, não um tipo separado. */
+  partner_type?: BrokerPartnerType;
   nome: string; // mantido por compatibilidade; preferir razao_social/nome_fantasia
   razao_social?: string;
   nome_fantasia?: string;
@@ -206,10 +228,114 @@ export interface ResponseTemplate {
 
 export interface RawXMLStore {
   id: string;
+  /** Opcional para compatibilidade com blobs legados; todo novo documento informa o tenant. */
+  tenant_id?: string;
   content_xml: string;
   hash_sha256: string;
   encrypted_aes256: boolean;
   created_at: string;
+}
+
+/**
+ * Registro canônico de todo documento fiscal recebido pela Arckatech, independentemente da origem.
+ * Ele existe ANTES da averbação: um documento pode ser recebido e depois ser averbado, recusado,
+ * ficar pendente, ser identificado como duplicado ou falhar no processamento.
+ *
+ * O conteúdo bruto continua armazenado em RawXMLStore/Averbacao; aqui ficam metadados operacionais
+ * para rastreabilidade, conector SEFAZ e futuros canais (TMS/WhatsApp/PDF/XLS/TXT).
+ */
+export interface FiscalDocument {
+  id: string;
+  tenant_id: string;
+  source: DocumentIngestionSource;
+  capture_mode: FiscalCaptureMode;
+  status: FiscalDocumentStatus;
+  content_hash_sha256: string;
+  raw_xml_id?: string;
+  duplicate_of_id?: string;
+  original_filename?: string;
+  tipo_documento?: TipoDocumento;
+  chave_documento?: string;
+  numero_documento?: string;
+  serie_documento?: string;
+  cnpj_emissor?: string;
+  protocolo_aceitacao_sefaz?: string;
+  nsu?: string;
+  connector_id?: string;
+  external_id?: string;
+  policy_ids_attempted: string[];
+  averbacao_ids: string[];
+  codigo_resultado?: string;
+  mensagem_resultado?: string;
+  received_at: string;
+  processed_at?: string;
+}
+
+export type ConnectorStatus = 'ATIVO' | 'REVOGADO';
+export type ConnectorCertificateStatus = 'NAO_CONFIGURADO' | 'VALID' | 'EXPIRING' | 'EXPIRED' | 'ERROR';
+export type ConnectorSefazStatus = 'UNKNOWN' | 'ONLINE' | 'DEGRADED' | 'OFFLINE';
+
+export interface Connector {
+  id: string;
+  tenant_id: string;
+  device_id: string;
+  device_name: string;
+  version: string;
+  os: string;
+  capabilities: string[];
+  status: ConnectorStatus;
+  device_token_hash: string;
+  sefaz_status: ConnectorSefazStatus;
+  last_heartbeat_at?: string;
+  last_sync_at?: string;
+  certificate_status: ConnectorCertificateStatus;
+  certificate_cnpj?: string;
+  certificate_type?: 'A1' | 'A3';
+  certificate_issuer?: string;
+  certificate_serial_hash?: string;
+  certificate_valid_from?: string;
+  certificate_valid_until?: string;
+  created_at: string;
+  revoked_at?: string;
+}
+
+export type FiscalSyncProvider = 'NFE' | 'CTE' | 'MDFE';
+export type FiscalSyncStatus = 'NEVER_SYNCED' | 'OK' | 'NO_DOCUMENTS' | 'RATE_LIMITED' | 'ERROR';
+
+export interface FiscalSyncState {
+  id: string;
+  tenant_id: string;
+  connector_id: string;
+  provider: FiscalSyncProvider;
+  status: FiscalSyncStatus;
+  ult_nsu?: string;
+  max_nsu?: string;
+  last_cstat?: number;
+  last_message?: string;
+  last_document_count: number;
+  last_sync_at?: string;
+  next_sync_after?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type FiscalEventStatus = 'PROCESSADO' | 'IGNORADO' | 'DUPLICADO' | 'ERRO';
+
+export interface FiscalEvent {
+  id: string;
+  tenant_id: string;
+  connector_id: string;
+  provider: FiscalSyncProvider;
+  nsu?: string;
+  tipo_evento?: string;
+  chave_documento?: string;
+  status: FiscalEventStatus;
+  content_hash_sha256: string;
+  raw_xml_id: string;
+  averbacao_ids: string[];
+  mensagem?: string;
+  received_at: string;
+  processed_at?: string;
 }
 
 export interface Averbacao {
@@ -274,7 +400,7 @@ export interface Averbacao {
   justificativa_cancelamento?: string;
   cancelado_em?: string;
   /** 'SEGURADO' quando cancelado via self-service dentro do prazo; 'SEGURADORA' via /admin. */
-  cancelado_por?: 'SEGURADO' | 'SEGURADORA';
+  cancelado_por?: 'SEGURADO' | 'SEGURADORA' | 'SEFAZ';
   valor_carga: number; // valor bruto extraído do documento (vCarga/vProd/etc.)
   valor_considerado_averbacao: number; // valor_carga + coberturas adicionais monetárias somadas
   regras_internas_aplicadas: string[]; // ex: "Cobertura 'Container' somada (R$ 25.000,00)", "Bypass de apólice vencida aplicado"
@@ -493,6 +619,28 @@ export interface NotificationPreference {
   ativo: boolean;
 }
 
+export type OperationalNotificationType =
+  | 'AVERBACAO_PENDENTE'
+  | 'AVERBACAO_RECUSADA'
+  | 'AVERBACAO_CANCELADA'
+  | 'CERTIFICADO_EXPIRANDO'
+  | 'CERTIFICADO_EXPIRADO'
+  | 'SINCRONIZACAO_SEFAZ'
+  | 'SUPORTE';
+
+export interface OperationalNotification {
+  id: string;
+  tenant_id: string;
+  tenant_user_id?: string;
+  type: OperationalNotificationType;
+  severity: 'INFO' | 'WARNING' | 'ERROR';
+  title: string;
+  message: string;
+  context?: Record<string, any>;
+  read_at?: string;
+  created_at: string;
+}
+
 // ===================== REGRAS DE NEGÓCIO (SOLICITAÇÃO DO TRANSPORTADOR) =====================
 
 /**
@@ -521,15 +669,81 @@ export interface BusinessRuleRequest {
  * cria e consulta os próprios chamados; sem fluxo de resposta/atendimento do lado da seguradora
  * ainda (fica para quando existir uma tela de suporte interna de verdade).
  */
+export type SupportTicketStatus =
+  | 'ABERTO'
+  | 'EM_ATENDIMENTO'
+  | 'AGUARDANDO_CLIENTE'
+  | 'RESOLVIDO'
+  | 'FECHADO';
+
+export type SupportChannel = 'PORTAL' | 'CHAT' | 'WHATSAPP' | 'TELEFONE';
+
 export interface SupportTicket {
   id: string;
   tenant_id: string;
   assunto: string;
   categoria: string;
   descricao: string;
-  status: 'ABERTO' | 'FECHADO';
+  status: SupportTicketStatus;
+  prioridade: 'BAIXA' | 'NORMAL' | 'ALTA' | 'CRITICA';
+  canal_origem: SupportChannel;
   solicitante_nome: string;
+  tenant_user_id?: string;
+  assigned_to?: string;
+  updated_at: string;
+  resolved_at?: string;
+  closed_at?: string;
   created_at: string;
+}
+
+export interface SupportMessage {
+  id: string;
+  ticket_id: string;
+  tenant_id: string;
+  author_type: 'TENANT_USER' | 'ARCKATECH' | 'SYSTEM';
+  author_id?: string;
+  author_name: string;
+  channel: SupportChannel;
+  message: string;
+  created_at: string;
+}
+
+export type WhatsappMessageDirection = 'INBOUND' | 'OUTBOUND';
+export type WhatsappMessageKind = 'TEXT' | 'DOCUMENT' | 'NOTIFICATION';
+export type WhatsappMessageStatus =
+  | 'RECEIVED'
+  | 'PROCESSED'
+  | 'PENDING'
+  | 'PROCESSING'
+  | 'SENT'
+  | 'DELIVERED'
+  | 'READ'
+  | 'FAILED';
+
+export interface WhatsappMessage {
+  id: string;
+  tenant_id: string;
+  tenant_user_id?: string;
+  provider: string;
+  provider_message_id?: string;
+  direction: WhatsappMessageDirection;
+  kind: WhatsappMessageKind;
+  phone: string;
+  text?: string;
+  document_name?: string;
+  document_mime_type?: string;
+  content_hash_sha256?: string;
+  status: WhatsappMessageStatus;
+  support_ticket_id?: string;
+  fiscal_document_ids: string[];
+  error_message?: string;
+  claimed_by?: string;
+  claim_token?: string;
+  claim_expires_at?: string;
+  attempt_count?: number;
+  created_at: string;
+  processed_at?: string;
+  updated_at: string;
 }
 
 // ===================== CONFIGURAÇÕES DA FICHA DO SEGURADO (PORTAL DA SEGURADORA) =====================

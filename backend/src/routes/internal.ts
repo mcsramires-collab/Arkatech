@@ -1,8 +1,11 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore';
+import { createBackofficeInvitation } from '../services/backofficeInvitationService';
+import { createClientCredentials } from '../utils/clientCredentials';
 import { Tenant, Insurer, InternalUser } from '../types';
 
 const router = Router();
@@ -32,25 +35,42 @@ router.get('/insurers', (req, res) => {
   return res.json({ status: 'sucesso', insurers: dbStore.insurers });
 });
 
-router.post('/insurers', (req, res) => {
-  const { cnpj, razao_social, nome_fantasia } = req.body;
+router.post('/insurers', async (req, res) => {
+  const { cnpj, razao_social, nome_fantasia, admin_nome, admin_email } = req.body;
   if (!cnpj || !razao_social) {
     return res.status(400).json({ status: 'erro', mensagem: 'cnpj e razao_social são obrigatórios.' });
   }
 
-  const cnpjLimpo = cnpj.replace(/\D/g, '');
+  const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+    });
+  }
+  const jaExiste = dbStore.insurers.find((item) => normalizeCnpj(item.cnpj) === cnpjLimpo);
+  if (jaExiste) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem: 'Já existe uma seguradora cadastrada com este CNPJ.',
+      insurer_id: jaExiste.id
+    });
+  }
+
+  const integrationCredentials = await createClientCredentials('prod_seguradora');
+
   const newTenant: Tenant = {
     id: `tenant_seguradora_${cnpjLimpo}_${Date.now()}`,
     cnpj,
     razao_social,
     status: 'ATIVO',
     ambiente: 'producao',
-    client_id: `client_prod_seguradora_${cnpjLimpo}`,
-    client_secret_hash: `secret_${cnpjLimpo}`,
+    client_id: integrationCredentials.client_id,
+    client_secret_hash: integrationCredentials.client_secret_hash,
     role: 'SEGURADORA',
     token_duration_hours: 8,
     created_at: new Date().toISOString(),
-    conta_ativada: true
+    conta_ativada: admin_email ? false : true
   };
   dbStore.tenants.push(newTenant);
 
@@ -66,7 +86,55 @@ router.post('/insurers', (req, res) => {
   dbStore.insurers.push(newInsurer);
 
   dbStore.persist();
-  return res.json({ status: 'sucesso', tenant: newTenant, insurer: newInsurer });
+
+  const convite = admin_email
+    ? await createBackofficeInvitation(newTenant, admin_nome || razao_social, admin_email)
+    : undefined;
+
+  return res.json({
+    status: 'sucesso',
+    tenant: newTenant,
+    insurer: newInsurer,
+    convite
+  });
+});
+
+router.post('/insurers/:id/reenviar-convite', async (req, res) => {
+  const insurer = dbStore.insurers.find((item) => item.id === req.params.id);
+  if (!insurer) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Seguradora não encontrada.' });
+  }
+
+  const tenant = insurer.tenant_id
+    ? dbStore.tenants.find((item) => item.id === insurer.tenant_id)
+    : undefined;
+  if (!tenant) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem: 'A seguradora não possui um Tenant de acesso ao portal vinculado.'
+    });
+  }
+
+  const email = String(req.body.admin_email || tenant.contato_email || '').trim().toLowerCase();
+  const nome = String(req.body.admin_nome || tenant.contato_nome || tenant.razao_social).trim();
+
+  if (!email) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'admin_email é obrigatório quando não existe e-mail de contato cadastrado.'
+    });
+  }
+
+  tenant.contato_email = email;
+  tenant.contato_nome = nome;
+  const convite = await createBackofficeInvitation(tenant, nome, email);
+
+  return res.json({
+    status: 'sucesso',
+    insurer_id: insurer.id,
+    tenant_id: tenant.id,
+    convite
+  });
 });
 
 router.put('/insurers/:id', (req, res) => {

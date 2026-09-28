@@ -7,6 +7,9 @@ import adminRoutes from './routes/admin';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
 import internalRoutes from './routes/internal';
+import connectorRoutes from './routes/connector';
+import tmsRoutes from './routes/tms';
+import whatsappIntegrationRoutes from './routes/whatsappIntegration';
 import { internalApiKeyMiddleware } from './middleware/internalApiKeyMiddleware';
 import { backofficeOrInternalKeyMiddleware } from './middleware/backofficeOrInternalKeyMiddleware';
 
@@ -47,6 +50,12 @@ app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
 // Portal do Transportador — segue sem a chave interna (é o público final), mas ainda
 // sem autenticação por usuário real; ver seção de gaps no doc de estado técnico.
 app.use('/api/v1/tenant', tenantRoutes);
+// Agente local: autenticação própria por device token, independente do login do portal.
+app.use('/api/v1/connector', connectorRoutes);
+// Integração máquina-a-máquina para TMS: mesmo motor e regras do Portal/SEFAZ.
+app.use('/api/v1/tms', tmsRoutes);
+// Contrato interno, agnóstico de fornecedor, consumido pelo futuro adapter de WhatsApp.
+app.use('/api/v1/integrations/whatsapp', whatsappIntegrationRoutes);
 
 // Servidor HTTP
 app.listen(PORT, () => {

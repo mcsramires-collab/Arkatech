@@ -5,7 +5,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { ResponseEngine } from '../services/responseEngine';
 import { getJwtSecret } from '../utils/jwtSecret';
+import { hashClientSecret, verifyClientSecret } from '../utils/clientCredentials';
 import { backofficeAuthMiddleware, BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
+import { ensureDefaultBackofficeProfile } from '../services/backofficeProfileService';
 
 const router = Router();
 
@@ -13,7 +15,7 @@ const router = Router();
  * POST /api/v1/auth/token
  * Autenticação via Client Credentials (client_id + client_secret).
  */
-router.post('/token', (req: Request, res: Response) => {
+router.post('/token', async (req: Request, res: Response) => {
   const { client_id, client_secret } = req.body;
 
   if (!client_id || !client_secret) {
@@ -24,17 +26,25 @@ router.post('/token', (req: Request, res: Response) => {
     });
   }
 
-  const tenant = dbStore.tenants.find(
-    (t) => t.client_id === client_id && t.client_secret_hash === client_secret
-  );
+  const tenant = dbStore.tenants.find((t) => t.client_id === client_id);
+  const verification = tenant
+    ? await verifyClientSecret(tenant.client_secret_hash, String(client_secret))
+    : { valid: false, legacyPlaintext: false };
 
-  if (!tenant) {
+  if (!tenant || !verification.valid) {
     const errFormat = ResponseEngine.formatResponse('ERR-4001');
     return res.status(401).json({
       status: 'erro',
       codigo: errFormat.codigo,
       mensagem: 'Credenciais de client_id ou client_secret inválidas.'
     });
+  }
+
+  // Migração transparente: credenciais antigas em texto puro continuam funcionando, mas no
+  // primeiro login válido o mesmo segredo passa a ser armazenado com bcrypt.
+  if (verification.legacyPlaintext) {
+    tenant.client_secret_hash = await hashClientSecret(String(client_secret));
+    dbStore.persist();
   }
 
   const durationHours = tenant.token_duration_hours || 8;
@@ -193,6 +203,121 @@ router.post('/portal-login', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/v1/auth/backoffice-activation/:token
+ * Consulta pública do convite de Seguradora/Corretora/Assessoria antes da primeira senha.
+ */
+router.get('/backoffice-activation/:token', (req: Request, res: Response) => {
+  const activation = dbStore.activationTokens.find((item) => item.token === req.params.token);
+  if (!activation) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Convite inválido.' });
+  }
+
+  const tenant = dbStore.tenants.find((item) => item.id === activation.tenant_id);
+  if (!tenant || (tenant.role !== 'SEGURADORA' && tenant.role !== 'CORRETORA')) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Convite de backoffice inválido.' });
+  }
+
+  return res.json({
+    status: 'sucesso',
+    convite: {
+      razao_social: tenant.razao_social,
+      cnpj: tenant.cnpj,
+      role: tenant.role,
+      nome_convidado: activation.convite_nome,
+      email_convidado: activation.convite_email,
+      ja_aceito: activation.aceite,
+      expirado: new Date(activation.expira_em).getTime() < Date.now(),
+      expira_em: activation.expira_em
+    }
+  });
+});
+
+/**
+ * POST /api/v1/auth/backoffice-activation/:token/definir-senha
+ * Converte o convite em TenantUser real e libera o login por /backoffice-login.
+ */
+router.post('/backoffice-activation/:token/definir-senha', async (req: Request, res: Response) => {
+  const senha = String(req.body.senha || '');
+  if (senha.length < 8) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'A senha precisa ter ao menos 8 caracteres.'
+    });
+  }
+
+  const activation = dbStore.activationTokens.find((item) => item.token === req.params.token);
+  if (!activation || activation.aceite) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'Convite inválido ou já utilizado.'
+    });
+  }
+  if (new Date(activation.expira_em).getTime() < Date.now()) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Convite expirado.' });
+  }
+
+  const tenant = dbStore.tenants.find((item) => item.id === activation.tenant_id);
+  if (!tenant || (tenant.role !== 'SEGURADORA' && tenant.role !== 'CORRETORA')) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Convite não pertence a um portal de backoffice.' });
+  }
+
+  const email = String(activation.convite_email || '').trim().toLowerCase();
+  const nome = activation.convite_nome || tenant.razao_social;
+  if (!email) {
+    return res.status(400).json({ status: 'erro', mensagem: 'Convite sem e-mail associado.' });
+  }
+
+  const defaultProfile = ensureDefaultBackofficeProfile(tenant);
+  if (!defaultProfile) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem:
+        'O cadastro de backoffice ainda não está vinculado corretamente à seguradora/corretora.'
+    });
+  }
+
+  const passwordHash = await bcrypt.hash(senha, 10);
+  let user = dbStore.tenantUsers.find(
+    (item) => item.tenant_id === tenant.id && item.email.trim().toLowerCase() === email
+  );
+
+  if (user) {
+    user.password_hash = passwordHash;
+    user.status = 'ATIVO';
+    user.is_admin_da_conta = true;
+    user.rbac_profile_id = defaultProfile.id;
+  } else {
+    user = {
+      id: uuidv4(),
+      tenant_id: tenant.id,
+      nome,
+      email,
+      password_hash: passwordHash,
+      rbac_profile_id: defaultProfile.id,
+      is_admin_da_conta: true,
+      status: 'ATIVO',
+      created_at: new Date().toISOString()
+    };
+    dbStore.tenantUsers.push(user);
+  }
+
+  activation.aceite = true;
+  activation.aceite_em = new Date().toISOString();
+  tenant.conta_ativada = true;
+  dbStore.persist();
+
+  return res.json({
+    status: 'sucesso',
+    mensagem: 'Acesso ativado. Faça login com seu e-mail e a senha definida.',
+    empresa: {
+      tenant_id: tenant.id,
+      razao_social: tenant.razao_social,
+      role: tenant.role
+    }
+  });
+});
+
+/**
  * POST /api/v1/auth/backoffice-login
  * Login por PESSOA (email + senha) para os painéis internos — Seguradora, Corretora e a própria
  * Arckatech (ADM/Agente). É o equivalente de /portal-login (Portal do Segurado), mas para os
@@ -288,6 +413,21 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
     const insurer = isSeguradora ? dbStore.insurers.find((i) => i.tenant_id === tenant.id) : undefined;
     const broker = !isSeguradora ? dbStore.brokers.find((b) => b.tenant_id === tenant.id) : undefined;
 
+    // Backfill de contas criadas antes do onboarding RBAC automático. Sem isso, usuários legados
+    // conseguem autenticar mas recebem 403 em todas as rotas /admin ou /broker.
+    if (!candidato.rbac_profile_id) {
+      const profile = ensureDefaultBackofficeProfile(tenant);
+      if (!profile) {
+        return res.status(409).json({
+          status: 'erro',
+          codigo: 'BACKOFFICE_OWNER_NOT_LINKED',
+          mensagem: 'Esta empresa ainda não está vinculada corretamente ao cadastro de seguradora/corretora.'
+        });
+      }
+      candidato.rbac_profile_id = profile.id;
+      dbStore.persist();
+    }
+
     const payload = {
       actor_type: (isSeguradora ? 'SEGURADORA' : 'CORRETORA') as 'SEGURADORA' | 'CORRETORA',
       user_id: candidato.id,
@@ -298,6 +438,7 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
       tenant_id: tenant.id,
       insurer_id: insurer?.id,
       broker_id: broker?.id,
+      partner_type: broker?.partner_type ?? 'CORRETORA',
       // Fase 5 (item 3) — mesmo propósito do branch INTERNAL_USER acima.
       jti: uuidv4()
     };
@@ -313,7 +454,8 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
         tipo: tenant.role,
         razao_social: tenant.razao_social,
         insurer_id: insurer?.id,
-        broker_id: broker?.id
+        broker_id: broker?.id,
+        partner_type: broker?.partner_type ?? 'CORRETORA'
       },
       token_type: 'Bearer',
       access_token: token,

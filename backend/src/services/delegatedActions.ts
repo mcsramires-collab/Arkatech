@@ -1,6 +1,9 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
+import { normalizeRamo } from '../utils/ramo';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
-import { DelegationAction, Tenant, Policy, ApprovalRequest, PolicyCoverageValue } from '../types';
+import { DelegationAction, Tenant, Policy, ApprovalRequest, PolicyCoverageValue, TenantOperationType } from '../types';
+import { createClientCredentialsSync } from '../utils/clientCredentials';
 
 /**
  * Serviço compartilhado de ações delegadas da corretora (Permissões e Autonomia).
@@ -90,35 +93,66 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
     contato_nome,
     contato_email,
     contato_telefone_fixo,
-    contato_celular
+    contato_celular,
+    tipo_operacao
   } = payload;
 
-  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
-  let tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpjLimpo);
+  const tiposOperacao: TenantOperationType[] = ['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'];
+  const tipoOperacao = String(tipo_operacao || 'TRANSPORTADOR').toUpperCase() as TenantOperationType;
+  if (!tiposOperacao.includes(tipoOperacao)) {
+    return {
+      ok: false,
+      codigo: 'erro',
+      mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+    };
+  }
+
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return {
+      ok: false,
+      codigo: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    };
+  }
+
+  const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return {
+      ok: false,
+      codigo: 'erro',
+      mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+    };
+  }
+  let tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpjLimpo);
+  let cliente_novo = false;
 
   if (tenant) {
     const policyConflitante = dbStore.policies.find(
-      (p) => p.tenant_id === tenant!.id && p.ramo === ramo && p.status === 'ATIVA' && p.insurer_id !== insurerId
+      (p) => p.tenant_id === tenant!.id && p.ramo === ramoNormalizado && p.status === 'ATIVA' && p.insurer_id !== insurerId
     );
     if (policyConflitante) {
       return {
         ok: false,
         codigo: 'conflito',
-        mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este CNPJ vinculada a outra seguradora.`,
+        mensagem: `Já existe uma apólice ativa do ramo ${ramoNormalizado} para este CNPJ vinculada a outra seguradora.`,
         tenant_id: tenant.id,
-        ramo
+        ramo: ramoNormalizado
       };
     }
   } else {
+    cliente_novo = true;
+    const integrationCredentials = createClientCredentialsSync('prod_segurado');
     tenant = {
       id: `tenant_${cnpjLimpo}_${Date.now()}`,
       cnpj,
       razao_social,
       status: 'ATIVO',
       ambiente: 'producao',
-      client_id: `client_prod_${cnpjLimpo}`,
-      client_secret_hash: `secret_${cnpjLimpo}`,
+      client_id: integrationCredentials.client_id,
+      client_secret_hash: integrationCredentials.client_secret_hash,
       role: 'TRANSPORTADOR',
+      tipo_operacao: tipoOperacao,
       token_duration_hours: 8,
       created_at: new Date().toISOString(),
       contato_nome,
@@ -128,19 +162,10 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
       conta_ativada: false
     };
     dbStore.tenants.push(tenant);
-    dbStore.activationTokens.push({
-      id: uuidv4(),
-      tenant_id: tenant.id,
-      token: `act_${uuidv4()}`,
-      termo_versao: 'v1',
-      aceite: false,
-      expira_em: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      created_at: new Date().toISOString()
-    });
   }
 
   const newPolicy: Policy = {
-    id: `pol_${String(ramo).toLowerCase()}_${Date.now()}`,
+    id: `pol_${String(ramoNormalizado).toLowerCase()}_${Date.now()}`,
     numero_apolice,
     ramo,
     tenant_id: tenant.id,
@@ -158,23 +183,57 @@ function aplicarCriarCliente(insurerId: string, brokerId: string, payload: Recor
   dbStore.policies.push(newPolicy);
   dbStore.persist();
 
-  return { ok: true, tenant, policy: newPolicy };
+  return { ok: true, tenant, policy: newPolicy, cliente_novo };
 }
 
 // --- EDITAR_CLIENTE — campos cadastrais/contato do segurado (não inclui status/ambiente/cnpj,
 // que seguem exclusivos do Portal ARCKATECH via /admin/tenants/:id) ---
 function aplicarEditarCliente(payload: Record<string, any>): AplicarResultado {
-  const { tenant_id, razao_social, contato_nome, contato_email, contato_telefone_fixo, contato_celular } = payload;
+  const {
+    tenant_id,
+    razao_social,
+    nome_fantasia,
+    tipo_operacao,
+    contato_nome,
+    contato_email,
+    contato_telefone_fixo,
+    contato_celular,
+    logradouro,
+    numero_endereco,
+    bairro,
+    cidade,
+    uf,
+    cep
+  } = payload;
   const tenant = dbStore.tenants.find((t) => t.id === tenant_id);
   if (!tenant) {
     return { ok: false, codigo: 'nao_encontrado', mensagem: 'Segurado não encontrado.' };
   }
 
+  if (tipo_operacao !== undefined) {
+    const tipoOperacao = String(tipo_operacao).toUpperCase() as TenantOperationType;
+    if (!['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'].includes(tipoOperacao)) {
+      return {
+        ok: false,
+        codigo: 'erro',
+        mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+      };
+    }
+    tenant.tipo_operacao = tipoOperacao;
+  }
+
   if (razao_social !== undefined) tenant.razao_social = razao_social;
+  if (nome_fantasia !== undefined) tenant.nome_fantasia = nome_fantasia;
   if (contato_nome !== undefined) tenant.contato_nome = contato_nome;
   if (contato_email !== undefined) tenant.contato_email = contato_email;
   if (contato_telefone_fixo !== undefined) tenant.contato_telefone_fixo = contato_telefone_fixo;
   if (contato_celular !== undefined) tenant.contato_celular = contato_celular;
+  if (logradouro !== undefined) tenant.logradouro = logradouro;
+  if (numero_endereco !== undefined) tenant.numero_endereco = numero_endereco;
+  if (bairro !== undefined) tenant.bairro = bairro;
+  if (cidade !== undefined) tenant.cidade = cidade;
+  if (uf !== undefined) tenant.uf = uf;
+  if (cep !== undefined) tenant.cep = cep;
 
   dbStore.persist();
   return { ok: true, tenant };
@@ -196,28 +255,37 @@ function aplicarCriarApolice(insurerId: string, brokerId: string, payload: Recor
     aceita_averbacao_como_destinatario
   } = payload;
 
+  const ramoNormalizado = normalizeRamo(ramo);
+  if (!ramoNormalizado) {
+    return {
+      ok: false,
+      codigo: 'erro',
+      mensagem: 'ramo inválido. Use RCTRC, RCDC ou RCV.'
+    };
+  }
+
   const tenant = dbStore.tenants.find((t) => t.id === tenant_id);
   if (!tenant) {
     return { ok: false, codigo: 'nao_encontrado', mensagem: 'Segurado não encontrado.' };
   }
 
   const policyConflitante = dbStore.policies.find(
-    (p) => p.tenant_id === tenant_id && p.ramo === ramo && p.status === 'ATIVA' && p.insurer_id !== insurerId
+    (p) => p.tenant_id === tenant_id && p.ramo === ramoNormalizado && p.status === 'ATIVA' && p.insurer_id !== insurerId
   );
   if (policyConflitante) {
     return {
       ok: false,
       codigo: 'conflito',
-      mensagem: `Já existe uma apólice ativa do ramo ${ramo} para este segurado vinculada a outra seguradora.`,
+      mensagem: `Já existe uma apólice ativa do ramo ${ramoNormalizado} para este segurado vinculada a outra seguradora.`,
       tenant_id,
       ramo
     };
   }
 
   const newPolicy: Policy = {
-    id: `pol_${String(ramo).toLowerCase()}_${Date.now()}`,
+    id: `pol_${String(ramoNormalizado).toLowerCase()}_${Date.now()}`,
     numero_apolice,
-    ramo,
+    ramo: ramoNormalizado,
     tenant_id,
     insurer_id: insurerId,
     broker_id: brokerId,

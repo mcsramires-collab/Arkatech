@@ -1,10 +1,12 @@
-import crypto from 'crypto';
+import { randomBytes } from 'crypto';
+import { normalizeAlphanumeric, normalizeCnpj } from '../utils/cnpj';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
-import { Tenant, Policy, RamoApolice, Averbacao, RecoverySession, RawXMLStore } from '../types';
+import { Tenant, Policy, RamoApolice, Averbacao, RecoverySession } from '../types';
 import { XMLParserService } from './xmlParser';
 import { RuleEngineService } from './ruleEngine';
 import { ResponseEngine } from './responseEngine';
+import { RawDocumentService } from './rawDocumentService';
 import { efetivarInativacaoProgramadaSeNecessaria, sincronizarStatusCadastroSeNecessario } from './tenantLifecycle';
 
 export interface AverbacaoRequestDTO {
@@ -20,6 +22,8 @@ export interface AverbacaoRequestDTO {
    */
   policy_id?: string;
   xml_content: string;
+  /** Raw XML já persistido pela camada de ingestão; evita duplicar o mesmo blob por canal/apólice. */
+  raw_xml_id?: string;
   recovery_token?: string;
   supplemented_vars?: Record<string, any>;
   /**
@@ -427,15 +431,8 @@ export class AverbacaoService {
     // (antes das checagens que podem rejeitar o documento) porque ERR-4007/4008/4002/4003 já
     // conhecem o policy_id e passam a gerar um registro de Averbacao com status='ERRO', que
     // exige um raw_xml_id — precisamos do XML bruto salvo mesmo quando o documento é rejeitado.
-    const hashSHA256 = crypto.createHash('sha256').update(contentToParse).digest('hex');
-    const rawXmlRecord: RawXMLStore = {
-      id: uuidv4(),
-      content_xml: contentToParse,
-      hash_sha256: hashSHA256,
-      encrypted_aes256: true,
-      created_at: new Date().toISOString()
-    };
-    dbStore.rawXmlStore.push(rawXmlRecord);
+    const rawXmlRecord =
+      RawDocumentService.get(dto.raw_xml_id) ?? RawDocumentService.store(contentToParse, tenant.id);
 
     // 4c. Carrega o blob de Regras de Negócio da apólice cedo — Fase 4 do pacote de 21/09 precisa
     // dele já na checagem de titularidade (passo 5), para saber se a "fila genérica" (Bloco 2 de
@@ -446,10 +443,11 @@ export class AverbacaoService {
 
     // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
     const regrasAplicadas: string[] = [];
-    const tenantCnpjLimpo = tenant.cnpj.replace(/\D/g, '');
+    const tenantCnpjLimpo = normalizeCnpj(tenant.cnpj);
     // Aceita string ou number defensivamente — parsers de XML/JSON de terceiros podem
     // entregar um CNPJ puramente numérico como Number em vez de String.
-    const norm = (v?: string | number) => (v !== undefined && v !== null ? String(v).replace(/\D/g, '') : undefined);
+    const norm = (v?: string | number) =>
+      v !== undefined && v !== null ? normalizeCnpj(v) : undefined;
 
     const isEmitente = norm(parsedDoc.cnpjEmitente) === tenantCnpjLimpo;
 
@@ -512,7 +510,7 @@ export class AverbacaoService {
     // 6. Checagem de Deduplicação — (chave_documento, protocolo_aceitacao_sefaz, ramo) já averbados?
     const jaAverbado = dbStore.averbacoes.find(
       (a) =>
-        a.chave_documento === parsedDoc.chaveDocumento &&
+        normalizeAlphanumeric(a.chave_documento) === normalizeAlphanumeric(parsedDoc.chaveDocumento) &&
         a.protocolo_aceitacao_sefaz === parsedDoc.protocoloAceitacaoSefaz &&
         a.policy_id === policy.id &&
         a.status === 'SUCESSO'
@@ -809,8 +807,7 @@ export class AverbacaoService {
     // 12. Gerar Número de Averbação (formato de mercado) + Protocolo Interno (nosso, independente)
     const timestampISO = new Date().toISOString();
     const testePrefix = isHomologacaoSefaz ? 'TESTE-' : '';
-    const numeroAverbacao = `${testePrefix}AVB-${dto.ramo}-${Date.now().toString().slice(-6)}-${crypto
-      .randomBytes(2)
+    const numeroAverbacao = `${testePrefix}AVB-${dto.ramo}-${Date.now().toString().slice(-6)}-${randomBytes(2)
       .toString('hex')
       .toUpperCase()}`;
     const protocoloInterno = `PI-${uuidv4()}`;
@@ -867,7 +864,7 @@ export class AverbacaoService {
       valor_considerado_averbacao: valorConsiderado,
       regras_internas_aplicadas: regrasAplicadas,
       timestamp: timestampISO,
-      hash_validacao: hashSHA256
+      hash_validacao: rawXmlRecord.hash_sha256
     };
   }
 

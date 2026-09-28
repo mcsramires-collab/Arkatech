@@ -27,6 +27,7 @@ export interface ParsedDocumentData {
   produtoPredominante?: string;
   tpAmbSefaz?: 1 | 2; // 1=produção, 2=homologação
   protocoloAceitacaoSefaz?: string; // nProt do protXXX/infProt
+  cStatAutorizacaoSefaz?: string; // cStat do protXXX/infProt (100/150 = autorizado)
 }
 
 export interface ParsedCancelamentoData {
@@ -107,9 +108,16 @@ export class XMLParserService {
           rawXml: trimmed,
           cnpjEmitente: json.cnpjEmitente,
           cnpjDestinatario: json.cnpjDestinatario,
+          cnpjRemetente: json.cnpjRemetente,
+          cnpjExpedidor: json.cnpjExpedidor,
+          cnpjRecebedor: json.cnpjRecebedor,
+          cnpjTomador: json.cnpjTomador,
+          cnpjTransportador: json.cnpjTransportador,
           serie: json.serie !== undefined ? String(json.serie) : undefined,
           tpAmbSefaz: json.tpAmbSefaz,
-          protocoloAceitacaoSefaz: json.protocoloAceitacaoSefaz
+          protocoloAceitacaoSefaz: json.protocoloAceitacaoSefaz,
+          cStatAutorizacaoSefaz:
+            json.cStatAutorizacaoSefaz !== undefined ? String(json.cStatAutorizacaoSefaz) : undefined
         };
       } catch (e) {
         throw new Error('Formato JSON inválido.');
@@ -136,12 +144,15 @@ export class XMLParserService {
       let produtoPredominante: string | undefined;
       let tpAmbSefaz: 1 | 2 | undefined;
       let protocoloAceitacaoSefaz: string | undefined;
+      let cStatAutorizacaoSefaz: string | undefined;
+      let recognizedDocument = false;
       const tagsMap: Record<string, any> = {};
       let obsText = '';
       let obsContRaw: any;
 
       // CTe Parser (cteProc = CTe + protCTe)
       if (parsedObj.CTe || parsedObj.cteProc) {
+        recognizedDocument = true;
         tipoDocumento = 'CTE';
         const cteNode = parsedObj.CTe?.infCte || parsedObj.cteProc?.CTe?.infCte || {};
         const protNode = parsedObj.cteProc?.protCTe?.infProt;
@@ -160,6 +171,7 @@ export class XMLParserService {
         produtoPredominante = cteNode.infCTeNorm?.infCarga?.proPred;
         tpAmbSefaz = cteNode.ide?.tpAmb ? Number(cteNode.ide.tpAmb) as 1 | 2 : undefined;
         protocoloAceitacaoSefaz = protNode?.nProt;
+        cStatAutorizacaoSefaz = protNode?.cStat !== undefined ? String(protNode.cStat) : undefined;
 
         tagsMap['vCarga'] = valorCarga;
         tagsMap['nCT'] = numeroDocumento;
@@ -175,6 +187,7 @@ export class XMLParserService {
       }
       // NFe Parser (nfeProc = NFe + protNFe)
       else if (parsedObj.NFe || parsedObj.nfeProc) {
+        recognizedDocument = true;
         tipoDocumento = 'NFE';
         const nfeNode = parsedObj.NFe?.infNFe || parsedObj.nfeProc?.NFe?.infNFe || {};
         const protNode = parsedObj.nfeProc?.protNFe?.infProt;
@@ -187,6 +200,7 @@ export class XMLParserService {
         serie = nfeNode.ide?.serie !== undefined ? String(nfeNode.ide.serie) : undefined;
         tpAmbSefaz = nfeNode.ide?.tpAmb ? Number(nfeNode.ide.tpAmb) as 1 | 2 : undefined;
         protocoloAceitacaoSefaz = protNode?.nProt;
+        cStatAutorizacaoSefaz = protNode?.cStat !== undefined ? String(protNode.cStat) : undefined;
 
         tagsMap['vProd'] = valorCarga;
         tagsMap['vNF'] = Number(nfeNode.total?.ICMSTot?.vNF || valorCarga);
@@ -199,6 +213,7 @@ export class XMLParserService {
       }
       // NFSe Parser (padrão ADN/DPS)
       else if (parsedObj.CompNfse || parsedObj.Nfse || parsedObj.DPS) {
+        recognizedDocument = true;
         tipoDocumento = 'NFSE';
         const nfseNode = parsedObj.CompNfse?.Nfse?.infNfse || parsedObj.Nfse?.infNfse || {};
         const dpsNode = parsedObj.DPS?.infDPS || {};
@@ -214,6 +229,7 @@ export class XMLParserService {
       }
       // MDFe Parser (mdfeProc = MDFe + protMDFe)
       else if (parsedObj.MDFe || parsedObj.mdfeProc) {
+        recognizedDocument = true;
         tipoDocumento = 'MDFE';
         const mdfeNode = parsedObj.MDFe?.infMDFe || parsedObj.mdfeProc?.MDFe?.infMDFe || {};
         const protNode = parsedObj.mdfeProc?.protMDFe?.infProt;
@@ -226,6 +242,7 @@ export class XMLParserService {
         ufDestino = mdfeNode.ide?.UFFim;
         tpAmbSefaz = mdfeNode.ide?.tpAmb ? Number(mdfeNode.ide.tpAmb) as 1 | 2 : undefined;
         protocoloAceitacaoSefaz = protNode?.nProt;
+        cStatAutorizacaoSefaz = protNode?.cStat !== undefined ? String(protNode.cStat) : undefined;
 
         tagsMap['nMDF'] = numeroDocumento;
         tagsMap['dhEmi'] = mdfeNode.ide?.dhEmi;
@@ -245,6 +262,10 @@ export class XMLParserService {
         }
 
         obsText = mdfeNode.infAdic?.infCpl || '';
+      }
+
+      if (!recognizedDocument) {
+        throw new Error('Documento fiscal não reconhecido.');
       }
 
       // Extrai variáveis de apólice embutidas no campo de observação (OBS) e no grupo obsCont
@@ -271,7 +292,8 @@ export class XMLParserService {
         ufDestino,
         produtoPredominante,
         tpAmbSefaz,
-        protocoloAceitacaoSefaz
+        protocoloAceitacaoSefaz,
+        cStatAutorizacaoSefaz
       };
     } catch (err: any) {
       throw new Error('Formato XML malformado ou desconhecido: ' + err.message);

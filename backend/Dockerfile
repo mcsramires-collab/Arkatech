@@ -1,11 +1,11 @@
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 COPY package*.json ./
 # Instala TODAS as dependências (não só as de produção): node-pg-migrate e ts-node são
@@ -15,12 +15,8 @@ COPY package*.json ./
 # fica um pouco maior; aceito como troca por não precisar de infraestrutura extra só para rodar
 # esses comandos ocasionais.
 #
-# Node 20 (não 18): a CLI do node-pg-migrate (via sua dependência yargs-parser) passou a exigir
-# Node.js 20+ em tempo de execução — com a imagem antiga (node:18-alpine), `npm run migrate:up`
-# falhava direto no Shell do Easypanel com "yargs parser supports a minimum Node.js version of
-# 20" antes mesmo de tentar conectar no banco. O resto do app (Express, pg, bcryptjs — nenhuma
-# dependência com binário nativo) roda igual em Node 18 ou 20; só essa ferramenta específica
-# forçou a atualização da imagem inteira.
+# Node 22: mantém o runtime de produção alinhado ao CI e às dependências atuais de migrations,
+# parsing de PDF/Excel e demais bibliotecas do backend.
 RUN npm install
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/src ./src
