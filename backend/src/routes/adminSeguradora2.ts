@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { createBackofficeInvitation } from '../services/backofficeInvitationService';
+import { createAndSendInsuredInvitation } from '../services/insuredInvitationService';
 import { createClientCredentials } from '../utils/clientCredentials';
 import { Broker, Tenant, DelegationException, DelegationExceptionLevel, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, PolicyCoverageValue } from '../types';
 import { aplicarAcaoDelegada } from '../services/delegatedActions';
@@ -38,7 +39,7 @@ router.get('/approval-requests', requirePermission('delegacao_corretora', 'ver')
   return res.json({ status: 'sucesso', requests: items });
 });
 
-router.post('/approval-requests/:id/resolve', requirePermission('delegacao_corretora', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/approval-requests/:id/resolve', requirePermission('delegacao_corretora', 'editar'), async (req: BackofficeAuthenticatedRequest, res) => {
   const { id } = req.params;
   const { status, resolved_by } = req.body;
 
@@ -74,7 +75,20 @@ router.post('/approval-requests/:id/resolve', requirePermission('delegacao_corre
         mensagem: `Solicitação aprovada, mas a ação não pôde ser aplicada: ${resultado.mensagem}`
       });
     }
-    resultadoAplicacao = resultado;
+    if (
+      request.action === 'CRIAR_CLIENTE' &&
+      resultado.cliente_novo &&
+      resultado.tenant
+    ) {
+      const convite = await createAndSendInsuredInvitation(
+        resultado.tenant,
+        request.payload.contato_nome,
+        request.payload.contato_email
+      );
+      resultadoAplicacao = { ...resultado, convite };
+    } else {
+      resultadoAplicacao = resultado;
+    }
   }
 
   request.status = status;
