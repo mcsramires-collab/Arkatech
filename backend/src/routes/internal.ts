@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore';
 import { createBackofficeInvitation } from '../services/backofficeInvitationService';
+import { createClientCredentials } from '../utils/clientCredentials';
 import { Tenant, Insurer, InternalUser } from '../types';
 
 const router = Router();
@@ -56,14 +57,16 @@ router.post('/insurers', async (req, res) => {
     });
   }
 
+  const integrationCredentials = await createClientCredentials('prod_seguradora');
+
   const newTenant: Tenant = {
     id: `tenant_seguradora_${cnpjLimpo}_${Date.now()}`,
     cnpj,
     razao_social,
     status: 'ATIVO',
     ambiente: 'producao',
-    client_id: `client_prod_seguradora_${cnpjLimpo}`,
-    client_secret_hash: `secret_${cnpjLimpo}`,
+    client_id: integrationCredentials.client_id,
+    client_secret_hash: integrationCredentials.client_secret_hash,
     role: 'SEGURADORA',
     token_duration_hours: 8,
     created_at: new Date().toISOString(),
