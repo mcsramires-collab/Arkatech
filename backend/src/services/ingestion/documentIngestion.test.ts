@@ -169,7 +169,12 @@ describe('DocumentIngestionService', () => {
       app_base_url: 'http://localhost:3000',
       files: [{
         filename: 'tms-1-retry.json',
-        xml_content: cteXml.replace('<nCT>123</nCT>', '<nCT>999</nCT>'),
+        xml_content: cteXml
+          .replace('<nCT>123</nCT>', '<nCT>999</nCT>')
+          .replace(
+            'CTe35123456789012345678901234567890123456789012',
+            'CTe35123456789012345678901234567890123456789013'
+          ),
         capture_mode: 'INTEGRATION',
         external_id: 'TOTVS:123'
       }],
