@@ -5,6 +5,7 @@ import { resolveRequiresApproval, criarApprovalRequest, aplicarAcaoDelegada } fr
 import { BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { requirePermission } from '../middleware/rbacMiddleware';
 import { createAndSendInsuredInvitation } from '../services/insuredInvitationService';
+import { normalizeRamo } from '../utils/ramo';
 
 const router = Router();
 
