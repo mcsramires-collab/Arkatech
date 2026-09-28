@@ -24,6 +24,22 @@ describe('TestLabRunnerService', () => {
     expect(plan.scenarios.some((scenario) => scenario.id === 'P0-ACCESS-INSURER-POLICY-ISOLATION')).toBe(true);
   });
 
+  test('modo EXHAUSTIVE expande a matriz além do pairwise padrão', () => {
+    const standard = TestLabRunnerService.plan({
+      mode: 'STANDARD',
+      suite_keys: ['p0-limits']
+    });
+    const exhaustive = TestLabRunnerService.plan({
+      mode: 'EXHAUSTIVE',
+      suite_keys: ['p0-limits']
+    });
+
+    expect(exhaustive.total_scenarios).toBeGreaterThan(standard.total_scenarios);
+    expect(
+      exhaustive.scenarios.filter((scenario) => scenario.id.startsWith('P0-LIMIT-MATRIX-')).length
+    ).toBe(48);
+  });
+
   test('executa suíte P0 de isolamento e não deixa estado sintético no dbStore', async () => {
     const tenantsBefore = JSON.stringify(dbStore.tenants);
     const policiesBefore = JSON.stringify(dbStore.policies);
