@@ -1,5 +1,5 @@
 import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
-import { createClientCredentials } from '../utils/clientCredentials';
+import { createClientCredentials, generateClientSecret, hashClientSecret } from '../utils/clientCredentials';
 import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -361,6 +361,42 @@ router.put('/tenants/me/session-duration', (req: BackofficeAuthenticatedRequest,
   dbStore.persist();
   return res.json({ status: 'sucesso', tenant: { ...tenant, token_duration_max_hours: teto } });
 });
+
+/**
+ * POST /admin/tenants/me/integration-credentials/rotate
+ * Autoatendimento de credencial M2M para Seguradora/Corretora autenticada.
+ */
+router.post(
+  '/tenants/me/integration-credentials/rotate',
+  async (req: BackofficeAuthenticatedRequest, res) => {
+    const ator = req.backoffice;
+    if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'CORRETORA') {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Esta ação é exclusiva da própria seguradora/corretora autenticada.'
+      });
+    }
+    if (!ator.tenant_id) {
+      return res.status(403).json({ status: 'erro', mensagem: 'Usuário sem empresa vinculada.' });
+    }
+
+    const tenant = dbStore.tenants.find((item) => item.id === ator.tenant_id);
+    if (!tenant) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Empresa não localizada.' });
+    }
+
+    const clientSecret = generateClientSecret();
+    tenant.client_secret_hash = await hashClientSecret(clientSecret);
+    dbStore.persist();
+
+    return res.json({
+      status: 'sucesso',
+      client_id: tenant.client_id,
+      client_secret: clientSecret,
+      aviso: 'Copie o client_secret agora. Ele não poderá ser consultado novamente.'
+    });
+  }
+);
 
 // --- 2. GESTÃO DE SEGURADORAS & CORRETORAS ---
 router.get('/insurers', (req, res) => res.json({ status: 'sucesso', insurers: dbStore.insurers }));
