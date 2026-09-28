@@ -7,6 +7,14 @@ import {
   FiscalSyncStatus
 } from '../types';
 
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+function nsuValue(value: string | undefined): bigint | undefined {
+  if (value === undefined) return undefined;
+  if (!/^\d+$/.test(value)) throw new Error('INVALID_NSU');
+  return BigInt(value);
+}
+
 export class FiscalSyncService {
   static report(
     connector: Connector,
@@ -21,10 +29,36 @@ export class FiscalSyncService {
       next_sync_after?: string;
     }
   ): FiscalSyncState {
-    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     let state = dbStore.fiscalSyncStates.find(
       (item) => item.connector_id === connector.id && item.provider === params.provider
     );
+
+    const currentUlt = nsuValue(state?.ult_nsu);
+    const currentMax = nsuValue(state?.max_nsu);
+    const incomingUlt = nsuValue(params.ult_nsu);
+    const incomingMax = nsuValue(params.max_nsu);
+
+    if (currentUlt !== undefined && incomingUlt !== undefined && incomingUlt < currentUlt) {
+      throw new Error('NSU_REGRESSION');
+    }
+    if (currentMax !== undefined && incomingMax !== undefined && incomingMax < currentMax) {
+      throw new Error('MAX_NSU_REGRESSION');
+    }
+    if (incomingUlt !== undefined && incomingMax !== undefined && incomingUlt > incomingMax) {
+      throw new Error('INVALID_NSU_RANGE');
+    }
+
+    const expectedStatusByCstat: Partial<Record<number, FiscalSyncStatus>> = {
+      137: 'NO_DOCUMENTS',
+      138: 'OK',
+      656: 'RATE_LIMITED'
+    };
+    const expected = params.cstat !== undefined ? expectedStatusByCstat[params.cstat] : undefined;
+    if (expected && params.status !== expected) {
+      throw new Error('SYNC_STATUS_CSTAT_MISMATCH');
+    }
 
     if (!state) {
       state = {
@@ -40,6 +74,13 @@ export class FiscalSyncService {
       dbStore.fiscalSyncStates.push(state);
     }
 
+    let nextSyncAfter = params.next_sync_after;
+    if (params.cstat === 137 || params.cstat === 656) {
+      const minNext = nowMs + ONE_HOUR_MS;
+      const informed = nextSyncAfter ? new Date(nextSyncAfter).getTime() : 0;
+      nextSyncAfter = new Date(Math.max(minNext, Number.isNaN(informed) ? 0 : informed)).toISOString();
+    }
+
     state.status = params.status;
     if (params.ult_nsu !== undefined) state.ult_nsu = params.ult_nsu;
     if (params.max_nsu !== undefined) state.max_nsu = params.max_nsu;
@@ -47,7 +88,7 @@ export class FiscalSyncService {
     if (params.message !== undefined) state.last_message = params.message;
     state.last_document_count = Math.max(0, params.document_count ?? 0);
     state.last_sync_at = now;
-    state.next_sync_after = params.next_sync_after;
+    state.next_sync_after = nextSyncAfter;
     state.updated_at = now;
 
     connector.last_sync_at = now;
