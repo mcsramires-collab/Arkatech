@@ -31,7 +31,7 @@ export class CancelamentoService {
   public static processar(params: {
     averbacaoAnterior: Averbacao;
     xmlEvento: string;
-    requisitante: 'SEGURADO' | 'SEGURADORA';
+    requisitante: 'SEGURADO' | 'SEGURADORA' | 'SEFAZ';
   }): CancelamentoResultDTO {
     const { averbacaoAnterior, xmlEvento, requisitante } = params;
 
