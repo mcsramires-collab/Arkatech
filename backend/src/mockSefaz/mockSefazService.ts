@@ -1,4 +1,5 @@
 import zlib from 'zlib';
+import { normalizeCnpj } from '../utils/cnpj';
 import { MOCK_DOCUMENTS, MockDfeDocument, MockProvider } from './fixtures';
 
 export interface MockDistributionRequest {
@@ -48,7 +49,7 @@ export class MockSefazService {
   }
 
   private key(provider: MockProvider, cnpj: string): string {
-    return `${provider}:${cnpj.replace(/\D/g, '')}`;
+    return `${provider}:${normalizeCnpj(cnpj)}`;
   }
 
   private buildXml(params: {
@@ -79,7 +80,7 @@ export class MockSefazService {
   }
 
   distribute(input: MockDistributionRequest, now = Date.now()): MockDistributionResponse {
-    const cnpj = input.cnpj.replace(/\D/g, '');
+    const cnpj = normalizeCnpj(input.cnpj);
     const docs = MOCK_DOCUMENTS[input.provider] ?? [];
     const maxNsuNumber = docs.reduce((max, doc) => Math.max(max, doc.nsu), 0);
     const maxNSU = formatNsu(maxNsuNumber);
