@@ -5,6 +5,7 @@ import { normalizeAlphanumeric } from '../utils/cnpj';
 import { CancelamentoService } from './cancelamento';
 import { dbStore } from './dbStore';
 import { RawDocumentService } from './rawDocumentService';
+import { NotificationService } from './notificationService';
 import { XMLParserService } from './xmlParser';
 
 export interface FiscalEventInput {
@@ -178,6 +179,22 @@ export class FiscalEventService {
 
     dbStore.fiscalEvents.unshift(record);
     dbStore.persist();
+
+    if (record.status === 'PROCESSADO' && cancelledIds.length > 0) {
+      NotificationService.create({
+        tenant_id: connector.tenant_id,
+        type: 'AVERBACAO_CANCELADA',
+        severity: 'WARNING',
+        title: 'Averbação cancelada pelo SEFAZ',
+        message: record.mensagem || 'Um evento fiscal cancelou averbações vinculadas ao documento.',
+        context: {
+          fiscal_event_id: record.id,
+          provider,
+          chave_documento: record.chave_documento,
+          averbacao_ids: cancelledIds
+        }
+      });
+    }
 
     return {
       fiscal_event_id: record.id,
