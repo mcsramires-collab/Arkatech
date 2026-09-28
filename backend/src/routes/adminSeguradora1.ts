@@ -332,6 +332,77 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
 });
 
 /**
+ * PUT /admin/insurer-clients/:tenantId
+ * Edição cadastral do segurado pela seguradora responsável pela carteira.
+ *
+ * Não permite trocar CNPJ, status, ambiente, credenciais nem campos internos. A autorização é
+ * feita pelo vínculo Policy.tenant_id + Policy.insurer_id, porque Tenant não guarda insurer_id.
+ */
+router.put('/insurer-clients/:tenantId', requirePermission('clientes', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
+  const { tenantId } = req.params;
+  const tenant = dbStore.tenants.find((t) => t.id === tenantId);
+  if (!tenant) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Cliente não encontrado.' });
+  }
+
+  const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
+  if (!insurer_id) return;
+
+  const pertence = dbStore.policies.some(
+    (p) => p.tenant_id === tenantId && p.insurer_id === insurer_id
+  );
+  if (!pertence) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Este cliente não pertence à carteira desta seguradora.'
+    });
+  }
+
+  const {
+    razao_social,
+    nome_fantasia,
+    tipo_operacao,
+    contato_nome,
+    contato_email,
+    contato_telefone_fixo,
+    contato_celular,
+    logradouro,
+    numero_endereco,
+    bairro,
+    cidade,
+    uf,
+    cep
+  } = req.body;
+
+  if (tipo_operacao !== undefined) {
+    const normalizedTipo = String(tipo_operacao).toUpperCase();
+    if (!['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'].includes(normalizedTipo)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+      });
+    }
+    tenant.tipo_operacao = normalizedTipo as Tenant['tipo_operacao'];
+  }
+
+  if (razao_social !== undefined) tenant.razao_social = String(razao_social);
+  if (nome_fantasia !== undefined) tenant.nome_fantasia = String(nome_fantasia);
+  if (contato_nome !== undefined) tenant.contato_nome = String(contato_nome);
+  if (contato_email !== undefined) tenant.contato_email = String(contato_email);
+  if (contato_telefone_fixo !== undefined) tenant.contato_telefone_fixo = String(contato_telefone_fixo);
+  if (contato_celular !== undefined) tenant.contato_celular = String(contato_celular);
+  if (logradouro !== undefined) tenant.logradouro = String(logradouro);
+  if (numero_endereco !== undefined) tenant.numero_endereco = String(numero_endereco);
+  if (bairro !== undefined) tenant.bairro = String(bairro);
+  if (cidade !== undefined) tenant.cidade = String(cidade);
+  if (uf !== undefined) tenant.uf = String(uf);
+  if (cep !== undefined) tenant.cep = String(cep);
+
+  dbStore.persist();
+  return res.json({ status: 'sucesso', tenant });
+});
+
+/**
  * POST /admin/insurer-clients/:tenantId/reenviar-convite
  * Gera um novo convite (Termo de Uso + primeira senha) e tenta reenviar o e-mail — para quando o
  * primeiro convite expirou (30 dias), foi perdido/caiu em spam, ou o e-mail de contato mudou.
