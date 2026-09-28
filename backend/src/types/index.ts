@@ -3,6 +3,16 @@ export type TenantStatus = 'ATIVO' | 'INATIVO';
 export type UserRole = 'ADMIN' | 'SEGURADORA' | 'CORRETORA' | 'TRANSPORTADOR';
 export type RamoApolice = 'RCTRC' | 'RCDC' | 'RCV';
 export type TipoDocumento = 'CTE' | 'NFE' | 'NFSE' | 'MDFE';
+export type DocumentIngestionSource = 'API' | 'PORTAL' | 'SEFAZ' | 'TMS' | 'WHATSAPP' | 'INTERNAL';
+export type FiscalDocumentStatus =
+  | 'RECEBIDO'
+  | 'PROCESSANDO'
+  | 'AVERBADO'
+  | 'PENDENTE'
+  | 'RECUSADO'
+  | 'IGNORADO'
+  | 'DUPLICADO'
+  | 'ERRO';
 export type InternalUserRole = 'ADM' | 'AGENTE';
 // 'TRANSPORTADOR' — item 6.6.2 do relatório técnico de 20/09 (compartilhado pelo usuário):
 // segurado que é o transportador de uma NF-e sem ser quem a emite. Extraído do grupo
@@ -210,6 +220,37 @@ export interface RawXMLStore {
   hash_sha256: string;
   encrypted_aes256: boolean;
   created_at: string;
+}
+
+/**
+ * Registro canônico de todo documento fiscal recebido pela Arckatech, independentemente da origem.
+ * Ele existe ANTES da averbação: um documento pode ser recebido e depois ser averbado, recusado,
+ * ficar pendente, ser identificado como duplicado ou falhar no processamento.
+ *
+ * O conteúdo bruto continua armazenado em RawXMLStore/Averbacao; aqui ficam metadados operacionais
+ * para rastreabilidade, conector SEFAZ e futuros canais (TMS/WhatsApp/PDF/XLS/TXT).
+ */
+export interface FiscalDocument {
+  id: string;
+  tenant_id: string;
+  source: DocumentIngestionSource;
+  status: FiscalDocumentStatus;
+  content_hash_sha256: string;
+  original_filename?: string;
+  tipo_documento?: TipoDocumento;
+  chave_documento?: string;
+  numero_documento?: string;
+  serie_documento?: string;
+  cnpj_emissor?: string;
+  nsu?: string;
+  connector_id?: string;
+  external_id?: string;
+  policy_ids_attempted: string[];
+  averbacao_ids: string[];
+  codigo_resultado?: string;
+  mensagem_resultado?: string;
+  received_at: string;
+  processed_at?: string;
 }
 
 export interface Averbacao {
