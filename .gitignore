@@ -21,3 +21,6 @@ ARCKATECH.zip
 .vscode/
 .idea/
 *.log
+
+# Mock SEFAZ development certificates (private keys / PFX)
+backend/.mock-certs/
