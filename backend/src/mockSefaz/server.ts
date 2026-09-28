@@ -1,4 +1,7 @@
 import express from 'express';
+import fs from 'fs';
+import https from 'https';
+import { TLSSocket } from 'tls';
 import { MockSefazService } from './mockSefazService';
 import { MockProvider } from './fixtures';
 
@@ -51,7 +54,15 @@ app.post('/distribution/:provider', (req, res) => {
   // No modo rápido, o header simula a identidade do certificado do cliente. Quando o Mock
   // for executado atrás de mTLS, o proxy/agente poderá preencher a mesma identidade a partir
   // do certificado apresentado, sem alterar o contrato de distribuição.
-  const certificateCnpj = String(req.headers['x-mock-certificate-cnpj'] || '').replace(/\D/g, '');
+  const tlsSocket = req.socket as TLSSocket;
+  const peerCertificate =
+    typeof tlsSocket.getPeerCertificate === 'function' ? tlsSocket.getPeerCertificate() : undefined;
+  const certificateCnpjFromTls = peerCertificate?.subject?.CN
+    ? String(peerCertificate.subject.CN).replace(/\D/g, '')
+    : '';
+  const certificateCnpjFromHeader = String(req.headers['x-mock-certificate-cnpj'] || '').replace(/\D/g, '');
+  const certificateCnpj = certificateCnpjFromTls || certificateCnpjFromHeader;
+
   if (certificateCnpj && certificateCnpj !== cnpj.replace(/\D/g, '')) {
     return res.status(403).type('application/xml').send(
       '<?xml version="1.0"?><retDistDFeInt><cStat>280</cStat><xMotivo>Certificado nao pertence ao CNPJ consultado</xMotivo></retDistDFeInt>'
@@ -79,7 +90,30 @@ app.post('/admin/reset', (_req, res) => {
   return res.json({ status: 'sucesso' });
 });
 
-app.listen(port, () => {
-  console.log(`ARCKATECH Mock SEFAZ rodando em http://localhost:${port}`);
-  console.log('Providers: NFE, CTE, MDFE');
-});
+const tlsKey = process.env.MOCK_SEFAZ_TLS_KEY;
+const tlsCert = process.env.MOCK_SEFAZ_TLS_CERT;
+const tlsCa = process.env.MOCK_SEFAZ_TLS_CA;
+
+if (tlsKey && tlsCert && tlsCa) {
+  https
+    .createServer(
+      {
+        key: fs.readFileSync(tlsKey),
+        cert: fs.readFileSync(tlsCert),
+        ca: fs.readFileSync(tlsCa),
+        requestCert: true,
+        rejectUnauthorized: true
+      },
+      app
+    )
+    .listen(port, () => {
+      console.log(`ARCKATECH Mock SEFAZ mTLS rodando em https://localhost:${port}`);
+      console.log('Providers: NFE, CTE, MDFE');
+    });
+} else {
+  app.listen(port, () => {
+    console.log(`ARCKATECH Mock SEFAZ rodando em http://localhost:${port}`);
+    console.log('mTLS desativado; use x-mock-certificate-cnpj para simular a identidade do certificado.');
+    console.log('Providers: NFE, CTE, MDFE');
+  });
+}
