@@ -17,6 +17,17 @@ Ambiente local para testar o fluxo de distribuição de DF-e sem depender de um 
 
 O Mock usa sempre `tpAmb=2` (homologação).
 
+## Gerar certificados fictícios (opcional, para mTLS)
+
+Requer `openssl` disponível no PATH:
+
+```bash
+cd backend
+npm run mock:certs
+```
+
+Arquivos gerados em `backend/.mock-certs/` e ignorados pelo Git. O PFX cliente é apenas de desenvolvimento e não é ICP-Brasil.
+
 ## Subir o Mock
 
 ```bash
