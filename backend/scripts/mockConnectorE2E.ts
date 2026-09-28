@@ -3,6 +3,7 @@ import http from 'http';
 import https from 'https';
 import zlib from 'zlib';
 import { XMLParser } from 'fast-xml-parser';
+import { normalizeCnpj } from '../src/utils/cnpj';
 
 type Provider = 'NFE' | 'CTE' | 'MDFE';
 
@@ -96,7 +97,7 @@ async function main() {
   const apiUrl = required('ARCKATECH_API_URL').replace(/\/$/, '');
   const connectorToken = required('CONNECTOR_TOKEN');
   const mockUrl = (process.env.MOCK_SEFAZ_URL || 'http://localhost:3400').replace(/\/$/, '');
-  const cnpj = (process.env.MOCK_CNPJ || '12345678000190').replace(/\D/g, '');
+  const cnpj = normalizeCnpj(process.env.MOCK_CNPJ || '12345678000190');
 
   const pfxPath = process.env.MOCK_CLIENT_PFX_PATH;
   const caPath = process.env.MOCK_SEFAZ_CA_PATH;
