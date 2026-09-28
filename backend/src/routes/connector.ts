@@ -1,3 +1,4 @@
+import { normalizeCnpj, isCnpjFormatValid, sameCnpj } from '../utils/cnpj';
 import { Router, Response } from 'express';
 import {
   connectorAuthMiddleware,
@@ -64,9 +65,33 @@ router.put(
       return res.status(400).json({ status: 'erro', mensagem: 'type deve ser A1 ou A3.' });
     }
 
+    const normalizedCertificateCnpj = cnpj ? normalizeCnpj(cnpj) : undefined;
+    if (normalizedCertificateCnpj && !isCnpjFormatValid(normalizedCertificateCnpj)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'CNPJ do certificado inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+      });
+    }
+
+    if (normalizedCertificateCnpj) {
+      const tenant = dbStore.tenants.find((item) => item.id === connector.tenant_id);
+      const additional = dbStore.tenantCnpjsAdicionais.some(
+        (item) =>
+          item.tenant_id === connector.tenant_id &&
+          item.status === 'ATIVO' &&
+          sameCnpj(item.cnpj, normalizedCertificateCnpj)
+      );
+      if (!tenant || (!sameCnpj(tenant.cnpj, normalizedCertificateCnpj) && !additional)) {
+        return res.status(403).json({
+          status: 'erro',
+          mensagem: 'O certificado informado não pertence ao CNPJ principal nem a um CNPJ adicional/filial ativo deste cadastro.'
+        });
+      }
+    }
+
     const updated = ConnectorService.updateCertificateStatus(connector, {
       status: normalizedStatus,
-      cnpj: cnpj ? String(cnpj).replace(/\D/g, '') : undefined,
+      cnpj: normalizedCertificateCnpj,
       type: normalizedType as 'A1' | 'A3' | undefined,
       issuer: issuer ? String(issuer) : undefined,
       serial_number_hash: serial_number_hash ? String(serial_number_hash) : undefined,
