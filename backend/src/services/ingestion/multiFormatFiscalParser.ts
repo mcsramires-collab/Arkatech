@@ -151,14 +151,16 @@ function splitDelimitedLine(line: string, delimiter: string): string[] {
   return values;
 }
 
-function detectDelimiter(firstLine: string): string {
+function detectDelimiter(firstLine: string): string | undefined {
   const candidates = [';', '\t', '|', ','];
-  return candidates
+  const best = candidates
     .map((delimiter) => ({
       delimiter,
       count: splitDelimitedLine(firstLine, delimiter).length
     }))
-    .sort((a, b) => b.count - a.count)[0]?.delimiter ?? ';';
+    .sort((a, b) => b.count - a.count)[0];
+
+  return best && best.count > 1 ? best.delimiter : undefined;
 }
 
 function delimitedRows(text: string): Row[] {
@@ -169,6 +171,7 @@ function delimitedRows(text: string): Row[] {
 
   if (lines.length < 2) return [];
   const delimiter = detectDelimiter(lines[0]!);
+  if (!delimiter) return [];
   const headers = splitDelimitedLine(lines[0]!, delimiter);
 
   return lines.slice(1).map((line) => {
