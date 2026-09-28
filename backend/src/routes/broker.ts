@@ -82,6 +82,25 @@ function pertenceACarteira(policy: Policy, brokerId: string): boolean {
   return policy.broker_id === brokerId || policy.co_broker_id === brokerId || policy.assessoria_id === brokerId;
 }
 
+/**
+ * Relação explícita parceiro ↔ seguradora. Pode nascer de uma apólice existente ou da matriz de
+ * delegação configurada pela seguradora antes do primeiro cadastro. Nunca confiar apenas no
+ * insurer_id recebido do frontend.
+ */
+function brokerTemVinculoComSeguradora(brokerId: string, insurerId: string): boolean {
+  return (
+    dbStore.policies.some(
+      (policy) => policy.insurer_id === insurerId && pertenceACarteira(policy, brokerId)
+    ) ||
+    dbStore.delegationPermissions.some(
+      (permission) => permission.broker_id === brokerId && permission.insurer_id === insurerId
+    ) ||
+    dbStore.delegationExceptions.some(
+      (exception) => exception.broker_id === brokerId && exception.insurer_id === insurerId
+    )
+  );
+}
+
 // --- Seguradoras vinculadas à corretora / assessoria / co-corretora ---
 // A relação pode existir porque o parceiro já está em uma apólice OU porque a seguradora
 // configurou a matriz de delegação antes da primeira ação. Isso permite ao frontend escolher
@@ -246,6 +265,13 @@ router.post(
     const broker_id = resolveBrokerId(req, res, req.body.broker_id);
     if (!broker_id) return;
 
+    if (insurer_id && !brokerTemVinculoComSeguradora(broker_id, insurer_id)) {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Esta seguradora não está vinculada à sua empresa.'
+      });
+    }
+
     if (!insurer_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
       return res.status(400).json({
         status: 'erro',
@@ -366,7 +392,22 @@ function responderAcaoDelegada(
 // --- Editar Cliente (segurado) já existente na carteira ---
 router.put('/clients/:tenantId', requirePermission('clientes', 'editar'), (req: BackofficeAuthenticatedRequest, res) => {
   const { tenantId } = req.params;
-  const { insurer_id, razao_social, contato_nome, contato_email, contato_telefone_fixo, contato_celular } = req.body;
+  const {
+    insurer_id,
+    razao_social,
+    nome_fantasia,
+    tipo_operacao,
+    contato_nome,
+    contato_email,
+    contato_telefone_fixo,
+    contato_celular,
+    logradouro,
+    numero_endereco,
+    bairro,
+    cidade,
+    uf,
+    cep
+  } = req.body;
   const broker_id = resolveBrokerId(req, res, req.body.broker_id);
   if (!broker_id) return;
   if (!insurer_id) {
@@ -379,7 +420,10 @@ router.put('/clients/:tenantId', requirePermission('clientes', 'editar'), (req: 
   // fechado antes do Portal da Corretora existir de verdade (mesmo padrão de ownership check já
   // usado em PUT /policies/:id, POST /coverages e PUT /coverages/:id logo abaixo).
   const pertenceAEstaCarteira = dbStore.policies.some(
-    (p) => p.tenant_id === tenantId && pertenceACarteira(p, broker_id)
+    (p) =>
+      p.tenant_id === tenantId &&
+      p.insurer_id === insurer_id &&
+      pertenceACarteira(p, broker_id)
   );
   if (!pertenceAEstaCarteira) {
     return res.status(403).json({ status: 'erro', mensagem: 'Este segurado não pertence à carteira desta corretora.' });
@@ -388,10 +432,18 @@ router.put('/clients/:tenantId', requirePermission('clientes', 'editar'), (req: 
   return responderAcaoDelegada(res, insurer_id, broker_id, tenantId, 'EDITAR_CLIENTE', {
     tenant_id: tenantId,
     razao_social,
+    nome_fantasia,
+    tipo_operacao,
     contato_nome,
     contato_email,
     contato_telefone_fixo,
-    contato_celular
+    contato_celular,
+    logradouro,
+    numero_endereco,
+    bairro,
+    cidade,
+    uf,
+    cep
   });
 });
 
@@ -412,6 +464,13 @@ router.post('/policies', requirePermission('apolices', 'editar'), (req: Backoffi
   } = req.body;
   const broker_id = resolveBrokerId(req, res, req.body.broker_id);
   if (!broker_id) return;
+
+  if (insurer_id && !brokerTemVinculoComSeguradora(broker_id, insurer_id)) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'Esta seguradora não está vinculada à sua empresa.'
+    });
+  }
 
   if (!insurer_id || !tenant_id || !ramo || !numero_apolice) {
     return res.status(400).json({
@@ -456,6 +515,12 @@ router.put('/policies/:id', requirePermission('apolices', 'editar'), (req: Backo
   if (!pertenceACarteira(policy, broker_id)) {
     return res.status(403).json({ status: 'erro', mensagem: 'Esta apólice não pertence à carteira desta corretora.' });
   }
+  if (policy.insurer_id !== insurer_id) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'A seguradora informada não corresponde à seguradora desta apólice.'
+    });
+  }
 
   return responderAcaoDelegada(res, insurer_id, broker_id, policy.tenant_id, 'EDITAR_APOLICE', {
     policy_id: id,
@@ -487,6 +552,12 @@ router.post('/coverages', requirePermission('coberturas', 'editar'), (req: Backo
   if (!pertenceACarteira(policy, broker_id)) {
     return res.status(403).json({ status: 'erro', mensagem: 'Esta cobertura não pertence à carteira desta corretora.' });
   }
+  if (policy.insurer_id !== insurer_id) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'A seguradora informada não corresponde à seguradora desta apólice.'
+    });
+  }
 
   return responderAcaoDelegada(res, insurer_id, broker_id, policy.tenant_id, 'CRIAR_COBERTURA_ADICIONAL', {
     policy_id,
@@ -513,6 +584,12 @@ router.put('/coverages/:id', requirePermission('coberturas', 'editar'), (req: Ba
   const policy = dbStore.policies.find((p) => p.id === coverageValue.policy_id);
   if (!policy || !pertenceACarteira(policy, broker_id)) {
     return res.status(403).json({ status: 'erro', mensagem: 'Esta cobertura não pertence à carteira desta corretora.' });
+  }
+  if (policy.insurer_id !== insurer_id) {
+    return res.status(403).json({
+      status: 'erro',
+      mensagem: 'A seguradora informada não corresponde à seguradora desta apólice.'
+    });
   }
 
   return responderAcaoDelegada(res, insurer_id, broker_id, policy.tenant_id, 'EDITAR_COBERTURA_ADICIONAL', {
