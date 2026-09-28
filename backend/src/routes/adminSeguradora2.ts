@@ -626,6 +626,95 @@ function concederOuRevogarAcessoBroker(
   return { ok: true };
 }
 
+router.post(
+  '/brokers/register',
+  requirePermission('clientes', 'editar'),
+  (req: BackofficeAuthenticatedRequest, res) => {
+    const ator = req.backoffice;
+    if (ator?.actor_type !== 'SEGURADORA' && ator?.actor_type !== 'INTERNAL_USER') {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Somente seguradora ou administração Arckatech podem registrar parceiros.'
+      });
+    }
+
+    const {
+      cnpj,
+      partner_type,
+      razao_social,
+      nome_fantasia,
+      corretor_responsavel_nome,
+      corretor_responsavel_email,
+      corretor_responsavel_telefone_fixo,
+      corretor_responsavel_celular
+    } = req.body;
+
+    if (!cnpj || !razao_social) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'cnpj e razao_social são obrigatórios.'
+      });
+    }
+
+    const cnpjLimpo = normalizeCnpj(cnpj);
+    if (!isCnpjFormatValid(cnpjLimpo)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
+      });
+    }
+
+    const existente = dbStore.brokers.find(
+      (item) => normalizeCnpj(item.cnpj) === cnpjLimpo
+    );
+    if (existente) {
+      return res.status(409).json({
+        status: 'erro',
+        mensagem: 'Já existe uma corretora/assessoria cadastrada com este CNPJ.',
+        broker_id: existente.id,
+        broker: existente
+      });
+    }
+
+    const partnerTypes = ['CORRETORA', 'ASSESSORIA', 'AMBOS'] as const;
+    const partnerType = String(partner_type || 'CORRETORA').toUpperCase() as
+      (typeof partnerTypes)[number];
+    if (!partnerTypes.includes(partnerType)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'partner_type deve ser CORRETORA, ASSESSORIA ou AMBOS.'
+      });
+    }
+
+    const broker: Broker = {
+      id: `brk_${cnpjLimpo}_${Date.now()}`,
+      cnpj,
+      partner_type: partnerType,
+      nome: razao_social,
+      razao_social,
+      nome_fantasia,
+      corretor_responsavel_nome,
+      corretor_responsavel_email,
+      corretor_responsavel_telefone_fixo,
+      corretor_responsavel_celular,
+      created_at: new Date().toISOString()
+    };
+
+    dbStore.brokers.push(broker);
+    dbStore.persist();
+
+    return res.json({
+      status: 'sucesso',
+      broker,
+      portal_access: {
+        enabled: false,
+        instrucao:
+          'Vincule o parceiro a uma apólice e então conceda acesso em PUT /admin/brokers/:id/portal-access.'
+      }
+    });
+  }
+);
+
 router.post('/brokers', async (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const {
