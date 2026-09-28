@@ -215,6 +215,7 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
     contato_email,
     contato_telefone_fixo,
     contato_celular,
+    tipo_operacao,
     logradouro,
     numero_endereco,
     bairro,
@@ -229,6 +230,16 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   } = req.body;
   const insurer_id = resolveInsurerId(req, res, req.body.insurer_id);
   if (!insurer_id) return;
+
+  const tiposOperacao = ['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'] as const;
+  const tipoOperacao = String(tipo_operacao || 'TRANSPORTADOR').toUpperCase() as
+    (typeof tiposOperacao)[number];
+  if (!tiposOperacao.includes(tipoOperacao)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+    });
+  }
 
   if (!broker_id || !cnpj || !razao_social || !ramo || !numero_apolice) {
     return res.status(400).json({
@@ -284,6 +295,7 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
       client_id: `client_prod_${cnpjLimpo}`,
       client_secret_hash: `secret_${cnpjLimpo}`,
       role: 'TRANSPORTADOR',
+      tipo_operacao: tipoOperacao,
       token_duration_hours: 8,
       created_at: new Date().toISOString(),
       contato_nome,
