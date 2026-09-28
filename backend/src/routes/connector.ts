@@ -32,13 +32,53 @@ router.post(
       return res.status(400).json({ status: 'erro', mensagem: 'sefaz_status inválido.' });
     }
 
+    const previousSefazStatus = connector.sefaz_status;
+    const normalizedSefazStatus = sefaz_status
+      ? (String(sefaz_status).toUpperCase() as ConnectorSefazStatus)
+      : undefined;
+
     const updated = ConnectorService.heartbeat(connector, {
       version: version ? String(version) : undefined,
-      sefaz_status: sefaz_status
-        ? (String(sefaz_status).toUpperCase() as ConnectorSefazStatus)
-        : undefined,
+      sefaz_status: normalizedSefazStatus,
       last_sync_at: last_sync_at ? String(last_sync_at) : undefined
     });
+
+    if (normalizedSefazStatus && previousSefazStatus !== normalizedSefazStatus) {
+      if (normalizedSefazStatus === 'DEGRADED' || normalizedSefazStatus === 'OFFLINE') {
+        NotificationService.create({
+          tenant_id: connector.tenant_id,
+          type: 'SINCRONIZACAO_SEFAZ',
+          severity: normalizedSefazStatus === 'OFFLINE' ? 'ERROR' : 'WARNING',
+          title:
+            normalizedSefazStatus === 'OFFLINE'
+              ? 'SEFAZ indisponível para o Connector'
+              : 'Comunicação com SEFAZ degradada',
+          message:
+            normalizedSefazStatus === 'OFFLINE'
+              ? 'O Connector informou indisponibilidade de comunicação com o SEFAZ. A captura automática ficará interrompida até a recuperação.'
+              : 'O Connector informou instabilidade na comunicação com o SEFAZ.',
+          context: {
+            connector_id: connector.id,
+            sefaz_status: normalizedSefazStatus
+          }
+        });
+      } else if (
+        normalizedSefazStatus === 'ONLINE' &&
+        (previousSefazStatus === 'DEGRADED' || previousSefazStatus === 'OFFLINE')
+      ) {
+        NotificationService.create({
+          tenant_id: connector.tenant_id,
+          type: 'SINCRONIZACAO_SEFAZ',
+          severity: 'INFO',
+          title: 'Comunicação com SEFAZ normalizada',
+          message: 'O Connector voltou a informar comunicação normal com o SEFAZ.',
+          context: {
+            connector_id: connector.id,
+            sefaz_status: normalizedSefazStatus
+          }
+        });
+      }
+    }
 
     return res.json({ status: 'sucesso', connector: ConnectorService.publicView(updated) });
   }
