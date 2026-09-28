@@ -281,6 +281,26 @@ export interface Connector {
   revoked_at?: string;
 }
 
+export type FiscalSyncProvider = 'NFE' | 'CTE' | 'MDFE';
+export type FiscalSyncStatus = 'NEVER_SYNCED' | 'OK' | 'NO_DOCUMENTS' | 'RATE_LIMITED' | 'ERROR';
+
+export interface FiscalSyncState {
+  id: string;
+  tenant_id: string;
+  connector_id: string;
+  provider: FiscalSyncProvider;
+  status: FiscalSyncStatus;
+  ult_nsu?: string;
+  max_nsu?: string;
+  last_cstat?: number;
+  last_message?: string;
+  last_document_count: number;
+  last_sync_at?: string;
+  next_sync_after?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Averbacao {
   id: string;
   /** Ausente em registros status='ERRO' — só é gerado quando a averbação é aceita. */
