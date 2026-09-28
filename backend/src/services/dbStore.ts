@@ -14,6 +14,7 @@ import {
   RawXMLStore,
   FiscalDocument,
   Connector,
+  FiscalSyncState,
   RecoverySession,
   BatchTestRun,
   InternalUser,
@@ -52,6 +53,7 @@ class DBStore {
   public rawXmlStore: RawXMLStore[] = [];
   public fiscalDocuments: FiscalDocument[] = [];
   public connectors: Connector[] = [];
+  public fiscalSyncStates: FiscalSyncState[] = [];
   public recoverySessions: RecoverySession[] = [];
   public batchTestRuns: BatchTestRun[] = [];
   // Fase 1 — novas entidades (visão empresa, RBAC, coberturas, delegação, ativação)
@@ -118,6 +120,7 @@ class DBStore {
         this.rawXmlStore = parsed.rawXmlStore || [];
         this.fiscalDocuments = parsed.fiscalDocuments || [];
         this.connectors = parsed.connectors || [];
+        this.fiscalSyncStates = parsed.fiscalSyncStates || [];
         this.recoverySessions = parsed.recoverySessions || [];
         this.batchTestRuns = parsed.batchTestRuns || [];
         this.internalUsers = parsed.internalUsers || [];
@@ -201,6 +204,7 @@ class DBStore {
             rawXmlStore: this.rawXmlStore,
             fiscalDocuments: this.fiscalDocuments,
             connectors: this.connectors,
+            fiscalSyncStates: this.fiscalSyncStates,
             recoverySessions: this.recoverySessions,
             batchTestRuns: this.batchTestRuns,
             internalUsers: this.internalUsers,
