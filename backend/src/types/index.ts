@@ -479,6 +479,7 @@ export interface TestLabScenarioResult {
   title: string;
   description: string;
   tags: string[];
+  covers_flag_keys: string[];
   status: TestLabScenarioStatus;
   duration_ms: number;
   assertions: TestLabAssertionResult[];
