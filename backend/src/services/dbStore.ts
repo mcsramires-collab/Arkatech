@@ -188,6 +188,67 @@ class DBStore {
   private mirrorDebounceTimer: NodeJS.Timeout | null = null;
   private static readonly MIRROR_DEBOUNCE_MS = 3000;
 
+  // Laboratório de Testes: cenários sintéticos não podem vazar para data_store/Postgres.
+  // O runner abre uma janela efêmera, altera somente memória e restaura o snapshot ao final.
+  private testLabEphemeralDepth = 0;
+
+  public async runTestLabEphemeral<T>(fn: () => Promise<T> | T): Promise<T> {
+    const snapshot = {
+      tenants: structuredClone(this.tenants),
+      insurers: structuredClone(this.insurers),
+      brokers: structuredClone(this.brokers),
+      policies: structuredClone(this.policies),
+      policyRules: structuredClone(this.policyRules),
+      documentRules: structuredClone(this.documentRules),
+      averbacoes: structuredClone(this.averbacoes),
+      rawXmlStore: structuredClone(this.rawXmlStore),
+      fiscalDocuments: structuredClone(this.fiscalDocuments),
+      connectors: structuredClone(this.connectors),
+      fiscalSyncStates: structuredClone(this.fiscalSyncStates),
+      fiscalEvents: structuredClone(this.fiscalEvents),
+      recoverySessions: structuredClone(this.recoverySessions),
+      insurerCoverages: structuredClone(this.insurerCoverages),
+      policyTitularityRules: structuredClone(this.policyTitularityRules),
+      policyBypassRules: structuredClone(this.policyBypassRules),
+      policyBusinessSettings: structuredClone(this.policyBusinessSettings),
+      policySublimites: structuredClone(this.policySublimites),
+      policyCoverageValues: structuredClone(this.policyCoverageValues),
+      liberationCodes: structuredClone(this.liberationCodes),
+      operationalNotifications: structuredClone(this.operationalNotifications),
+      whatsappMessages: structuredClone(this.whatsappMessages)
+    };
+
+    this.testLabEphemeralDepth += 1;
+    try {
+      return await fn();
+    } finally {
+      this.tenants = snapshot.tenants;
+      this.insurers = snapshot.insurers;
+      this.brokers = snapshot.brokers;
+      this.policies = snapshot.policies;
+      this.policyRules = snapshot.policyRules;
+      this.documentRules = snapshot.documentRules;
+      this.averbacoes = snapshot.averbacoes;
+      this.rawXmlStore = snapshot.rawXmlStore;
+      this.fiscalDocuments = snapshot.fiscalDocuments;
+      this.connectors = snapshot.connectors;
+      this.fiscalSyncStates = snapshot.fiscalSyncStates;
+      this.fiscalEvents = snapshot.fiscalEvents;
+      this.recoverySessions = snapshot.recoverySessions;
+      this.insurerCoverages = snapshot.insurerCoverages;
+      this.policyTitularityRules = snapshot.policyTitularityRules;
+      this.policyBypassRules = snapshot.policyBypassRules;
+      this.policyBusinessSettings = snapshot.policyBusinessSettings;
+      this.policySublimites = snapshot.policySublimites;
+      this.policyCoverageValues = snapshot.policyCoverageValues;
+      this.liberationCodes = snapshot.liberationCodes;
+      this.operationalNotifications = snapshot.operationalNotifications;
+      this.whatsappMessages = snapshot.whatsappMessages;
+      this.testLabEphemeralDepth = Math.max(0, this.testLabEphemeralDepth - 1);
+      if (this.testLabEphemeralDepth === 0) this.persist();
+    }
+  }
+
   private scheduleMirror() {
     if (this.mirrorDebounceTimer) {
       clearTimeout(this.mirrorDebounceTimer);
@@ -203,6 +264,7 @@ class DBStore {
   }
 
   public persist() {
+    if (this.testLabEphemeralDepth > 0) return;
     this.scheduleMirror();
     try {
       const dir = path.dirname(this.filePath);
