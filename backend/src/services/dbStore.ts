@@ -151,7 +151,12 @@ class DBStore {
         this.partnerChangeNotifications = parsed.partnerChangeNotifications || [];
         this.delegationExceptions = parsed.delegationExceptions || [];
         this.policyCoverageValues = parsed.policyCoverageValues || [];
-        this.supportTickets = parsed.supportTickets || [];
+        this.supportTickets = (parsed.supportTickets || []).map((ticket: any) => ({
+          ...ticket,
+          prioridade: ticket.prioridade || 'NORMAL',
+          canal_origem: ticket.canal_origem || 'PORTAL',
+          updated_at: ticket.updated_at || ticket.created_at || new Date().toISOString()
+        }));
         this.supportMessages = parsed.supportMessages || [];
         this.revokedTokens = parsed.revokedTokens || [];
 
