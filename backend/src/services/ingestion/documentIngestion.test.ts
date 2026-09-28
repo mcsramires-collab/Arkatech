@@ -3,6 +3,14 @@ import { dbStore } from '../dbStore';
 import { DocumentIngestionService } from './documentIngestion';
 
 describe('DocumentIngestionService', () => {
+  const cteXml = `<CTe>
+    <infCte Id="CTe35123456789012345678901234567890123456789012">
+      <ide><nCT>123</nCT><serie>1</serie><tpAmb>2</tpAmb></ide>
+      <emit><CNPJ>12345678000190</CNPJ></emit>
+      <vPrest><vRec>1000.00</vRec></vPrest>
+    </infCte>
+  </CTe>`;
+
   beforeEach(() => {
     dbStore.fiscalDocuments = [];
     dbStore.rawXmlStore = [];
@@ -31,7 +39,7 @@ describe('DocumentIngestionService', () => {
       app_base_url: 'http://localhost:3000',
       ramo: 'RCTRC',
       policy_id: 'policy-1',
-      xml_content: '<cteProc />',
+      xml_content: cteXml,
       connector_id: 'connector-1'
     });
 
@@ -42,7 +50,7 @@ describe('DocumentIngestionService', () => {
         tenant_id: 'tenant-1',
         ramo: 'RCTRC',
         policy_id: 'policy-1',
-        xml_content: '<cteProc />',
+        xml_content: cteXml,
         raw_xml_id: dbStore.rawXmlStore[0]?.id
       }),
       'http://localhost:3000'
@@ -87,7 +95,7 @@ describe('DocumentIngestionService', () => {
       app_base_url: 'http://localhost:3000',
       files: [{
         filename: 'cte.xml',
-        xml_content: '<cteProc />',
+        xml_content: cteXml,
         capture_mode: 'OUTBOUND'
       }],
       policies: []
@@ -116,7 +124,7 @@ describe('DocumentIngestionService', () => {
       tenant_id: 'tenant-1',
       source: 'SEFAZ',
       app_base_url: 'http://localhost:3000',
-      files: [{ filename: 'cte-sefaz.xml', xml_content: '<cteProc />', capture_mode: 'OUTBOUND' }],
+      files: [{ filename: 'cte-sefaz.xml', xml_content: cteXml, capture_mode: 'OUTBOUND' }],
       policies: [{ id: 'p1', numero_apolice: 'AP-1', ramo: 'RCTRC' }]
     });
 
@@ -124,7 +132,7 @@ describe('DocumentIngestionService', () => {
       tenant_id: 'tenant-1',
       source: 'PORTAL',
       app_base_url: 'http://localhost:3000',
-      files: [{ filename: 'cte-portal.xml', xml_content: '<cteProc />' }],
+      files: [{ filename: 'cte-portal.xml', xml_content: cteXml }],
       policies: [{ id: 'p1', numero_apolice: 'AP-1', ramo: 'RCTRC' }]
     });
 
@@ -159,14 +167,14 @@ describe('DocumentIngestionService', () => {
     const crypto = require('crypto') as typeof import('crypto');
     dbStore.fiscalDocuments[0]!.content_hash_sha256 = crypto
       .createHash('sha256')
-      .update('<cteProc />', 'utf8')
+      .update(cteXml, 'utf8')
       .digest('hex');
 
     const [result] = DocumentIngestionService.processXmlBatch({
       tenant_id: 'tenant-1',
       source: 'SEFAZ',
       app_base_url: 'http://localhost:3000',
-      files: [{ filename: 'cte.xml', xml_content: '<cteProc />', capture_mode: 'OUTBOUND' }],
+      files: [{ filename: 'cte.xml', xml_content: cteXml, capture_mode: 'OUTBOUND' }],
       policies: [{ id: 'new-policy', numero_apolice: 'NEW', ramo: 'RCTRC' }]
     });
 
