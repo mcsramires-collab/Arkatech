@@ -1,4 +1,5 @@
 import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
+import { createClientCredentials } from '../utils/clientCredentials';
 import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -135,7 +136,7 @@ router.get('/tenants', requirePermission('clientes', 'ver'), (req: BackofficeAut
 });
 
 
-router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
+router.post('/tenants', async (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   const {
     cnpj,
@@ -170,14 +171,18 @@ router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
     });
   }
 
+  const integrationCredentials = await createClientCredentials(
+    ambiente === 'producao' ? 'prod' : 'teste'
+  );
+
   const newTenant: Tenant = {
     id: `tenant_${cleanCnpj}_${Date.now()}`,
     cnpj,
     razao_social,
     status: status || 'ATIVO',
     ambiente: ambiente === 'producao' ? 'producao' : 'teste',
-    client_id: `client_${ambiente === 'producao' ? 'prod' : 'teste'}_${cleanCnpj}`,
-    client_secret_hash: `secret_${cleanCnpj}`,
+    client_id: integrationCredentials.client_id,
+    client_secret_hash: integrationCredentials.client_secret_hash,
     role: role || 'TRANSPORTADOR',
     tipo_operacao: tipoOperacao,
     token_duration_hours: Number(token_duration_hours || 8),
