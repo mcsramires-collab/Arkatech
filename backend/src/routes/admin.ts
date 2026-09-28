@@ -137,7 +137,16 @@ router.get('/tenants', requirePermission('clientes', 'ver'), (req: BackofficeAut
 
 router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
-  const { cnpj, razao_social, ambiente, status, role, token_duration_hours, token_duration_max_hours } = req.body;
+  const {
+    cnpj,
+    razao_social,
+    ambiente,
+    status,
+    role,
+    tipo_operacao,
+    token_duration_hours,
+    token_duration_max_hours
+  } = req.body;
 
   if (!cnpj || !razao_social) {
     return res.status(400).json({ status: 'erro', mensagem: 'CNPJ e Razão Social são obrigatórios.' });
@@ -151,6 +160,16 @@ router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
     });
   }
 
+  const tiposOperacao = ['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'] as const;
+  const tipoOperacao = String(tipo_operacao || 'TRANSPORTADOR').toUpperCase() as
+    (typeof tiposOperacao)[number];
+  if (!tiposOperacao.includes(tipoOperacao)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+    });
+  }
+
   const newTenant: Tenant = {
     id: `tenant_${cleanCnpj}_${Date.now()}`,
     cnpj,
@@ -160,6 +179,7 @@ router.post('/tenants', (req: BackofficeAuthenticatedRequest, res) => {
     client_id: `client_${ambiente === 'producao' ? 'prod' : 'teste'}_${cleanCnpj}`,
     client_secret_hash: `secret_${cleanCnpj}`,
     role: role || 'TRANSPORTADOR',
+    tipo_operacao: tipoOperacao,
     token_duration_hours: Number(token_duration_hours || 8),
     ...(token_duration_max_hours ? { token_duration_max_hours: Number(token_duration_max_hours) } : {}),
     created_at: new Date().toISOString()
@@ -184,6 +204,7 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
     status,
     ambiente,
     razao_social,
+    tipo_operacao,
     token_duration_hours,
     token_duration_max_hours,
     nome_fantasia,
@@ -230,6 +251,16 @@ router.put('/tenants/:id', (req: BackofficeAuthenticatedRequest, res) => {
   }
   if (ambiente) tenant.ambiente = ambiente;
   if (razao_social) tenant.razao_social = razao_social;
+  if (tipo_operacao !== undefined) {
+    const normalizedTipo = String(tipo_operacao).toUpperCase();
+    if (!['TRANSPORTADOR', 'EMBARCADOR', 'AMBOS'].includes(normalizedTipo)) {
+      return res.status(400).json({
+        status: 'erro',
+        mensagem: 'tipo_operacao deve ser TRANSPORTADOR, EMBARCADOR ou AMBOS.'
+      });
+    }
+    tenant.tipo_operacao = normalizedTipo as Tenant['tipo_operacao'];
+  }
   if (token_duration_hours) tenant.token_duration_hours = Number(token_duration_hours);
   // Fase 5 do item "Login real + RBAC" (Backlog, seção 4) — só ADM pode alterar o teto (ver
   // POST/PUT abaixo, /tenants/me/session-duration, para o autoatendimento da própria
