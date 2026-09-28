@@ -94,7 +94,7 @@ export class DocumentIngestionService {
     policy_ids_attempted?: string[];
   }): { record: FiscalDocument; parsed?: ReturnType<typeof XMLParserService.parse> } {
     const now = new Date().toISOString();
-    const raw = RawDocumentService.store(params.xml_content);
+    const raw = RawDocumentService.store(params.xml_content, params.tenant_id);
 
     let parsed: ReturnType<typeof XMLParserService.parse> | undefined;
     try {
