@@ -217,6 +217,8 @@ export interface ResponseTemplate {
 
 export interface RawXMLStore {
   id: string;
+  /** Opcional para compatibilidade com blobs legados; todo novo documento informa o tenant. */
+  tenant_id?: string;
   content_xml: string;
   hash_sha256: string;
   encrypted_aes256: boolean;
@@ -238,7 +240,7 @@ export interface FiscalDocument {
   capture_mode: FiscalCaptureMode;
   status: FiscalDocumentStatus;
   content_hash_sha256: string;
-  raw_xml_id: string;
+  raw_xml_id?: string;
   duplicate_of_id?: string;
   original_filename?: string;
   tipo_documento?: TipoDocumento;
