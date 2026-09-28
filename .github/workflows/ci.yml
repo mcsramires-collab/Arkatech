@@ -29,6 +29,10 @@ jobs:
         run: |
           cd backend
           npm test --if-present
+      - name: Run P0 Test Lab regression gate
+        run: |
+          cd backend
+          npm run test:lab:p0
 
   frontend-test:
     runs-on: ubuntu-latest
