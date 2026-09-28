@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { dbStore } from '../services/dbStore';
+import { createBackofficeInvitation } from '../services/backofficeInvitationService';
 import { Tenant, Insurer, InternalUser } from '../types';
 
 const router = Router();
@@ -33,8 +34,8 @@ router.get('/insurers', (req, res) => {
   return res.json({ status: 'sucesso', insurers: dbStore.insurers });
 });
 
-router.post('/insurers', (req, res) => {
-  const { cnpj, razao_social, nome_fantasia } = req.body;
+router.post('/insurers', async (req, res) => {
+  const { cnpj, razao_social, nome_fantasia, admin_nome, admin_email } = req.body;
   if (!cnpj || !razao_social) {
     return res.status(400).json({ status: 'erro', mensagem: 'cnpj e razao_social são obrigatórios.' });
   }
@@ -46,6 +47,15 @@ router.post('/insurers', (req, res) => {
       mensagem: 'CNPJ inválido. São aceitos CNPJs numéricos e alfanuméricos com 14 posições.'
     });
   }
+  const jaExiste = dbStore.insurers.find((item) => normalizeCnpj(item.cnpj) === cnpjLimpo);
+  if (jaExiste) {
+    return res.status(409).json({
+      status: 'erro',
+      mensagem: 'Já existe uma seguradora cadastrada com este CNPJ.',
+      insurer_id: jaExiste.id
+    });
+  }
+
   const newTenant: Tenant = {
     id: `tenant_seguradora_${cnpjLimpo}_${Date.now()}`,
     cnpj,
@@ -57,7 +67,7 @@ router.post('/insurers', (req, res) => {
     role: 'SEGURADORA',
     token_duration_hours: 8,
     created_at: new Date().toISOString(),
-    conta_ativada: true
+    conta_ativada: admin_email ? false : true
   };
   dbStore.tenants.push(newTenant);
 
@@ -73,7 +83,17 @@ router.post('/insurers', (req, res) => {
   dbStore.insurers.push(newInsurer);
 
   dbStore.persist();
-  return res.json({ status: 'sucesso', tenant: newTenant, insurer: newInsurer });
+
+  const convite = admin_email
+    ? await createBackofficeInvitation(newTenant, admin_nome || razao_social, admin_email)
+    : undefined;
+
+  return res.json({
+    status: 'sucesso',
+    tenant: newTenant,
+    insurer: newInsurer,
+    convite
+  });
 });
 
 router.put('/insurers/:id', (req, res) => {
