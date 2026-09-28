@@ -17,6 +17,7 @@ import fiscalDocumentsRouter from './fiscalDocuments';
 import connectorsRouter from './connectors';
 import fiscalSyncRouter from './fiscalSync';
 import fiscalEventsRouter from './fiscalEvents';
+import { generateClientSecret, hashClientSecret } from '../utils/clientCredentials';
 import notificationsRouter from './notifications';
 
 const router = Router();
@@ -243,6 +244,44 @@ router.get('/policies', authMiddleware, (req: AuthenticatedRequest, res: Respons
 
   return res.json({ status: 'sucesso', policies });
 });
+
+/**
+ * POST /tenant/integration-credentials/rotate
+ * Gera um novo segredo M2M para TMS/API. Só o administrador humano da conta pode rotacionar.
+ * O segredo em texto puro é devolvido UMA única vez e nunca é persistido.
+ */
+router.post(
+  '/integration-credentials/rotate',
+  authMiddleware,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const tenantId = req.tenant!.tenant_id;
+    if (!req.tenant!.tenant_user_id || !req.tenant!.is_admin_da_conta) {
+      return res.status(403).json({
+        status: 'erro',
+        mensagem: 'Somente o administrador da conta pode rotacionar credenciais de integração.'
+      });
+    }
+
+    const gate = checkActivated(tenantId);
+    if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
+
+    const tenant = dbStore.tenants.find((item) => item.id === tenantId);
+    if (!tenant) {
+      return res.status(404).json({ status: 'erro', mensagem: 'Empresa não encontrada.' });
+    }
+
+    const clientSecret = generateClientSecret();
+    tenant.client_secret_hash = await hashClientSecret(clientSecret);
+    dbStore.persist();
+
+    return res.json({
+      status: 'sucesso',
+      client_id: tenant.client_id,
+      client_secret: clientSecret,
+      aviso: 'Copie o client_secret agora. Ele não poderá ser consultado novamente.'
+    });
+  }
+);
 
 // --- Importação de Documentos Fiscais em Lote (equivalente ao /admin/importar-lote,
 // porém sem tenant_id livre no body: o tenant vem sempre do próprio JWT, então uma
