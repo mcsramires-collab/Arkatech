@@ -12,9 +12,11 @@ import { checkActivated } from '../services/accountActivation';
 import { CancelamentoService } from '../services/cancelamento';
 import { TenantUser, BusinessRuleRequest, SupportTicket, Policy } from '../types';
 import fiscalDocumentsRouter from './fiscalDocuments';
+import connectorsRouter from './connectors';
 
 const router = Router();
 router.use('/fiscal-documents', fiscalDocumentsRouter);
+router.use('/connectors', connectorsRouter);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 /**
