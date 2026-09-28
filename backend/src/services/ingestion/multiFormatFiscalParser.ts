@@ -195,7 +195,7 @@ function keyValueRow(text: string): Row {
   const row: Row = {};
   const patterns: Array<[string, RegExp]> = [
     ['tipo_documento', /(?:tipo(?:\s+de)?\s+documento|documento)\s*[:=-]\s*(CT-?E|NF-?E|MDF-?E|NFS-?E)/i],
-    ['chave_documento', /(?:chave(?:\s+de)?\s+acesso|chave)\s*[:=-]\s*([A-Z0-9\s]{44,80})/i],
+    ['chave_documento', /(?:chave(?:\s+de)?\s+acesso|chave)\s*[:=-]\s*([A-Z0-9 \t]{44,80})/i],
     ['numero_documento', /(?:n[uú]mero|n[º°]|nCT|nNF|nMDF)\s*[:=-]\s*([A-Z0-9./-]+)/i],
     ['serie', /s[eé]rie\s*[:=-]\s*([A-Z0-9./-]+)/i],
     ['valor_carga', /(?:valor(?:\s+total|\s+da\s+carga)?|vCarga|vNF)\s*[:=-]?\s*(?:R\$)?\s*([0-9.,]+)/i],
