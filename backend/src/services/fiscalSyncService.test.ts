@@ -28,50 +28,48 @@ describe('FiscalSyncService', () => {
     jest.restoreAllMocks();
   });
 
-  it('cria e depois atualiza o mesmo estado por connector + provider', () => {
+  it('cria e atualiza estado mantendo NSU monotônico', () => {
     const first = FiscalSyncService.report(connector, {
-      provider: 'NFE',
-      status: 'OK',
-      ult_nsu: '100',
-      max_nsu: '120',
-      cstat: 138,
-      document_count: 20
+      provider: 'NFE', status: 'OK', ult_nsu: '100', max_nsu: '120', cstat: 138, document_count: 20
     });
 
     const second = FiscalSyncService.report(connector, {
-      provider: 'NFE',
-      status: 'NO_DOCUMENTS',
-      ult_nsu: '120',
-      max_nsu: '120',
-      cstat: 137,
-      document_count: 0,
-      next_sync_after: '2026-09-28T02:00:00.000Z'
+      provider: 'NFE', status: 'NO_DOCUMENTS', ult_nsu: '120', max_nsu: '120', cstat: 137, document_count: 0
     });
 
     expect(first.id).toBe(second.id);
     expect(dbStore.fiscalSyncStates).toHaveLength(1);
-    expect(second).toMatchObject({
-      provider: 'NFE',
-      status: 'NO_DOCUMENTS',
-      ult_nsu: '120',
-      max_nsu: '120',
-      last_cstat: 137,
-      last_document_count: 0
+    expect(second.ult_nsu).toBe('120');
+    expect(second.next_sync_after).toBeDefined();
+    expect(new Date(second.next_sync_after!).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('rejeita regressão de ultNSU e maxNSU', () => {
+    FiscalSyncService.report(connector, {
+      provider: 'CTE', status: 'OK', ult_nsu: '100', max_nsu: '150', cstat: 138
     });
-    expect(connector.last_sync_at).toBeDefined();
+
+    expect(() => FiscalSyncService.report(connector, {
+      provider: 'CTE', status: 'OK', ult_nsu: '99', max_nsu: '150', cstat: 138
+    })).toThrow('NSU_REGRESSION');
+
+    expect(() => FiscalSyncService.report(connector, {
+      provider: 'CTE', status: 'OK', ult_nsu: '100', max_nsu: '149', cstat: 138
+    })).toThrow('MAX_NSU_REGRESSION');
+  });
+
+  it('rejeita status incompatível com cStat conhecido', () => {
+    expect(() => FiscalSyncService.report(connector, {
+      provider: 'NFE', status: 'OK', ult_nsu: '10', max_nsu: '10', cstat: 137
+    })).toThrow('SYNC_STATUS_CSTAT_MISMATCH');
   });
 
   it('devolve estado de retomada com NEVER_SYNCED para providers ainda não consultados', () => {
     FiscalSyncService.report(connector, {
-      provider: 'CTE',
-      status: 'OK',
-      ult_nsu: '42',
-      max_nsu: '50',
-      document_count: 8
+      provider: 'CTE', status: 'OK', ult_nsu: '42', max_nsu: '50', document_count: 8
     });
 
     const resume = FiscalSyncService.publicResumeState(connector);
-
     expect(resume.CTE.ult_nsu).toBe('42');
     expect(resume.CTE.status).toBe('OK');
     expect(resume.NFE.status).toBe('NEVER_SYNCED');
