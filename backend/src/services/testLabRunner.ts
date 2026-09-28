@@ -314,8 +314,123 @@ function successfulAverbacaoFromResponse(response: AverbacaoResponseDTO): Averba
   return record;
 }
 
-function defineScenarios(): ScenarioDefinition[] {
+function generatedLimitMatrixScenarios(mode: TestLabMode): ScenarioDefinition[] {
+  if (mode === 'QUICK') return [];
+
+  const dimensions: ScenarioDimension[] = [
+    {
+      key: 'strategy',
+      values: ['aceitar-sem-trava', 'truncar', 'exigir-codigo', 'sem-codigo']
+    },
+    {
+      key: 'relation',
+      values: ['below', 'equal', 'above']
+    },
+    {
+      key: 'no_code_mode',
+      values: ['fila-sempre', 'teto']
+    },
+    {
+      key: 'above_action',
+      values: ['fila', 'recusar']
+    }
+  ];
+
+  const assignments =
+    mode === 'EXHAUSTIVE'
+      ? TestLabScenarioGenerator.cartesian(dimensions, 500)
+      : TestLabScenarioGenerator.pairwise(dimensions, 500);
+
+  return assignments.map((assignment, index) => {
+    const strategy = String(assignment.strategy);
+    const relation = String(assignment.relation);
+    const noCodeMode = String(assignment.no_code_mode);
+    const aboveAction = String(assignment.above_action);
+    const value = relation === 'below' ? 999 : relation === 'equal' ? 1000 : 1100;
+
+    return {
+      id:
+        'P0-LIMIT-MATRIX-' +
+        String(index + 1).padStart(3, '0') +
+        '-' +
+        [strategy, relation, noCodeMode, aboveAction]
+          .join('-')
+          .replace(/[^A-Za-z0-9-]+/g, ''),
+      suite_key: 'p0-limits',
+      priority: 'P0' as const,
+      title: 'Matriz automática de limite #' + (index + 1),
+      description:
+        'Cenário gerado automaticamente (' +
+        (mode === 'EXHAUSTIVE' ? 'cartesiano' : 'pairwise') +
+        ') para combinar estratégia, fronteira e tratamento sem código.',
+      tags: ['generated', 'limits', mode.toLowerCase()],
+      covers_flag_keys: [
+        'policy.lmi',
+        'document.valor_carga',
+        'regras:estrategia-lmg',
+        'regras:sem-codigo-modo',
+        'regras:teto-valor',
+        'regras:teto-acima-acao'
+      ],
+      execute: () => {
+        const ctx = setupBase({ lmi: 1000 });
+        setBusinessConfig(ctx, {
+          'regras:estrategia-lmg': strategy,
+          'regras:sem-codigo-modo': noCodeMode,
+          'regras:teto-valor': 1050,
+          'regras:teto-acima-acao': aboveAction
+        });
+
+        const result = processAverbacao(ctx, {
+          valorCarga: value,
+          documentNumber: 579000 + index
+        });
+
+        let expectedStatus: AverbacaoResponseDTO['status'] = 'sucesso';
+        let expectedValue = value;
+
+        if (relation === 'above') {
+          if (strategy === 'truncar') {
+            expectedStatus = 'sucesso';
+            expectedValue = 1000;
+          } else if (strategy === 'aceitar-sem-trava') {
+            expectedStatus = 'sucesso';
+          } else if (strategy === 'exigir-codigo') {
+            expectedStatus = 'erro';
+          } else if (noCodeMode === 'fila-sempre') {
+            expectedStatus = 'pendente';
+          } else {
+            expectedStatus = aboveAction === 'recusar' ? 'erro' : 'pendente';
+          }
+        }
+
+        const assertions = [
+          assertion('status', 'Status calculado pela matriz', expectedStatus, result.status)
+        ];
+
+        if (expectedStatus === 'sucesso') {
+          assertions.push(
+            assertion('value', 'Valor considerado', expectedValue, result.valor_considerado_averbacao)
+          );
+        } else {
+          assertions.push(assertion('code', 'Código de limite', 'ERR-4010', result.codigo));
+        }
+
+        return {
+          assertions,
+          evidence: {
+            assignment,
+            generator: mode === 'EXHAUSTIVE' ? 'CARTESIAN' : 'PAIRWISE'
+          }
+        };
+      }
+    };
+  });
+}
+
+function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
   const scenarios: ScenarioDefinition[] = [];
+  scenarios.push(...generatedLimitMatrixScenarios(mode));
 
   scenarios.push({
     id: 'P0-POLICY-ACTIVE-SUCCESS',
@@ -1423,7 +1538,7 @@ export class TestLabRunnerService {
             )
           );
 
-    let definitions = defineScenarios().filter((scenario) => suiteKeys.includes(scenario.suite_key));
+    let definitions = defineScenarios(mode).filter((scenario) => suiteKeys.includes(scenario.suite_key));
 
     if (mode === 'QUICK') {
       definitions = definitions.filter((scenario) => scenario.quick === true);
@@ -1510,7 +1625,7 @@ export class TestLabRunnerService {
 
   static async execute(request: TestLabPlanRequest = {}): Promise<TestLabRun> {
     const plan = this.plan(request);
-    const allDefinitions = defineScenarios();
+    const allDefinitions = defineScenarios(plan.mode);
     const definitionById = new Map(allDefinitions.map((item) => [item.id, item]));
 
     const run: TestLabRun = {
