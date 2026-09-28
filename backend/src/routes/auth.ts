@@ -438,6 +438,7 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
       tenant_id: tenant.id,
       insurer_id: insurer?.id,
       broker_id: broker?.id,
+      partner_type: broker?.partner_type ?? 'CORRETORA',
       // Fase 5 (item 3) — mesmo propósito do branch INTERNAL_USER acima.
       jti: uuidv4()
     };
@@ -453,7 +454,8 @@ router.post('/backoffice-login', async (req: Request, res: Response) => {
         tipo: tenant.role,
         razao_social: tenant.razao_social,
         insurer_id: insurer?.id,
-        broker_id: broker?.id
+        broker_id: broker?.id,
+        partner_type: broker?.partner_type ?? 'CORRETORA'
       },
       token_type: 'Bearer',
       access_token: token,
