@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { normalizeCnpj } from '../utils/cnpj';
 import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from './dbStore';
 import { Tenant, Policy, RamoApolice, Averbacao, RecoverySession, RawXMLStore } from '../types';
@@ -446,10 +447,11 @@ export class AverbacaoService {
 
     // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
     const regrasAplicadas: string[] = [];
-    const tenantCnpjLimpo = tenant.cnpj.replace(/\D/g, '');
+    const tenantCnpjLimpo = normalizeCnpj(tenant.cnpj);
     // Aceita string ou number defensivamente — parsers de XML/JSON de terceiros podem
     // entregar um CNPJ puramente numérico como Number em vez de String.
-    const norm = (v?: string | number) => (v !== undefined && v !== null ? String(v).replace(/\D/g, '') : undefined);
+    const norm = (v?: string | number) =>
+      v !== undefined && v !== null ? normalizeCnpj(v) : undefined;
 
     const isEmitente = norm(parsedDoc.cnpjEmitente) === tenantCnpjLimpo;
 
