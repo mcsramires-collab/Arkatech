@@ -152,6 +152,18 @@ export const ENTITY_CONFIGS: EntityMirrorConfig[] = [
     columns: ['id', 'content_xml', 'hash_sha256', 'encrypted_aes256', 'created_at']
   },
   {
+    table: 'fiscal_documents',
+    storeKey: 'fiscalDocuments',
+    pk: 'id',
+    columns: [
+      'id', 'tenant_id', 'source', 'status', 'content_hash_sha256', 'original_filename',
+      'tipo_documento', 'chave_documento', 'numero_documento', 'serie_documento',
+      'cnpj_emissor', 'nsu', 'connector_id', 'external_id', 'policy_ids_attempted',
+      'averbacao_ids', 'codigo_resultado', 'mensagem_resultado', 'received_at', 'processed_at'
+    ],
+    jsonbColumns: ['policy_ids_attempted', 'averbacao_ids']
+  },
+  {
     table: 'averbacoes',
     storeKey: 'averbacoes',
     pk: 'id',
