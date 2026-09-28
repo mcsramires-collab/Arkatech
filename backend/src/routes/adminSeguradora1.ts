@@ -1,3 +1,4 @@
+import { normalizeCnpj, isCnpjFormatValid } from '../utils/cnpj';
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -123,12 +124,12 @@ router.get('/dashboard-stats', (req: BackofficeAuthenticatedRequest, res) => {
 
 // --- A. Lookup de CNPJ com visibilidade mínima (só números de ramo vigentes) ---
 router.get('/tenants/lookup', (req, res) => {
-  const cnpj = String(req.query.cnpj || '').replace(/\D/g, '');
+  const cnpj = normalizeCnpj(req.query.cnpj || '');
   if (!cnpj) {
     return res.status(400).json({ status: 'erro', mensagem: 'Informe o CNPJ para consulta.' });
   }
 
-  const tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpj);
+  const tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpj);
   if (!tenant) {
     return res.json({ status: 'sucesso', encontrado: false, ramos_vigentes: [] });
   }
@@ -236,8 +237,14 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
     });
   }
 
-  const cnpjLimpo = String(cnpj).replace(/\D/g, '');
-  let tenant = dbStore.tenants.find((t) => t.cnpj.replace(/\D/g, '') === cnpjLimpo);
+  const cnpjLimpo = normalizeCnpj(cnpj);
+  if (!isCnpjFormatValid(cnpjLimpo)) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: 'CNPJ inválido. O CNPJ deve ter 14 posições e aceitar letras de A a Z nas 12 primeiras posições.'
+    });
+  }
+  let tenant = dbStore.tenants.find((t) => normalizeCnpj(t.cnpj) === cnpjLimpo);
   let clienteNovo = false;
 
   if (tenant) {
@@ -318,9 +325,9 @@ router.post('/insurer-clients', requirePermission('clientes', 'editar'), async (
   if (Array.isArray(cnpjs_adicionais)) {
     for (const item of cnpjs_adicionais) {
       if (!item?.cnpj || (item.tipo !== 'filial' && item.tipo !== 'adicional')) continue;
-      const cnpjItemLimpo = String(item.cnpj).replace(/\D/g, '');
+      const cnpjItemLimpo = normalizeCnpj(item.cnpj);
       const jaExiste = dbStore.tenantCnpjsAdicionais.some(
-        (c) => c.tenant_id === tenant!.id && c.cnpj.replace(/\D/g, '') === cnpjItemLimpo
+        (c) => c.tenant_id === tenant!.id && normalizeCnpj(c.cnpj) === cnpjItemLimpo
       );
       if (jaExiste) continue;
       dbStore.tenantCnpjsAdicionais.push({
