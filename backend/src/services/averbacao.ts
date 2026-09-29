@@ -9,6 +9,7 @@ import { RuleEngineService } from './ruleEngine';
 import { ResponseEngine } from './responseEngine';
 import { RawDocumentService } from './rawDocumentService';
 import { efetivarInativacaoProgramadaSeNecessaria, sincronizarStatusCadastroSeNecessario } from './tenantLifecycle';
+import { validatePolicyDocumentDate } from './policyValidity';
 
 export interface AverbacaoRequestDTO {
   tenant_id: string;
@@ -386,45 +387,80 @@ export class AverbacaoService {
       return this.erro('ERR-4005');
     }
 
-    // 4. Buscar a Apólice a usar
+    // 4. Buscar a Apólice a usar.
     //
-    // Dois caminhos:
-    // a) policy_id explícito (dto.policy_id) — usado pelo seletor de apólices ativas do Portal
-    //    do Segurado (a pessoa escolhe a apólice diretamente) e pela rota de recuperação, que já
-    //    sabe exatamente qual policy_id a sessão pendente pertence. Resolução direta e sem
-    //    ambiguidade: se o id não existir OU não pertencer a este tenant, é tratado como
-    //    "nenhuma apólice encontrada" (ERR-4016) — nunca vazamos a existência de uma apólice de
-    //    outro tenant através da mensagem de erro.
-    // b) Legado, por ramo (RCTRC, RCDC, RCV) — mantido para quem ainda não migrou para
-    //    policy_id (ex: rotas /admin). Bug corrigido em 29/08: antes, .find() retornava a
-    //    PRIMEIRA apólice que batesse tenant_id + ramo, sem considerar status/vigência. Se o
-    //    tenant tivesse mais de uma apólice para o mesmo ramo (ex: uma antiga vencida/inativa e
-    //    uma nova ativa), o motor podia acabar pegando a errada mesmo havendo uma apólice ativa
-    //    de verdade disponível. Agora damos preferência explícita a uma apólice ATIVA e dentro
-    //    da vigência quando houver mais de uma opção para o mesmo ramo; só caímos numa apólice
-    //    inativa/vencida se não houver nenhuma ativa — nesse caso os passos 7+ seguem dando o
-    //    motivo específico (ERR-4002/4003/4011).
+    // A seleção automática agora usa a DATA DE EMISSÃO DO DOCUMENTO, e não "agora".
+    // Isso é essencial em renovação/retroatividade: um CT-e de 2025 deve casar com a
+    // apólice cuja vigência cobria 2025, mesmo que exista uma apólice nova ativa hoje.
+    // Quando mais de uma apólice cobre a mesma data, o motor NÃO escolhe "a primeira":
+    // devolve pendência explícita para revisão, evitando roteamento silencioso entre
+    // seguradoras diferentes para o mesmo tenant/ramo.
+    const documentDate = parsedDoc.dataEmissao || parsedDoc.tagsMap['dhEmi'];
     let policy: Policy | undefined;
+
     if (dto.policy_id) {
+      // policy_id explícito continua respeitando tenant ownership. A vigência será
+      // revalidada novamente no passo 4d, portanto o caller não consegue contornar
+      // o matching apontando manualmente uma apólice fora da data.
       policy = dbStore.policies.find((p) => p.id === dto.policy_id && p.tenant_id === tenant.id);
     } else {
       const policiesDoRamo = dbStore.policies.filter(
         (p) => p.tenant_id === tenant.id && p.ramo === dto.ramo
       );
-      const isPolicyUsavel = (p: Policy) =>
-        p.status === 'ATIVA' &&
-        !(p.vigencia_fim && new Date(p.vigencia_fim).getTime() < now());
-      policy = policiesDoRamo.find(isPolicyUsavel) || policiesDoRamo[0];
+
+      if (!documentDate && policiesDoRamo.length > 1) {
+        const fmt = ResponseEngine.formatResponse('ERR-4022');
+        return {
+          status: 'pendente',
+          codigo: fmt.codigo,
+          mensagem: fmt.mensagem,
+          explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
+          orientacao_correcao: fmt.orientacao_correcao
+        };
+      }
+
+      if (documentDate) {
+        const policiesNaVigencia = policiesDoRamo.filter(
+          (candidate) => validatePolicyDocumentDate(candidate, documentDate).valid
+        );
+
+        if (policiesNaVigencia.length === 1) {
+          policy = policiesNaVigencia[0];
+        } else if (policiesNaVigencia.length > 1) {
+          const fmt = ResponseEngine.formatResponse('ERR-4023', {
+            DATA_DOCUMENTO: documentDate,
+            QTD_APOLICES: String(policiesNaVigencia.length)
+          });
+          return {
+            status: 'pendente',
+            codigo: fmt.codigo,
+            mensagem: fmt.mensagem,
+            explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
+            orientacao_correcao: fmt.orientacao_correcao
+          };
+        } else if (policiesDoRamo.length === 1) {
+          // Há uma única apólice possível: seleciona para que a barreira 4d gere
+          // o motivo temporal específico (antes do início/depois do fim) e preserve
+          // a pendência auditável vinculada à apólice.
+          policy = policiesDoRamo[0];
+        } else if (policiesDoRamo.length > 1) {
+          const fmt = ResponseEngine.formatResponse('ERR-4024', {
+            DATA_DOCUMENTO: documentDate
+          });
+          return {
+            status: 'pendente',
+            codigo: fmt.codigo,
+            mensagem: fmt.mensagem,
+            explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
+            orientacao_correcao: fmt.orientacao_correcao
+          };
+        }
+      } else {
+        policy = policiesDoRamo[0];
+      }
     }
 
     if (!policy) {
-      // Diferente de ERR-4003 (apólice ENCONTRADA mas com cadastro inativo, ver passo 7): aqui
-      // não existe NENHUMA apólice cadastrada para este tenant+ramo (ou o policy_id informado não
-      // pertence a este tenant). Código próprio para a mensagem não confundir "apólice inativa"
-      // com "apólice não encontrada" — achado da auditoria de 29/08 junto com o bug do .find()
-      // acima. Como não há policy_id resolvido neste ponto, esta rejeição específica não gera
-      // registro em Averbacao/Recusados, no mesmo padrão já documentado para tenant não
-      // encontrado/XML inválido/token de recuperação inválido (ver persistErro acima).
       return this.erro('ERR-4016');
     }
 
@@ -442,8 +478,60 @@ export class AverbacaoService {
     const businessConfig = RuleEngineService.getBusinessConfig(policy);
     const filaGenericaHabilitada = businessConfig['regras:fila-aprovacao-recusas'] === true;
 
-    // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
+    // 4d. Segunda barreira de vigência: mesmo quando policy_id foi informado explicitamente,
+    // a data do documento precisa estar coberta. "permitir_inativo_vencido" NÃO libera
+    // documentos anteriores ao início da apólice; esse caso sempre exige análise.
     const regrasAplicadas: string[] = [];
+    const policyDateValidity = validatePolicyDocumentDate(policy, documentDate);
+
+    if (policyDateValidity.reason === 'DOCUMENT_DATE_MISSING') {
+      const fmt = ResponseEngine.formatResponse('ERR-4022');
+      regrasAplicadas.push('Vigência documental não avaliada: data de emissão ausente ou inválida.');
+      const registro = this.persistPendente(
+        tenant,
+        policy,
+        parsedDoc,
+        rawXmlRecord.id,
+        fmt,
+        regrasAplicadas
+      );
+      return {
+        status: 'pendente',
+        codigo: fmt.codigo,
+        mensagem: fmt.mensagem,
+        averbacao_id: registro.id,
+        explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
+        orientacao_correcao: fmt.orientacao_correcao
+      };
+    }
+
+    if (policyDateValidity.reason === 'BEFORE_POLICY_START') {
+      const fmt = ResponseEngine.formatResponse('ERR-4021', {
+        DATA_DOCUMENTO: documentDate ?? '',
+        VIGENCIA_INICIO: policy.vigencia_inicio
+      });
+      regrasAplicadas.push(
+        `Vigência documental: emissão ${documentDate} anterior ao início da apólice ${policy.vigencia_inicio}; encaminhada para análise de exceção.`
+      );
+      const registro = this.persistPendente(
+        tenant,
+        policy,
+        parsedDoc,
+        rawXmlRecord.id,
+        fmt,
+        regrasAplicadas
+      );
+      return {
+        status: 'pendente',
+        codigo: fmt.codigo,
+        mensagem: fmt.mensagem,
+        averbacao_id: registro.id,
+        explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
+        orientacao_correcao: fmt.orientacao_correcao
+      };
+    }
+
+    // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
     const tenantCnpjLimpo = normalizeCnpj(tenant.cnpj);
     // Aceita string ou number defensivamente — parsers de XML/JSON de terceiros podem
     // entregar um CNPJ puramente numérico como Number em vez de String.
@@ -541,7 +629,7 @@ export class AverbacaoService {
     // sempre disse cobrir.
     const isTenantInactive = tenant.status === 'INATIVO';
     const isPolicyStatusInactive = policy.status !== 'ATIVA';
-    const isPolicyExpiredByDate = Boolean(policy.vigencia_fim) && new Date(policy.vigencia_fim).getTime() < now();
+    const isPolicyExpiredByDate = policyDateValidity.reason === 'AFTER_POLICY_END';
     // Fase 2 do pacote de 21/09 (Suspensão de Apólice) — "está suspensa agora" é sempre
     // calculado a partir das duas datas, nunca lido de um boolean solto (ver comentário em
     // Policy.suspensa_desde em types/index.ts): evita ficar suspensa para sempre depois que o
@@ -888,11 +976,16 @@ export class AverbacaoService {
     if (!rawXml) {
       return this.erro('ERR-4005', {}, {});
     }
+
+    const policyAnterior = dbStore.policies.find((p) => p.id === averbacaoAnterior.policy_id);
+    const motivoAnterior = averbacaoAnterior.motivo_pendencia ?? averbacaoAnterior.codigo_resposta;
+    const rematchearPorVigencia = motivoAnterior === 'ERR-4021';
+
     return this.process(
       {
         tenant_id: averbacaoAnterior.tenant_id,
-        ramo: dbStore.policies.find((p) => p.id === averbacaoAnterior.policy_id)?.ramo ?? ('RCTRC' as RamoApolice),
-        policy_id: averbacaoAnterior.policy_id,
+        ramo: policyAnterior?.ramo ?? ('RCTRC' as RamoApolice),
+        ...(rematchearPorVigencia ? {} : { policy_id: averbacaoAnterior.policy_id }),
         xml_content: rawXml.content_xml,
         codigo_liberacao: codigoLiberacao,
         supplemented_vars: supplementedVars
