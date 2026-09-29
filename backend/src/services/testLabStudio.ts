@@ -121,6 +121,7 @@ const DIRECT_POLICY_KEYS = new Set([
 const DIRECT_DOCUMENT_KEYS = new Set([
   'document.tipo',
   'document.valor_carga',
+  'document.data_emissao',
   'document.tp_amb',
   'document.funcao_cnpj_segurado'
 ]);
@@ -630,8 +631,8 @@ export class TestLabStudioService {
         documentNumber: 680000 + index,
         valorCarga,
         emissionDate:
-          typeof assignment['document.emission_date'] === 'string'
-            ? String(assignment['document.emission_date'])
+          typeof assignment['document.data_emissao'] === 'string'
+            ? String(assignment['document.data_emissao'])
             : referenceDate,
         tpAmbSefaz: tpAmb,
         funcaoTenant,
