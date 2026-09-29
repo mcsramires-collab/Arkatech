@@ -388,6 +388,24 @@ export class ApiClient {
     return this.request('/api/v1/admin/test-lab/catalog-audit');
   }
 
+  static getTestLabStudioCapabilities() {
+    return this.request('/api/v1/admin/test-lab/studio/capabilities');
+  }
+
+  static previewTestLabStudio(payload: any) {
+    return this.request('/api/v1/admin/test-lab/studio/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  static executeTestLabStudio(payload: any) {
+    return this.request('/api/v1/admin/test-lab/studio/execute', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
   static planTestLab(payload: any) {
     return this.request('/api/v1/admin/test-lab/plan', {
       method: 'POST',
