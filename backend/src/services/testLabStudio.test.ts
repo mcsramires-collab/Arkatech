@@ -71,9 +71,11 @@ describe('TestLabStudioService', () => {
     expect(run.failed).toBe(1);
     expect(run.results[0]?.assertions[0]?.pass).toBe(false);
   });
-  test('bloqueia execução do Studio em ambiente de produção', async () => {
-    const previous = process.env.NODE_ENV;
+  test('bloqueia execução do Studio em runtime production sem opt-in', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousEnabled = process.env.TEST_LAB_ENABLED;
     process.env.NODE_ENV = 'production';
+    delete process.env.TEST_LAB_ENABLED;
     try {
       await expect(
         TestLabStudioService.execute({
@@ -82,8 +84,34 @@ describe('TestLabStudioService', () => {
         })
       ).rejects.toThrow('TEST_LAB_PRODUCTION_BLOCKED');
     } finally {
-      if (previous === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = previous;
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousEnabled === undefined) delete process.env.TEST_LAB_ENABLED;
+      else process.env.TEST_LAB_ENABLED = previousEnabled;
+    }
+  });
+
+  test('permite execução sintética em runtime production com TEST_LAB_ENABLED=true', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousEnabled = process.env.TEST_LAB_ENABLED;
+    process.env.NODE_ENV = 'production';
+    process.env.TEST_LAB_ENABLED = 'true';
+    try {
+      const run = await TestLabStudioService.execute({
+        strategy: 'SINGLE',
+        dimensions: [
+          { key: 'policy.status', values: ['ATIVA'] },
+          { key: 'document.tipo', values: ['CTE'] }
+        ],
+        expectation: { status: 'sucesso' }
+      });
+      expect(run.cases).toBe(1);
+      expect(run.failed).toBe(0);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousEnabled === undefined) delete process.env.TEST_LAB_ENABLED;
+      else process.env.TEST_LAB_ENABLED = previousEnabled;
     }
   });
 
