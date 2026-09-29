@@ -214,6 +214,7 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
         'policy.vigencia_fim',
         'document.tipo',
         'document.valor_carga',
+        'document.data_emissao',
         'document.tp_amb',
         'document.funcao_cnpj_segurado',
         'ingestion.channel'
@@ -229,6 +230,7 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
         if (key === 'policy.vigencia_fim') chosen = ['2026-12-31T23:59:59.999-03:00'];
         if (key === 'document.tipo') chosen = ['CTE'];
         if (key === 'document.valor_carga') chosen = [1000];
+        if (key === 'document.data_emissao') chosen = ['2026-09-29T12:00:00.000-03:00'];
         if (key === 'document.tp_amb') chosen = [2];
         if (key === 'document.funcao_cnpj_segurado') chosen = ['EMISSOR'];
         if (key === 'ingestion.channel') chosen = ['INTERNAL'];
