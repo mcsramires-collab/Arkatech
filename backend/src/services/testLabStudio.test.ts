@@ -71,4 +71,20 @@ describe('TestLabStudioService', () => {
     expect(run.failed).toBe(1);
     expect(run.results[0]?.assertions[0]?.pass).toBe(false);
   });
+  test('bloqueia execução do Studio em ambiente de produção', async () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await expect(
+        TestLabStudioService.execute({
+          strategy: 'SINGLE',
+          dimensions: [{ key: 'policy.status', values: ['ATIVA'] }]
+        })
+      ).rejects.toThrow('TEST_LAB_PRODUCTION_BLOCKED');
+    } finally {
+      if (previous === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous;
+    }
+  });
+
 });
