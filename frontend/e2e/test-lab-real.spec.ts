@@ -5,7 +5,8 @@ test('real backend: execute P0, preserve gaps, inspect, export, compare and rest
   await page.route('http://127.0.0.1:4174/**', route => route.continue({ headers: { ...route.request().headers(), 'x-internal-api-key': 'test-lab-browser-local-only' } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
-  await expect(page.getByRole('heading', { name: 'Laboratório de Testes', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Laboratório de Testes V2', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Regressão Oficial', exact: true }).click();
   await page.getByRole('button', { name: 'Só P0', exact: true }).click();
   await page.getByLabel('Nome do preset').fill('Regressão P0');
   await page.getByRole('button', { name: 'Salvar preset' }).click();
@@ -31,6 +32,7 @@ test('real backend: execute P0, preserve gaps, inspect, export, compare and rest
   await page.screenshot({ path: test.info().outputPath('laboratorio-resultado.png'), fullPage: true });
   await page.reload();
   await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
+  await page.getByRole('button', { name: 'Regressão Oficial', exact: true }).click();
   await page.getByRole('button', { name: 'Aplicar Regressão P0', exact: true }).click();
   await page.getByRole('button', { name: 'Calcular cenários' }).click();
   await expect(page.getByText('Plano calculado')).toBeVisible();

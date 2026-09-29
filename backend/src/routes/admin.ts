@@ -14,6 +14,7 @@ import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { getTestLabCatalog } from '../services/testLabCatalog';
 import { TestLabRunnerService } from '../services/testLabRunner';
+import { TestLabStudioService } from '../services/testLabStudio';
 import { TestLabCatalogAuditService } from '../services/testLabCatalogAudit';
 import { PurgeService } from '../services/purgeService';
 import { AverbacaoService } from '../services/averbacao';
@@ -766,6 +767,42 @@ router.get('/test-lab/catalog-audit', (req: BackofficeAuthenticatedRequest, res)
     status: 'sucesso',
     audit: TestLabCatalogAuditService.audit()
   });
+});
+
+router.get('/test-lab/studio/capabilities', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  return res.json({
+    status: 'sucesso',
+    studio: TestLabStudioService.capabilities()
+  });
+});
+
+router.post('/test-lab/studio/preview', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  try {
+    return res.json({
+      status: 'sucesso',
+      preview: TestLabStudioService.preview(req.body ?? {})
+    });
+  } catch (error) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: error instanceof Error ? error.message : 'Falha ao calcular matriz do Studio.'
+    });
+  }
+});
+
+router.post('/test-lab/studio/execute', async (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  try {
+    const run = await TestLabStudioService.execute(req.body ?? {});
+    return res.json({ status: 'sucesso', run });
+  } catch (error) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: error instanceof Error ? error.message : 'Falha ao executar cenário do Studio.'
+    });
+  }
 });
 
 router.post('/test-lab/plan', (req: BackofficeAuthenticatedRequest, res) => {

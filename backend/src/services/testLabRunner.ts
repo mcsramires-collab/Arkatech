@@ -475,7 +475,7 @@ function generatedCatalogScenarios(mode: TestLabMode): ScenarioDefinition[] {
   for (const offset of [-1, 0, 1]) scenarios.push({
     id: `GEN-DATE-START-${offset}`, suite_key: 'p0-policy-engine', priority: 'P0',
     title: `Início da vigência: fronteira ${offset} ms`, description: 'Compara emissão antes, exatamente no início e depois do início da vigência.',
-    tags: ['generated', 'DATE_BOUNDARIES'], covers_flag_keys: ['policy.vigencia_inicio'],
+    tags: ['generated', 'DATE_BOUNDARIES'], covers_flag_keys: ['policy.vigencia_inicio', 'document.data_emissao'],
     execute: () => withClock(Date.parse('2026-09-28T12:00:00.000Z'), () => {
       const ctx = setupBase({ vigencia_inicio: new Date(now() + offset).toISOString() });
       const response = processAverbacao(ctx, { emissionDate: new Date(now()).toISOString() });
@@ -489,7 +489,7 @@ function generatedCatalogScenarios(mode: TestLabMode): ScenarioDefinition[] {
   for (const offset of [-1, 0, 1]) scenarios.push({
     id: `GEN-DATE-END-${offset}`, suite_key: 'p0-policy-engine', priority: 'P0',
     title: `Fim da vigência: fronteira ${offset} ms`, description: 'Compara antes, exatamente no limite e após a vigência com relógio isolado.',
-    tags: ['generated', 'DATE_BOUNDARIES'], covers_flag_keys: ['policy.vigencia_fim'],
+    tags: ['generated', 'DATE_BOUNDARIES'], covers_flag_keys: ['policy.vigencia_fim', 'document.data_emissao'],
     execute: () => withClock(Date.parse('2026-09-28T12:00:00.000Z'), () => {
       const ctx = setupBase({ vigencia_fim: new Date(now() + offset).toISOString() });
       const response = processAverbacao(ctx, { emissionDate: new Date(now()).toISOString() });
@@ -533,7 +533,7 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
     title: 'Apólice ativa dentro da vigência',
     description: 'Documento autorizado e titular deve resultar em averbação de teste com sucesso.',
     tags: ['policy', 'smoke'],
-    covers_flag_keys: ['policy.status', 'policy.vigencia_inicio', 'policy.vigencia_fim'],
+    covers_flag_keys: ['policy.status', 'policy.vigencia_inicio', 'policy.vigencia_fim', 'document.data_emissao'],
     quick: true,
     execute: () => {
       const ctx = setupBase();
@@ -659,7 +659,7 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
     title: 'Vigência date-only é inclusiva no dia civil',
     description: 'Apólice com YYYY-MM-DD aceita todo o dia inicial/final no timezone de negócio e bloqueia o dia anterior.',
     tags: ['policy', 'validity', 'timezone'],
-    covers_flag_keys: ['policy.vigencia_inicio', 'policy.vigencia_fim'],
+    covers_flag_keys: ['policy.vigencia_inicio', 'policy.vigencia_fim', 'document.data_emissao'],
     execute: () => {
       const insideCtx = setupBase({
         vigencia_inicio: '2026-09-29',

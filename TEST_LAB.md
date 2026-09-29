@@ -24,6 +24,47 @@ npm run test:e2e
 
 Defina `DATA_DIR` para uma pasta exclusiva de validação antes de iniciar o backend ou os comandos de teste. O Playwright inicia frontend/backend locais, usa credenciais fictícias e uma pasta de dados própria. Os relatórios JSON/CSV ficam em `test-results`; screenshots e traces permanecem locais, sem publicação de artefatos no GitHub.
 
+## Laboratório V2
+
+A interface interna agora separa dois usos que antes apareciam misturados:
+
+- **Regressão Oficial**: suítes versionadas P0/P1, executores controlados pelo código e gate de CI. Continua sendo a fonte de verdade para regressão e invariantes.
+- **Studio de Cenários**: exploração parametrizada pelo catálogo. O usuário escolhe dimensões, valores e expectativas; o backend cria um contexto sintético isolado, gera o DF-e e executa o pipeline real de ingestão + averbação.
+
+A navegação V2 possui:
+
+1. **Visão Geral** — saúde do catálogo, última regressão, gate P0 e mapa por domínio.
+2. **Studio de Cenários** — Scenario Builder, Fixture Builder, Matrix Builder e Execution Center.
+3. **Cobertura** — regra x execução com PASS, FAIL, GAP e NÃO EXECUTADO.
+4. **Execuções** — histórico das regressões oficiais persistidas.
+5. **Regressão Oficial** — preserva seleção de suítes, planejamento, execução, histórico, exportações, presets e comparação já existentes.
+
+### Studio de Cenários
+
+O Studio consome os metadados do catálogo. Regras realmente parametrizáveis recebem controles conforme `value_type`, `options`, `suggested_values` e `generation`. Regras PLANNED e invariantes/fluxos que não podem ser representados por um simples valor aparecem como **Regressão Oficial somente** em vez de receber um controle que não teria efeito real.
+
+O payload do Studio aceita:
+
+- estratégia `SINGLE`, `PAIRWISE` ou `CARTESIAN`;
+- múltiplos valores por dimensão;
+- apólice primária e, opcionalmente, uma segunda apólice de outra seguradora;
+- matching automático ou `policy_id` explícito;
+- ramo, OBS do documento e variáveis suplementares;
+- resultado esperado por status, código e apólice selecionada.
+
+`document.data_emissao` é uma dimensão P0 explícita, permitindo cruzar diretamente emissão do DF-e com `policy.vigencia_inicio`, `policy.vigencia_fim`, LMI, documento, canal e demais regras.
+
+Cada caso é executado dentro de `dbStore.runTestLabEphemeral()` e `withClock()`. Nenhuma fixture do Studio é persistida no datastore real ou espelhada para Postgres. O Studio também repete a trava de ambiente do runner oficial e rejeita execução em produção/ambientes desconhecidos.
+
+Limites de proteção do Studio:
+
+- até 30 dimensões;
+- até 25 valores por dimensão;
+- até 250 casos por execução;
+- o cartesiano acima do limite é recusado em vez de truncado silenciosamente.
+
+Quando uma expectativa é informada, cada caso apresenta **esperado x obtido** e recebe PASS/FAIL. Sem expectativa, o Studio funciona como explorador de comportamento e expõe status, código, policy escolhida, valor considerado, regras aplicadas e variáveis faltantes.
+
 ## Implementação
 
 - Fixtures XML de CT-e, NF-e, MDF-e e NFS-e com seed, data de referência, valor, número, protocolo, ambiente SEFAZ e papel do CNPJ explícitos (`TestLabFixtureGenerator`). MDF-e também é determinístico.

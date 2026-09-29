@@ -13,6 +13,14 @@ import {
 } from 'lucide-react';
 import { ApiClient } from '../services/api';
 import { TestLabPresets, TestLabAnalysis } from './TestLabTools';
+import {
+  LabTab,
+  TestLabCoverageCenter,
+  TestLabHistoryCenter,
+  TestLabOverview,
+  TestLabV2Navigation
+} from './TestLabV2Panels';
+import { TestLabStudioV2 } from './TestLabStudioV2';
 
 type EngineStatus = 'ACTIVE' | 'PLANNED' | 'INVARIANT';
 type RunMode = 'QUICK' | 'STANDARD' | 'EXHAUSTIVE';
@@ -174,6 +182,7 @@ export function TestLabCatalog() {
   const [planning, setPlanning] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+  const [activeTab, setActiveTab] = useState<LabTab>('overview');
 
   const loadBase = async () => {
     setLoading(true);
@@ -344,8 +353,58 @@ export function TestLabCatalog() {
     );
   }
 
+  const navigation = <TestLabV2Navigation active={activeTab} onChange={setActiveTab} />;
+
+  if (activeTab === 'overview') {
+    return (
+      <>
+        {navigation}
+        <TestLabOverview
+          catalog={catalog}
+          audit={audit}
+          history={history}
+          onNavigate={setActiveTab}
+        />
+      </>
+    );
+  }
+
+  if (activeTab === 'studio') {
+    return (
+      <>
+        {navigation}
+        <TestLabStudioV2 catalog={catalog} />
+      </>
+    );
+  }
+
+  if (activeTab === 'coverage') {
+    return (
+      <>
+        {navigation}
+        <TestLabCoverageCenter catalog={catalog} currentRun={run} history={history} />
+      </>
+    );
+  }
+
+  if (activeTab === 'history') {
+    return (
+      <>
+        {navigation}
+        <TestLabHistoryCenter
+          history={history}
+          onOpen={async (id) => {
+            await openHistoryRun(id);
+            setActiveTab('regression');
+          }}
+        />
+      </>
+    );
+  }
+
   return (
     <>
+      {navigation}
       <TestLabPresets selection={requestPayload()} apply={value => {
         setMode(value.mode);
         setSelectedSuites(Object.fromEntries(value.suite_keys.filter(key => catalog.suites.some(s => s.key === key)).map(key => [key, true])));
