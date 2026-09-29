@@ -208,7 +208,11 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
       setStudio(next);
       setReferenceDate(next.default_reference_date);
 
-      const defaults = [
+      const canUse = (key: string) =>
+        next.capabilities.some((item) => item.key === key && item.interactive);
+      const onlyAvailable = (keys: string[]) => keys.filter(canUse);
+
+      const defaults = onlyAvailable([
         'policy.status',
         'policy.lmi',
         'policy.vigencia_inicio',
@@ -219,10 +223,9 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
         'document.tp_amb',
         'document.funcao_cnpj_segurado',
         'ingestion.channel'
-      ].filter((key) => next.capabilities.some((item) => item.key === key && item.interactive));
+      ]);
 
-      setSelectedKeys(defaults);
-      setValues(Object.fromEntries(defaults.map((key) => {
+      const defaultValues = Object.fromEntries(defaults.map((key) => {
         const cap = next.capabilities.find((item) => item.key === key)!;
         let chosen: Primitive[] = cap.suggested_values?.length ? [cap.suggested_values[0]!] : [''];
         if (key === 'policy.status') chosen = ['ATIVA'];
@@ -236,7 +239,120 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
         if (key === 'document.funcao_cnpj_segurado') chosen = ['EMISSOR'];
         if (key === 'ingestion.channel') chosen = ['INTERNAL'];
         return [key, chosen];
-      })));
+      }));
+
+      setSelectedKeys(defaults);
+      setValues(defaultValues);
+
+      const quick = window.sessionStorage.getItem('arckatech:testlab:quick-scenario');
+      if (!quick) return;
+      window.sessionStorage.removeItem('arckatech:testlab:quick-scenario');
+
+      setExpectedStatus('');
+      setExpectedCode('');
+      setExpectedPolicy('');
+      setObservation('');
+      setSupplementedJson('{}');
+      setIncludeCoverage(false);
+      setSecondaryEnabled(false);
+      setMatchingMode('EXPLICIT');
+      setStrategy('PAIRWISE');
+
+      if (quick === 'vigencia-renovacao') {
+        const keys = onlyAvailable([
+          'policy.status',
+          'policy.vigencia_inicio',
+          'policy.vigencia_fim',
+          'document.tipo',
+          'document.data_emissao',
+          'document.funcao_cnpj_segurado',
+          'ingestion.channel'
+        ]);
+        setName('Vigência e renovação entre seguradoras');
+        setSelectedKeys(keys);
+        setValues({
+          'policy.status': ['ATIVA'],
+          'policy.vigencia_inicio': ['2025-01-01T00:00:00.000-03:00'],
+          'policy.vigencia_fim': ['2025-12-31T23:59:59.999-03:00'],
+          'document.tipo': ['CTE'],
+          'document.data_emissao': ['2026-09-29T12:00:00.000-03:00'],
+          'document.funcao_cnpj_segurado': ['EMISSOR'],
+          'ingestion.channel': ['INTERNAL']
+        });
+        setMatchingMode('AUTO');
+        setSecondaryEnabled(true);
+        setSecondaryStart('2026-01-01T00:00:00.000-03:00');
+        setSecondaryEnd('2026-12-31T23:59:59.999-03:00');
+        setExpectedPolicy('SECONDARY');
+        setStrategy('SINGLE');
+        return;
+      }
+
+      if (quick === 'lmi-sublimite') {
+        const keys = onlyAvailable([
+          'policy.status',
+          'policy.lmi',
+          'document.tipo',
+          'document.valor_carga',
+          'sublimit.tipo_condicao',
+          'sublimit.valor',
+          'regras:estrategia-lmg'
+        ]);
+        setName('Fronteiras de LMI e sublimite');
+        setSelectedKeys(keys);
+        setValues({
+          'policy.status': ['ATIVA'],
+          'policy.lmi': [100000],
+          'document.tipo': ['CTE'],
+          'document.valor_carga': [49999, 50000, 50001, 99999, 100000, 100001],
+          'sublimit.tipo_condicao': ['mercadoria'],
+          'sublimit.valor': [50000],
+          'regras:estrategia-lmg': ['truncar']
+        });
+        setStrategy('PAIRWISE');
+        return;
+      }
+
+      if (quick === 'titularidade') {
+        const keys = onlyAvailable([
+          'policy.status',
+          'titularity.allowed_functions',
+          'policy.aceita_averbacao_como_destinatario',
+          'document.tipo',
+          'document.funcao_cnpj_segurado'
+        ]);
+        setName('Matriz de titularidade do CNPJ');
+        setSelectedKeys(keys);
+        setValues({
+          'policy.status': ['ATIVA'],
+          'titularity.allowed_functions': ['TOMADOR', 'DESTINATARIO'],
+          'policy.aceita_averbacao_como_destinatario': [false, true],
+          'document.tipo': ['CTE'],
+          'document.funcao_cnpj_segurado': ['EMISSOR', 'TOMADOR', 'DESTINATARIO', 'AUSENTE']
+        });
+        setStrategy('PAIRWISE');
+        return;
+      }
+
+      if (quick === 'canais') {
+        const keys = onlyAvailable([
+          'policy.status',
+          'document.tipo',
+          'document.tp_amb',
+          'document.data_emissao',
+          'ingestion.channel'
+        ]);
+        setName('Mesmo DF-e em múltiplos canais');
+        setSelectedKeys(keys);
+        setValues({
+          'policy.status': ['ATIVA'],
+          'document.tipo': ['CTE', 'NFE', 'MDFE'],
+          'document.tp_amb': [2],
+          'document.data_emissao': ['2026-09-29T12:00:00.000-03:00'],
+          'ingestion.channel': ['INTERNAL', 'API', 'PORTAL', 'SEFAZ', 'TMS', 'WHATSAPP']
+        });
+        setStrategy('PAIRWISE');
+      }
     });
   }, []);
 
