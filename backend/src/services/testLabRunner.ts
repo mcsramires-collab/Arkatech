@@ -286,6 +286,17 @@ function processAverbacao(
   });
 }
 
+function processAverbacaoAuto(
+  ctx: LabContext,
+  fixtureOverrides: Partial<MockGenerationOptions> = {}
+): AverbacaoResponseDTO {
+  return AverbacaoService.process({
+    tenant_id: ctx.tenantId,
+    ramo: 'RCTRC',
+    xml_content: makeXml(ctx, fixtureOverrides)
+  });
+}
+
 function cancellationXml(chave: string): string {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -462,6 +473,20 @@ function generatedCatalogScenarios(mode: TestLabMode): ScenarioDefinition[] {
     }
   });
   for (const offset of [-1, 0, 1]) scenarios.push({
+    id: `GEN-DATE-START-${offset}`, suite_key: 'p0-policy-engine', priority: 'P0',
+    title: `Início da vigência: fronteira ${offset} ms`, description: 'Compara emissão antes, exatamente no início e depois do início da vigência.',
+    tags: ['generated', 'DATE_BOUNDARIES'], covers_flag_keys: ['policy.vigencia_inicio'],
+    execute: () => withClock(Date.parse('2026-09-28T12:00:00.000Z'), () => {
+      const ctx = setupBase({ vigencia_inicio: new Date(now() + offset).toISOString() });
+      const response = processAverbacao(ctx, { emissionDate: new Date(now()).toISOString() });
+      const expected = offset > 0 ? 'pendente' : 'sucesso';
+      const assertions = [assertion('status', 'Fronteira de vigência inicial', expected, response.status)];
+      if (offset > 0) assertions.push(assertion('code', 'Código antes da vigência', 'ERR-4021', response.codigo));
+      return { assertions, evidence: { offset, reference_date: new Date(now()).toISOString(), response } };
+    })
+  });
+
+  for (const offset of [-1, 0, 1]) scenarios.push({
     id: `GEN-DATE-END-${offset}`, suite_key: 'p0-policy-engine', priority: 'P0',
     title: `Fim da vigência: fronteira ${offset} ms`, description: 'Compara antes, exatamente no limite e após a vigência com relógio isolado.',
     tags: ['generated', 'DATE_BOUNDARIES'], covers_flag_keys: ['policy.vigencia_fim'],
@@ -508,7 +533,7 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
     title: 'Apólice ativa dentro da vigência',
     description: 'Documento autorizado e titular deve resultar em averbação de teste com sucesso.',
     tags: ['policy', 'smoke'],
-    covers_flag_keys: ['policy.status', 'policy.vigencia_fim'],
+    covers_flag_keys: ['policy.status', 'policy.vigencia_inicio', 'policy.vigencia_fim'],
     quick: true,
     execute: () => {
       const ctx = setupBase();
@@ -594,6 +619,236 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
         assertions: [
           assertion('status', 'Status com bypass', 'aviso', result.status),
           assertion('codigo', 'Código de sucesso com aviso', 'SUC-2001', result.codigo)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P0-POLICY-START-DIRECT-PENDING',
+    suite_key: 'p0-policy-engine',
+    priority: 'P0',
+    title: 'Policy explícita antes do início da vigência',
+    description: 'policy_id explícito não contorna a data de início e deve gerar pendência auditável.',
+    tags: ['policy', 'validity', 'direct-policy'],
+    covers_flag_keys: ['policy.vigencia_inicio', 'policy.permitir_inativo_vencido'],
+    execute: () => {
+      const ctx = setupBase({
+        vigencia_inicio: isoFromNow(24 * 60 * 60 * 1000),
+        permitir_inativo_vencido: true
+      });
+      const result = processAverbacao(ctx, { emissionDate: isoFromNow(0), documentNumber: 570301 });
+      const record = result.averbacao_id
+        ? dbStore.averbacoes.find((item) => item.id === result.averbacao_id)
+        : undefined;
+      return {
+        assertions: [
+          assertion('status', 'Status', 'pendente', result.status),
+          assertion('codigo', 'Código anterior à vigência', 'ERR-4021', result.codigo),
+          assertion('record_status', 'Persistência como pendência', 'PENDENTE_APROVACAO', record?.status),
+          assertion('bypass_not_used', 'Bypass de inativo/vencido não libera início futuro', 'ERR-4021', record?.motivo_pendencia)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P0-POLICY-DATEONLY-BOUNDARY',
+    suite_key: 'p0-policy-engine',
+    priority: 'P0',
+    title: 'Vigência date-only é inclusiva no dia civil',
+    description: 'Apólice com YYYY-MM-DD aceita todo o dia inicial/final no timezone de negócio e bloqueia o dia anterior.',
+    tags: ['policy', 'validity', 'timezone'],
+    covers_flag_keys: ['policy.vigencia_inicio', 'policy.vigencia_fim'],
+    execute: () => {
+      const insideCtx = setupBase({
+        vigencia_inicio: '2026-09-29',
+        vigencia_fim: '2026-09-29'
+      });
+      const inside = processAverbacao(insideCtx, {
+        emissionDate: '2026-09-29T23:59:59-03:00',
+        documentNumber: 570302
+      });
+
+      const beforeCtx = setupBase({
+        vigencia_inicio: '2026-09-29',
+        vigencia_fim: '2026-09-30'
+      });
+      const before = processAverbacao(beforeCtx, {
+        emissionDate: '2026-09-28T23:59:59-03:00',
+        documentNumber: 570303
+      });
+
+      return {
+        assertions: [
+          assertion('inside', 'Mesmo dia civil permitido', 'sucesso', inside.status),
+          assertion('before', 'Dia anterior vira pendência', 'pendente', before.status),
+          assertion('before_code', 'Motivo de vigência inicial', 'ERR-4021', before.codigo)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P0-POLICY-MATCH-RENEWAL',
+    suite_key: 'p0-policy-engine',
+    priority: 'P0',
+    title: 'Matching escolhe a apólice da data do documento',
+    description: 'Duas apólices sequenciais do mesmo ramo são resolvidas pela emissão, não pela ordem do array.',
+    tags: ['policy', 'matching', 'renewal'],
+    covers_flag_keys: ['policy.vigencia_inicio', 'policy.vigencia_fim', 'access.same_tenant_same_branch_two_insurers'],
+    execute: () => {
+      const ctx = setupBase();
+      const original = mainPolicy(ctx);
+      const oldPolicy: Policy = {
+        ...original,
+        id: 'lab-policy-old',
+        numero_apolice: 'LAB-OLD-2025',
+        insurer_id: ctx.insurerAId,
+        vigencia_inicio: isoFromNow(-365 * 24 * 60 * 60 * 1000),
+        vigencia_fim: isoFromNow(-100 * 24 * 60 * 60 * 1000),
+        status: 'ATIVA'
+      };
+      const currentPolicy: Policy = {
+        ...original,
+        id: 'lab-policy-current',
+        numero_apolice: 'LAB-CURRENT-2026',
+        insurer_id: ctx.insurerBId,
+        vigencia_inicio: isoFromNow(-99 * 24 * 60 * 60 * 1000),
+        vigencia_fim: isoFromNow(365 * 24 * 60 * 60 * 1000),
+        status: 'ATIVA'
+      };
+      dbStore.policies = [currentPolicy, oldPolicy, dbStore.policies.find((p) => p.id === ctx.keepAlivePolicyId)!];
+
+      const response = processAverbacaoAuto(ctx, {
+        emissionDate: isoFromNow(-200 * 24 * 60 * 60 * 1000),
+        documentNumber: 570304
+      });
+      const record = response.averbacao_id
+        ? dbStore.averbacoes.find((item) => item.id === response.averbacao_id)
+        : undefined;
+
+      return {
+        assertions: [
+          assertion('status', 'Documento histórico processado', 'sucesso', response.status),
+          assertion('matched_policy', 'Apólice histórica selecionada', oldPolicy.id, record?.policy_id)
+        ],
+        evidence: { selected_policy_id: record?.policy_id, old_policy: oldPolicy.id, current_policy: currentPolicy.id }
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P0-POLICY-MATCH-AMBIGUOUS',
+    suite_key: 'p0-policy-engine',
+    priority: 'P0',
+    title: 'Matching ambíguo nunca escolhe a primeira apólice',
+    description: 'Mesmo segurado, ramo e período em duas seguradoras exige revisão explícita.',
+    tags: ['policy', 'matching', 'ambiguity', 'security'],
+    covers_flag_keys: ['access.same_tenant_same_branch_two_insurers', 'policy.vigencia_inicio', 'policy.vigencia_fim'],
+    execute: () => {
+      const ctx = setupBase();
+      const original = mainPolicy(ctx);
+      const other: Policy = {
+        ...original,
+        id: 'lab-policy-overlap-b',
+        numero_apolice: 'LAB-OVERLAP-B',
+        insurer_id: ctx.insurerBId
+      };
+      dbStore.policies = [original, other, dbStore.policies.find((p) => p.id === ctx.keepAlivePolicyId)!];
+      const response = processAverbacaoAuto(ctx, { emissionDate: isoFromNow(0), documentNumber: 570305 });
+      return {
+        assertions: [
+          assertion('status', 'Ambiguidade vira pendência', 'pendente', response.status),
+          assertion('code', 'Código de matching ambíguo', 'ERR-4023', response.codigo),
+          assertion('no_automatic_averbacao', 'Nenhuma averbação criada arbitrariamente', 0, dbStore.averbacoes.length)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P0-POLICY-MATCH-NONE',
+    suite_key: 'p0-policy-engine',
+    priority: 'P0',
+    title: 'Nenhuma apólice cobre a data',
+    description: 'Com várias apólices fora da data, o motor não faz fallback para a primeira.',
+    tags: ['policy', 'matching', 'no-candidate'],
+    covers_flag_keys: ['policy.vigencia_inicio', 'policy.vigencia_fim'],
+    execute: () => {
+      const ctx = setupBase();
+      const original = mainPolicy(ctx);
+      const past: Policy = {
+        ...original,
+        id: 'lab-policy-past',
+        numero_apolice: 'LAB-PAST',
+        vigencia_inicio: isoFromNow(-300 * 24 * 60 * 60 * 1000),
+        vigencia_fim: isoFromNow(-200 * 24 * 60 * 60 * 1000)
+      };
+      const future: Policy = {
+        ...original,
+        id: 'lab-policy-future',
+        numero_apolice: 'LAB-FUTURE',
+        insurer_id: ctx.insurerBId,
+        vigencia_inicio: isoFromNow(100 * 24 * 60 * 60 * 1000),
+        vigencia_fim: isoFromNow(300 * 24 * 60 * 60 * 1000)
+      };
+      dbStore.policies = [past, future, dbStore.policies.find((p) => p.id === ctx.keepAlivePolicyId)!];
+      const response = processAverbacaoAuto(ctx, { emissionDate: isoFromNow(0), documentNumber: 570306 });
+      return {
+        assertions: [
+          assertion('status', 'Sem cobertura temporal vira pendência', 'pendente', response.status),
+          assertion('code', 'Código sem apólice temporal', 'ERR-4024', response.codigo),
+          assertion('no_fallback', 'Nenhuma averbação criada por fallback', 0, dbStore.averbacoes.length)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P0-POLICY-REPROCESS-REMATCH',
+    suite_key: 'p0-policy-engine',
+    priority: 'P0',
+    title: 'Reenvio rematcheia pendência anterior à vigência',
+    description: 'Ao surgir uma apólice correta para a data, o reenvio deixa de ficar preso ao policy_id anterior.',
+    tags: ['policy', 'matching', 'reprocess'],
+    covers_flag_keys: ['policy.vigencia_inicio', 'policy.vigencia_fim'],
+    execute: () => {
+      const ctx = setupBase({
+        vigencia_inicio: isoFromNow(30 * 24 * 60 * 60 * 1000),
+        vigencia_fim: isoFromNow(365 * 24 * 60 * 60 * 1000)
+      });
+      const emissionDate = isoFromNow(0);
+      const first = processAverbacao(ctx, { emissionDate, documentNumber: 570307 });
+      const firstRecord = first.averbacao_id
+        ? dbStore.averbacoes.find((item) => item.id === first.averbacao_id)
+        : undefined;
+      if (!firstRecord) {
+        return { assertions: [assertion('first_record', 'Pendência inicial criada', true, false)] };
+      }
+
+      const correctPolicy: Policy = {
+        ...mainPolicy(ctx),
+        id: 'lab-policy-retro-correct',
+        numero_apolice: 'LAB-RETRO-CORRECT',
+        vigencia_inicio: isoFromNow(-30 * 24 * 60 * 60 * 1000),
+        vigencia_fim: isoFromNow(30 * 24 * 60 * 60 * 1000),
+        status: 'ATIVA',
+        permitir_inativo_vencido: false
+      };
+      dbStore.policies.push(correctPolicy);
+
+      const retry = AverbacaoService.reenviar(firstRecord, 'http://localhost:5173');
+      const retryRecord = retry.averbacao_id
+        ? dbStore.averbacoes.find((item) => item.id === retry.averbacao_id)
+        : undefined;
+
+      return {
+        assertions: [
+          assertion('first_status', 'Primeira tentativa pendente', 'pendente', first.status),
+          assertion('first_code', 'Primeiro motivo', 'ERR-4021', first.codigo),
+          assertion('retry_status', 'Reenvio processado', 'sucesso', retry.status),
+          assertion('retry_policy', 'Reenvio escolheu nova apólice válida', correctPolicy.id, retryRecord?.policy_id)
         ]
       };
     }
