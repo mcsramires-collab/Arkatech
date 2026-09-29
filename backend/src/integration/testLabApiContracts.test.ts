@@ -98,6 +98,22 @@ describe('Test Lab HTTP/API contracts', () => {
       const base = 'http://127.0.0.1:' + port;
 
       try {
+        const unauthenticated = await fetch(base + '/api/v1/admin/test-lab/catalog');
+        expect(unauthenticated.status).toBe(401);
+        const insurerToken = jwt.sign({ actor_type: 'INSURER_USER', user_id: 'foreign-insurer', insurer_id: 'foreign-insurer', role: 'ADM' }, jwtSecret, { expiresIn: 3600 });
+        for (const endpoint of ['catalog', 'runs']) {
+          const denied = await fetch(base + '/api/v1/admin/test-lab/' + endpoint, { headers: { authorization: 'Bearer ' + insurerToken } });
+          expect(denied.status).toBe(403);
+        }
+        const environment = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        try {
+          const blocked = await fetch(base + '/api/v1/admin/test-lab/execute', {
+            method: 'POST', headers: { 'content-type': 'application/json', 'x-internal-api-key': internalKey }, body: '{}'
+          });
+          expect(blocked.status).toBe(400);
+          expect((await blocked.json() as any).mensagem).toBe('TEST_LAB_PRODUCTION_BLOCKED');
+        } finally { process.env.NODE_ENV = environment; }
         const planResponse = await fetch(base + '/api/v1/admin/test-lab/plan', {
           method: 'POST',
           headers: {

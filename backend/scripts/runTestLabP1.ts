@@ -1,6 +1,7 @@
 import { getTestLabCatalog } from '../src/services/testLabCatalog';
 import { TestLabCatalogAuditService } from '../src/services/testLabCatalogAudit';
 import { TestLabRunnerService } from '../src/services/testLabRunner';
+import { saveTestLabReport } from './testLabReport';
 
 async function main() {
   const catalog = getTestLabCatalog();
@@ -20,6 +21,7 @@ async function main() {
     mode: 'STANDARD',
     suite_keys: p1Suites
   });
+  saveTestLabReport('p1', run);
 
   const flags = new Map(catalog.flags.map((flag) => [flag.key, flag]));
   const unexpectedGaps = run.scenario_results.filter((result) => {

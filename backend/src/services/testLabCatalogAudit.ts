@@ -18,7 +18,7 @@ function walkTsFiles(root: string): string[] {
     const full = path.join(root, entry.name);
     if (entry.isDirectory()) {
       result.push(...walkTsFiles(full));
-    } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+    } else if (/\.[jt]sx?$/.test(entry.name) && !/\.(test|spec)\.[jt]sx?$/.test(entry.name) && !entry.name.startsWith('testLab')) {
       result.push(full);
     }
   }
@@ -28,8 +28,7 @@ function walkTsFiles(root: string): string[] {
 function extractRuleKeys(source: string): string[] {
   const keys = new Set<string>();
   const patterns = [
-    /\[['"](regras:[^'"]+)['"]\]/g,
-    /['"](regras:[^'"]+)['"]\s*:/g
+    /['"]((?:regras|recusas|rcv):[A-Za-z0-9_:-]+)['"]/g
   ];
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {
@@ -43,8 +42,9 @@ export class TestLabCatalogAuditService {
   static audit(): TestLabCatalogAudit {
     const detected = new Set<string>();
 
-    const srcRoot = path.join(process.cwd(), 'src');
-    for (const file of walkTsFiles(srcRoot)) {
+    const roots = [path.resolve(__dirname, '..'), path.resolve(__dirname, '../../../frontend/src')];
+    if (process.env.TEST_LAB_UI_SOURCE) roots.push(path.resolve(process.env.TEST_LAB_UI_SOURCE));
+    for (const file of roots.flatMap(walkTsFiles)) {
       const source = fs.readFileSync(file, 'utf8');
       for (const key of extractRuleKeys(source)) detected.add(key);
     }
@@ -53,7 +53,7 @@ export class TestLabCatalogAuditService {
     // mesmo quando a referência foi removida/movida de arquivo.
     for (const settings of dbStore.policyBusinessSettings) {
       for (const key of Object.keys(settings.config ?? {})) {
-        if (key.startsWith('regras:')) detected.add(key);
+        detected.add(key);
       }
     }
 
@@ -62,7 +62,7 @@ export class TestLabCatalogAuditService {
     const businessKeys = [...detected].sort();
     const uncatalogued = businessKeys.filter((key) => !catalogued.has(key));
     const cataloguedBusiness = [...catalogued]
-      .filter((key) => key.startsWith('regras:'))
+      .filter((key) => /^(regras|recusas|rcv):/.test(key))
       .sort();
     const notDetected = cataloguedBusiness.filter((key) => !detected.has(key));
 

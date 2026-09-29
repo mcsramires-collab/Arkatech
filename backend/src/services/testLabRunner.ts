@@ -1,3 +1,4 @@
+import { now, withClock } from './clock';
 import { v4 as uuidv4 } from 'uuid';
 import {
   Averbacao,
@@ -22,6 +23,7 @@ import { MockSefazService } from '../mockSefaz/mockSefazService';
 import { getTestLabCatalog } from './testLabCatalog';
 import { TestLabCatalogAuditService } from './testLabCatalogAudit';
 import { TestLabScenarioGenerator, ScenarioDimension } from './testLabScenarioGenerator';
+import { TestLabFixtureGenerator } from './testLabFixtureGenerator';
 
 export interface TestLabPlanRequest {
   mode?: TestLabMode;
@@ -109,18 +111,18 @@ function includesAssertion(
 }
 
 function isoFromNow(deltaMs: number): string {
-  return new Date(Date.now() + deltaMs).toISOString();
+  return new Date(now() + deltaMs).toISOString();
 }
 
 function brDateFromNow(deltaDays: number): string {
-  const date = new Date(Date.now() + deltaDays * 24 * 60 * 60 * 1000);
+  const date = new Date(now() + deltaDays * 24 * 60 * 60 * 1000);
   const dd = String(date.getDate()).padStart(2, '0');
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   return dd + '/' + mm + '/' + date.getFullYear();
 }
 
 function setupBase(policyOverrides: Partial<Policy> = {}): LabContext {
-  const now = new Date().toISOString();
+  const timestamp = new Date(now()).toISOString();
   const tenantId = 'lab-tenant-shared';
   const insurerAId = 'lab-insurer-a';
   const insurerBId = 'lab-insurer-b';
@@ -140,7 +142,7 @@ function setupBase(policyOverrides: Partial<Policy> = {}): LabContext {
       client_secret_hash: 'lab-hash',
       role: 'TRANSPORTADOR',
       token_duration_hours: 8,
-      created_at: now
+      created_at: timestamp
     }
   ];
 
@@ -151,7 +153,7 @@ function setupBase(policyOverrides: Partial<Policy> = {}): LabContext {
       nome: 'SEGURADORA A LAB',
       razao_social: 'SEGURADORA A LAB',
       nome_fantasia: 'SEG A',
-      created_at: now
+      created_at: timestamp
     },
     {
       id: insurerBId,
@@ -159,7 +161,7 @@ function setupBase(policyOverrides: Partial<Policy> = {}): LabContext {
       nome: 'SEGURADORA B LAB',
       razao_social: 'SEGURADORA B LAB',
       nome_fantasia: 'SEG B',
-      created_at: now
+      created_at: timestamp
     }
   ];
 
@@ -170,7 +172,7 @@ function setupBase(policyOverrides: Partial<Policy> = {}): LabContext {
       nome: 'CORRETORA LAB',
       razao_social: 'CORRETORA LAB',
       partner_type: 'CORRETORA',
-      created_at: now
+      created_at: timestamp
     }
   ];
 
@@ -254,7 +256,7 @@ function makeXml(
   ctx: LabContext,
   overrides: Partial<MockGenerationOptions> = {}
 ): string {
-  return MockGeneratorService.generateMockXML({
+  return new TestLabFixtureGenerator('arckatech-standard-v1', new Date().toISOString()).xml({
     tenantId: ctx.tenantId,
     tipoDoc: 'CTE',
     policyId: ctx.policyId,
@@ -429,9 +431,75 @@ function generatedLimitMatrixScenarios(mode: TestLabMode): ScenarioDefinition[] 
   });
 }
 
+function generatedCatalogScenarios(mode: TestLabMode): ScenarioDefinition[] {
+  if (mode === 'QUICK') return [];
+  const catalog = getTestLabCatalog();
+  const values = (key: string) => TestLabScenarioGenerator.valuesForFlag(catalog.flags.find(f => f.key === key)!);
+  const scenarios: ScenarioDefinition[] = [];
+  for (const status of values('policy.status')) {
+    for (const bypass of values('policy.permitir_inativo_vencido')) {
+      scenarios.push({
+        id: `GEN-POLICY-${status}-${bypass}`, suite_key: 'p0-policy-engine', priority: 'P0',
+        title: `Status ${status}, permitir inativo/vencido ${bypass}`, description: 'Matriz gerada dos valores do catálogo e executada no motor real.',
+        tags: ['generated', 'ENUM_ALL', 'BOOLEAN_BOTH'], covers_flag_keys: ['policy.status','policy.permitir_inativo_vencido'],
+        execute: () => {
+          const ctx = setupBase({ status: status as Policy['status'], permitir_inativo_vencido: Boolean(bypass) });
+          const response = processAverbacao(ctx);
+          return { assertions: [assertion('status', 'Resultado do motor', status === 'ATIVA' ? 'sucesso' : bypass ? 'aviso' : 'erro', response.status)], evidence: { status, bypass, response } };
+        }
+      });
+    }
+  }
+  const limitFlag = catalog.flags.find(f => f.key === 'policy.lmi')!;
+  const boundaries = values('policy.lmi') as number[];
+  const limit = boundaries[1]!;
+  for (const value of boundaries) scenarios.push({
+    id: `GEN-LMI-${value}`, suite_key: 'p0-limits', priority: 'P0', title: `LMI: carga ${value}, limite ${limit}`,
+    description: 'Limite e fronteiras definidos pelo catálogo.', tags: ['generated', limitFlag.generation], covers_flag_keys: ['policy.lmi', 'document.valor_carga'],
+    execute: () => {
+      const ctx = setupBase({ lmi: limit }); const response = processAverbacao(ctx, { valorCarga: value });
+      return { assertions: [assertion('status', 'Limite aplicado', value > limit ? 'erro' : 'sucesso', response.status)], evidence: { value, limit, response } };
+    }
+  });
+  for (const offset of [-1, 0, 1]) scenarios.push({
+    id: `GEN-DATE-END-${offset}`, suite_key: 'p0-policy-engine', priority: 'P0',
+    title: `Fim da vigência: fronteira ${offset} ms`, description: 'Compara antes, exatamente no limite e após a vigência com relógio isolado.',
+    tags: ['generated', 'DATE_BOUNDARIES'], covers_flag_keys: ['policy.vigencia_fim'],
+    execute: () => withClock(Date.parse('2026-09-28T12:00:00.000Z'), () => {
+      const ctx = setupBase({ vigencia_fim: new Date(now() + offset).toISOString() });
+      const response = processAverbacao(ctx, { emissionDate: new Date(now()).toISOString() });
+      return { assertions: [assertion('status', 'Fronteira de vigência', offset < 0 ? 'pendente' : 'sucesso', response.status)], evidence: { offset, reference_date: new Date(now()).toISOString(), response } };
+    })
+  });
+  const matrix = TestLabScenarioGenerator.invariantMatrix([
+    { key: 'actor', values: ['a','b'] }, { key: 'owner', values: ['a','b'] }, { key: 'sameBranch', values: [false,true] }
+  ]);
+  for (const row of matrix) scenarios.push({
+    id: `GEN-ACCESS-${row.actor}-${row.owner}-${row.sameBranch}`, suite_key: 'p0-access-isolation', priority: 'P0',
+    title: `Acesso ${row.actor} → ${row.owner}, mesmo ramo ${row.sameBranch}`, description: 'Matriz completa de propriedade, IDOR e agregado para o mesmo segurado.',
+    tags: ['generated', 'INVARIANT_MATRIX'], covers_flag_keys: ['access.insurer_policy_isolation','access.direct_object_reference','access.aggregate_isolation','access.same_tenant_same_branch_two_insurers'],
+    execute: () => {
+      const ctx = setupBase(); const original = mainPolicy(ctx);
+      const other = { ...original, id: 'matrix-policy-b', insurer_id: ctx.insurerBId, ramo: row.sameBranch ? original.ramo : 'RCDC' } as Policy;
+      dbStore.policies = [original, other];
+      const target = row.owner === 'a' ? original : other;
+      const actor = row.actor === 'a' ? ctx.insurerAId : ctx.insurerBId;
+      dbStore.averbacoes = [{ id: 'matrix-avb', policy_id: target.id, tenant_id: ctx.tenantId, valor_carga: 123, valor_considerado_averbacao: 123, status: 'SUCESSO' }] as any;
+      const allowed = row.actor === row.owner;
+      return { assertions: [
+        assertion('policy', 'Acesso à apólice', allowed, InsurerVisibilityService.canAccessPolicy(actor, target.id)),
+        assertion('idor', 'Acesso direto à averbação', allowed, InsurerVisibilityService.canAccessAverbacao(actor, 'matrix-avb')),
+        assertion('list', 'Lista por segurado', allowed ? 1 : 0, InsurerVisibilityService.averbacoes(actor, { tenant_id: ctx.tenantId }).length),
+        assertion('aggregate', 'Valor agregado', allowed ? 123 : 0, InsurerVisibilityService.aggregate(actor).valor_total_averbado)
+      ], evidence: row };
+    }
+  });
+  return scenarios;
+}
+
 function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
   const scenarios: ScenarioDefinition[] = [];
-  scenarios.push(...generatedLimitMatrixScenarios(mode));
+  scenarios.push(...generatedLimitMatrixScenarios(mode), ...generatedCatalogScenarios(mode));
 
   scenarios.push({
     id: 'P0-POLICY-ACTIVE-SUCCESS',
@@ -440,7 +508,7 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
     title: 'Apólice ativa dentro da vigência',
     description: 'Documento autorizado e titular deve resultar em averbação de teste com sucesso.',
     tags: ['policy', 'smoke'],
-    covers_flag_keys: ['policy.status', 'policy.vigencia_inicio', 'policy.vigencia_fim'],
+    covers_flag_keys: ['policy.status', 'policy.vigencia_fim'],
     quick: true,
     execute: () => {
       const ctx = setupBase();
@@ -1990,6 +2058,16 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
 export class TestLabRunnerService {
   static plan(request: TestLabPlanRequest = {}): TestLabPlan {
     const catalog = getTestLabCatalog();
+    if (!request || typeof request !== 'object' || Array.isArray(request)) throw new Error('TEST_LAB_INVALID_REQUEST');
+    if (request.mode && !['QUICK', 'STANDARD', 'EXHAUSTIVE'].includes(request.mode)) throw new Error('TEST_LAB_INVALID_MODE');
+    for (const field of ['suite_keys', 'selected_flag_keys', 'only_scenario_ids'] as const) {
+      const values = request[field];
+      if (values !== undefined && (!Array.isArray(values) || !values.length || values.length > 2000 || values.some(v => typeof v !== 'string'))) {
+        throw new Error('TEST_LAB_INVALID_SELECTION');
+      }
+    }
+    if (request.suite_keys?.some(key => !catalog.suites.some(s => s.key === key && s.priority !== 'P2'))) throw new Error('TEST_LAB_UNKNOWN_SUITE');
+    if (request.selected_flag_keys?.some(key => !catalog.flags.some(f => f.key === key))) throw new Error('TEST_LAB_UNKNOWN_FLAG');
     const mode: TestLabMode = request.mode ?? 'STANDARD';
     const allowedSuites = catalog.suites.filter(
       (suite) => suite.priority === 'P0' || suite.priority === 'P1'
@@ -2062,7 +2140,6 @@ export class TestLabRunnerService {
       .map((key) => flagMap.get(key))
       .filter((flag): flag is NonNullable<typeof flag> => Boolean(flag))
       .filter((flag) => ['BOOLEAN_BOTH', 'ENUM_ALL', 'NUMERIC_BOUNDARIES', 'DATE_BOUNDARIES', 'PAIRWISE'].includes(flag.generation))
-      .slice(0, 10)
       .map((flag) => ({
         key: flag.key,
         values: TestLabScenarioGenerator.valuesForFlag(flag)
@@ -2096,7 +2173,15 @@ export class TestLabRunnerService {
   }
 
   static async execute(request: TestLabPlanRequest = {}): Promise<TestLabRun> {
+    // Guard the service itself so HTTP, CLI and future callers cannot bypass it.
+    for (const name of ['NODE_ENV', 'APP_ENV', 'ENVIRONMENT', 'DEPLOYMENT_ENV']) {
+      const value = process.env[name]?.toLowerCase();
+      if (value && !['test', 'teste', 'development', 'dev', 'local', 'staging', 'homologacao', 'homologation'].includes(value)) {
+        throw new Error('TEST_LAB_PRODUCTION_BLOCKED');
+      }
+    }
     const plan = this.plan(request);
+    if (!plan.total_scenarios) throw new Error('TEST_LAB_EMPTY_PLAN');
     const allDefinitions = defineScenarios(plan.mode);
     const definitionById = new Map(allDefinitions.map((item) => [item.id, item]));
 
@@ -2141,7 +2226,7 @@ export class TestLabRunnerService {
             assertions: [],
             error: planned.gap_reason ?? 'Executor automático ausente.'
           };
-        } else if (definition.gap_reason || !definition.execute) {
+        } else if (definition.gap_reason || !definition.execute || getTestLabCatalog().flags.some(flag => flag.engine_status === 'PLANNED' && definition.covers_flag_keys.includes(flag.key))) {
           result = {
             id: definition.id,
             suite_key: definition.suite_key,
@@ -2153,7 +2238,7 @@ export class TestLabRunnerService {
             status: 'GAP',
             duration_ms: 0,
             assertions: [],
-            error: definition.gap_reason ?? 'Executor automático ausente.'
+            error: definition.gap_reason ?? 'Configuração sem efeito no motor ou executor automático ausente.'
           };
         } else {
           const started = Date.now();
@@ -2168,7 +2253,7 @@ export class TestLabRunnerService {
               description: definition.description,
               tags: definition.tags,
               covers_flag_keys: definition.covers_flag_keys,
-              status: passed ? 'PASS' : 'FAIL',
+              status: execution.assertions.length === 0 ? 'GAP' : passed ? 'PASS' : 'FAIL',
               duration_ms: Date.now() - started,
               assertions: execution.assertions,
               evidence: execution.evidence

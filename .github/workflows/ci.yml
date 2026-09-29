@@ -20,15 +20,15 @@ jobs:
       - name: Install dependencies
         run: |
           cd backend
-          npm ci || npm install
+          npm ci
       - name: Type check
         run: |
           cd backend
-          npm run typecheck --if-present
+          npm run typecheck
       - name: Run Tests
         run: |
           cd backend
-          npm test --if-present
+          npm test -- --runInBand
       - name: Run P0 Test Lab regression gate
         run: |
           cd backend
@@ -51,7 +51,9 @@ jobs:
       - name: Install dependencies
         run: |
           cd frontend
-          npm ci || npm install
+          npm ci
+      - name: Type check frontend
+        run: cd frontend && npm run typecheck
       - name: Build Check
         run: |
           cd frontend
@@ -72,7 +74,9 @@ jobs:
       - name: Install frontend dependencies
         run: |
           cd frontend
-          npm ci || npm install
+          npm ci
+      - name: Install backend for real browser journeys
+        run: cd backend && npm ci
       - name: Install Chromium
         run: |
           cd frontend

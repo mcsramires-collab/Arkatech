@@ -155,7 +155,7 @@ export class MockGeneratorService {
           <CNPJ>${insurer ? normalizeCnpj(insurer.cnpj) : '33444555000166'}</CNPJ>
         </infSeg>
         <nApol>${policy?.numero_apolice || 'APOLICE-TESTE'}</nApol>
-        <nAver>ARCK${docNum}${Date.now().toString().slice(-6)}</nAver>
+        <nAver>ARCK${docNum}${emissionDate ? String(Date.parse(emissionDate)).slice(-6) : Date.now().toString().slice(-6)}</nAver>
       </seg>
 `
         : '';

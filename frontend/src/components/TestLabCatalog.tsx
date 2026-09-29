@@ -12,6 +12,7 @@ import {
   XCircle
 } from 'lucide-react';
 import { ApiClient } from '../services/api';
+import { TestLabPresets, TestLabAnalysis } from './TestLabTools';
 
 type EngineStatus = 'ACTIVE' | 'PLANNED' | 'INVARIANT';
 type RunMode = 'QUICK' | 'STANDARD' | 'EXHAUSTIVE';
@@ -345,6 +346,14 @@ export function TestLabCatalog() {
 
   return (
     <>
+      <TestLabPresets selection={requestPayload()} apply={value => {
+        setMode(value.mode);
+        setSelectedSuites(Object.fromEntries(value.suite_keys.filter(key => catalog.suites.some(s => s.key === key)).map(key => [key, true])));
+        setCustomFlags(Boolean(value.selected_flag_keys));
+        setSelectedFlags(Object.fromEntries((value.selected_flag_keys ?? []).filter(key => catalog.flags.some(f => f.key === key)).map(key => [key, true])));
+        setPlan(null);
+      }} />
+      {run && <TestLabAnalysis key={run.id} run={run} flags={catalog.flags} history={history} />}
       <div className="table-container" style={{ padding: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '20px', alignItems: 'flex-start' }}>
           <div>
