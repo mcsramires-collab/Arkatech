@@ -53,7 +53,11 @@ export class CancelamentoService {
     if (requisitante === 'SEGURADO') {
       const businessConfig = RuleEngineService.getBusinessConfig(policy);
       const prazoValor = Number(businessConfig['regras:prazo-cancelamento-valor']);
-      const prazoUnidade = businessConfig['regras:prazo-cancelamento-unidade'] === 'Horas' ? 'Horas' : 'Dias';
+      const unidadeRaw = String(
+        businessConfig['regras:prazo-cancelamento-unidade'] ?? 'Dias'
+      );
+      const prazoUnidade =
+        unidadeRaw === 'Horas' ? 'Horas' : unidadeRaw === 'Meses' ? 'Meses' : 'Dias';
 
       const configuradoEValido =
         'regras:prazo-cancelamento-valor' in businessConfig && !isNaN(prazoValor) && prazoValor > 0;
@@ -63,8 +67,15 @@ export class CancelamentoService {
         return { status: 'erro', codigo: fmt.codigo, mensagem: fmt.mensagem };
       }
 
-      const unidadeMs = prazoUnidade === 'Horas' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
-      const limite = new Date(new Date(averbacaoAnterior.timestamp).getTime() + prazoValor * unidadeMs);
+      const origem = new Date(averbacaoAnterior.timestamp);
+      let limite: Date;
+      if (prazoUnidade === 'Meses') {
+        limite = new Date(origem);
+        limite.setMonth(limite.getMonth() + prazoValor);
+      } else {
+        const unidadeMs = prazoUnidade === 'Horas' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+        limite = new Date(origem.getTime() + prazoValor * unidadeMs);
+      }
       if (Date.now() > limite.getTime()) {
         const fmt = ResponseEngine.formatResponse('ERR-4018');
         return { status: 'erro', codigo: fmt.codigo, mensagem: fmt.mensagem };
