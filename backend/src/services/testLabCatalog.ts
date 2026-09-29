@@ -381,6 +381,17 @@ const flags: TestLabFlagDefinition[] = [
     tags: ['deadline', 'shipment']
   },
   {
+    key: 'regras:cancelamento-sem-limite',
+    group: 'deadlines',
+    label: 'Cancelamento sem limite explícito',
+    description: 'Chave canônica criada quando o Portal salva explicitamente modo de cancelamento sem limite de tempo.',
+    source: { kind: 'BUSINESS_SETTING', path: 'PolicyBusinessSettings.config["regras:cancelamento-sem-limite"]' },
+    value_type: 'BOOLEAN',
+    engine_status: 'ACTIVE',
+    generation: 'BOOLEAN_BOTH',
+    tags: ['deadline', 'cancellation', 'portal-contract', 'p1']
+  },
+  {
     key: 'regras:prazo-cancelamento-valor',
     group: 'deadlines',
     label: 'Prazo de cancelamento',
@@ -699,6 +710,7 @@ const suites: TestLabSuiteTemplate[] = [
       'regras:prazo-campo',
       'regras:dias-apos',
       'regras:prazo-embarque',
+      'regras:cancelamento-sem-limite',
       'regras:prazo-cancelamento-valor',
       'regras:prazo-cancelamento-unidade'
     ]
