@@ -650,6 +650,7 @@ export class TestLabStudioService {
       ...(fixture.matching_mode === 'AUTO' ? {} : { policy_id: PRIMARY_POLICY_ID }),
       xml_content: xml,
       source,
+      supplemented_vars: fixture.supplemented_vars as Record<string, any> | undefined,
       app_base_url: 'http://localhost:5173'
     });
 
