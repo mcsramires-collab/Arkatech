@@ -163,8 +163,9 @@ test('Laboratório planeja e executa uma regressão P0 pela interface', async ({
   await page.goto('/');
 
   await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
-  await expect(page.getByRole('heading', { name: 'Laboratório de Testes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Laboratório de Testes V2' })).toBeVisible();
   await expect(page.getByText('TEST ONLY')).toBeVisible();
+  await page.getByRole('button', { name: 'Regressão Oficial' }).click();
 
   await page.getByRole('button', { name: 'Só P0' }).click();
   await page.getByRole('button', { name: 'Calcular cenários' }).click();
@@ -183,6 +184,7 @@ test('catálogo exibe governança e regra de isolamento', async ({ page }) => {
   await mockApi(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
+  await page.getByRole('button', { name: 'Regressão Oficial' }).click();
 
   await expect(page.getByText('Nenhuma chave')).toBeVisible();
   await expect(page.getByText('Isolamento entre seguradoras')).toBeVisible();
