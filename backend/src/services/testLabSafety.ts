@@ -26,12 +26,13 @@ function normalized(name: string): string | undefined {
   return value || undefined;
 }
 
-function runtimeMarkers() {
-  return Object.fromEntries(
-    ['NODE_ENV', 'APP_ENV', 'ENVIRONMENT', 'DEPLOYMENT_ENV']
-      .map((name) => [name, process.env[name]?.trim()] as const)
-      .filter(([, value]) => Boolean(value))
-  );
+function runtimeMarkers(): Record<string, string> {
+  const markers: Record<string, string> = {};
+  for (const name of ['NODE_ENV', 'APP_ENV', 'ENVIRONMENT', 'DEPLOYMENT_ENV']) {
+    const value = process.env[name]?.trim();
+    if (value) markers[name] = value;
+  }
+  return markers;
 }
 
 function isProductionLikeRuntime(): boolean {
