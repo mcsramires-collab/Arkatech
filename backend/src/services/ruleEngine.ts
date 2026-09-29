@@ -65,12 +65,18 @@ export class RuleEngineService {
     // escolhido realmente é "prazo", evitando que os valores default escondidos habilitem
     // um limite sem a seguradora ter escolhido essa opção.
     if (raw['regras:modo-canc'] === 'prazo') {
+      config['regras:cancelamento-sem-limite'] = false;
       if (!('regras:prazo-cancelamento-valor' in config) && 'regras:canc-valor' in raw) {
         config['regras:prazo-cancelamento-valor'] = Number(raw['regras:canc-valor']);
       }
       if (!('regras:prazo-cancelamento-unidade' in config) && 'regras:canc-unidade' in raw) {
         config['regras:prazo-cancelamento-unidade'] = raw['regras:canc-unidade'];
       }
+    } else if (raw['regras:modo-canc'] === 'sem') {
+      // "Sem limite de tempo" é uma escolha explícita da interface. Diferente de a chave nem
+      // existir (apólice antiga/nunca configurada), esse modo habilita o cancelamento self-service
+      // sem janela máxima.
+      config['regras:cancelamento-sem-limite'] = true;
     }
 
     return config;
