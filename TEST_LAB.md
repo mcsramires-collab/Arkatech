@@ -65,6 +65,33 @@ Limites de proteção do Studio:
 
 Quando uma expectativa é informada, cada caso apresenta **esperado x obtido** e recebe PASS/FAIL. Sem expectativa, o Studio funciona como explorador de comportamento e expõe status, código, policy escolhida, valor considerado, regras aplicadas e variáveis faltantes.
 
+## Deploy do painel interno / autenticação do Laboratório
+
+O frontend interno é servido por Nginx e, em produção, usa o próprio Nginx como BFF para as chamadas `/api/...`.
+
+Isso evita colocar `INTERNAL_API_KEY` em qualquer variável `VITE_*` (variáveis Vite entram no bundle e ficariam visíveis no navegador).
+
+No Easypanel, o serviço **frontend** precisa receber:
+
+- `INTERNAL_API_KEY`: o mesmo valor configurado no serviço backend;
+- `BACKEND_API_URL`: opcional; por padrão aponta para o host atual da API ARCKATECH.
+
+Fluxo:
+
+```text
+Browser
+  -> https://frontend/api/v1/admin/...
+  -> Nginx frontend
+       + x-internal-api-key (server-side)
+  -> Backend
+```
+
+A chave nunca é enviada ao JavaScript nem gravada no bundle.
+
+Se a variável não estiver configurada, o Laboratório V2 mostra um bloqueio explícito de autenticação em vez de parecer que a ferramenta se resume ao simulador de carga.
+
+O **Teste de Carga** foi separado em item próprio do menu; ele não faz mais parte visual do Laboratório de Testes.
+
 ## Implementação
 
 - Fixtures XML de CT-e, NF-e, MDF-e e NFS-e com seed, data de referência, valor, número, protocolo, ambiente SEFAZ e papel do CNPJ explícitos (`TestLabFixtureGenerator`). MDF-e também é determinístico.

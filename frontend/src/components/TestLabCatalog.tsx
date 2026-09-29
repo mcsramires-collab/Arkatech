@@ -194,7 +194,17 @@ export function TestLabCatalog() {
     ]);
 
     if (catalogResponse?.status !== 'sucesso' || !catalogResponse.catalog) {
-      setError(catalogResponse?.mensagem || 'Não foi possível carregar o catálogo do Laboratório.');
+      const mensagem = String(catalogResponse?.mensagem || '');
+      const authError =
+        catalogResponse?.codigo === 'ERR-4001' ||
+        mensagem.toLowerCase().includes('autenticação') ||
+        mensagem.toLowerCase().includes('authentication');
+
+      setError(
+        authError
+          ? 'O Laboratório V2 está instalado, mas o proxy seguro do painel não conseguiu autenticar no backend. Configure INTERNAL_API_KEY no serviço frontend com o mesmo valor do backend e faça um novo deploy.'
+          : mensagem || 'Não foi possível carregar o catálogo do Laboratório.'
+      );
       setLoading(false);
       return;
     }
@@ -347,8 +357,20 @@ export function TestLabCatalog() {
 
   if (!catalog) {
     return (
-      <div className="table-container" style={{ padding: '24px' }}>
-        <AlertTriangle size={18} /> {error || 'Laboratório indisponível.'}
+      <div className="table-container" style={{ padding: '28px' }}>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+          <AlertTriangle size={22} style={{ marginTop: '2px', flexShrink: 0 }} />
+          <div>
+            <h2 style={{ margin: 0, fontSize: '1.15rem' }}>Laboratório de Testes V2 bloqueado</h2>
+            <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)', maxWidth: '900px' }}>
+              {error || 'O catálogo não pôde ser carregado.'}
+            </p>
+            <div style={{ marginTop: '14px', padding: '12px', borderRadius: '8px', background: 'var(--bg-card-hover)' }}>
+              A tela antiga de carga não é o Laboratório V2. Depois que a autenticação do painel estiver válida,
+              esta área exibirá Visão Geral, Studio de Cenários, Coverage Center, Execuções e Regressão Oficial.
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

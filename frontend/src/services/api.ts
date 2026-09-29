@@ -1,4 +1,9 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://arckatech-apiarcka.ck5f84.easypanel.host';
+// Em desenvolvimento o Vite fala direto com o backend local.
+ // Em produção, sempre usamos same-origin (/api/...) e o Nginx do frontend atua como BFF,
+ // injetando a chave interna no servidor. A credencial nunca entra no bundle do navegador.
+const API_BASE_URL = import.meta.env.DEV
+  ? (import.meta.env.VITE_API_URL || 'http://localhost:3000')
+  : '';
 
 export class ApiClient {
   private static async request(endpoint: string, options: RequestInit = {}) {

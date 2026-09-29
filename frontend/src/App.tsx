@@ -22,7 +22,8 @@ import {
   Upload,
   BarChart3,
   BookOpen,
-  ListChecks
+  ListChecks,
+  FlaskConical
 } from 'lucide-react';
 import { ApiClient } from './services/api';
 import { TestLabCatalog } from './components/TestLabCatalog';
@@ -43,6 +44,7 @@ export function App() {
     | 'templates'
     | 'emitter'
     | 'import'
+    | 'testlab'
     | 'simulator'
     | 'report'
     | 'apidocs'
@@ -854,10 +856,18 @@ export function App() {
             </li>
             <li>
               <button
+                className={`nav-item ${activeTab === 'testlab' ? 'active' : ''}`}
+                onClick={() => setActiveTab('testlab')}
+              >
+                <FlaskConical size={18} /> Laboratório de Testes
+              </button>
+            </li>
+            <li>
+              <button
                 className={`nav-item ${activeTab === 'simulator' ? 'active' : ''}`}
                 onClick={() => setActiveTab('simulator')}
               >
-                <Play size={18} /> Laboratório de Testes
+                <Play size={18} /> Teste de Carga
               </button>
             </li>
             <li>
@@ -2427,10 +2437,16 @@ export function App() {
           </div>
         )}
 
-        {/* TAB 6: LABORATÓRIO DE TESTES + SIMULADOR MULTI-CLIENTE */}
-        {activeTab === 'simulator' && (
+        {/* LABORATÓRIO DE TESTES V2 */}
+        {activeTab === 'testlab' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <TestLabCatalog />
+          </div>
+        )}
+
+        {/* TESTE DE CARGA / SIMULADOR MULTI-CLIENTE */}
+        {activeTab === 'simulator' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <div className="table-container" style={{ padding: '24px' }}>
               <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
                 Simulador de Carga Multi-Cliente (ferramenta de volume)

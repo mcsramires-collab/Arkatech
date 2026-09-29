@@ -271,6 +271,68 @@ export function TestLabOverview(props: {
       </section>
 
       <section style={labSectionStyle}>
+        <div style={{ marginBottom: 14 }}>
+          <h3 style={{ margin: 0 }}>Jornadas rápidas</h3>
+          <p style={{ ...labMuted, margin: '5px 0 0' }}>
+            Abra o Studio já configurado para um risco operacional específico.
+          </p>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10 }}>
+          {[
+            {
+              key: 'vigencia-renovacao',
+              title: 'Vigência & renovação',
+              description: 'Policy A antiga, Policy B nova, emissão histórica e matching automático.',
+              badge: 'P0'
+            },
+            {
+              key: 'lmi-sublimite',
+              title: 'LMI & sublimite',
+              description: 'Valores abaixo, no limite e acima, com estratégia de tratamento.',
+              badge: 'P0'
+            },
+            {
+              key: 'titularidade',
+              title: 'Titularidade do CNPJ',
+              description: 'Emitente, tomador, destinatário e ausência do segurado no documento.',
+              badge: 'P0/P1'
+            },
+            {
+              key: 'canais',
+              title: 'Canais & SEFAZ',
+              description: 'Mesmo documento atravessando API, Portal, SEFAZ, TMS e WhatsApp.',
+              badge: 'P0'
+            }
+          ].map((item) => (
+            <button
+              key={item.key}
+              className="btn btn-secondary"
+              style={{
+                minHeight: 132,
+                padding: 14,
+                display: 'block',
+                textAlign: 'left',
+                whiteSpace: 'normal'
+              }}
+              onClick={() => {
+                window.sessionStorage.setItem('arckatech:testlab:quick-scenario', item.key);
+                props.onNavigate('studio');
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                <strong>{item.title}</strong>
+                <span className="badge badge-info">{item.badge}</span>
+              </div>
+              <div style={{ ...labMuted, marginTop: 8, lineHeight: 1.45 }}>{item.description}</div>
+              <div style={{ marginTop: 12, fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
+                Abrir cenário pré-configurado →
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section style={labSectionStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 18, alignItems: 'center', flexWrap: 'wrap' }}>
           <div>
             <h3 style={{ margin: 0 }}>Explorar antes de alterar o produto</h3>
