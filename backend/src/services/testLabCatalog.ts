@@ -584,6 +584,17 @@ const flags: TestLabFlagDefinition[] = [
     tags: ['document', 'value', 'boundary', 'p0']
   },
   {
+    key: 'document.data_emissao',
+    group: 'deadlines',
+    label: 'Data de emissão do documento',
+    description: 'Data canônica de emissão usada no matching de apólice, vigência e regras temporais.',
+    source: { kind: 'DOCUMENT', path: 'ParsedDocumentData.dataEmissao' },
+    value_type: 'DATE',
+    engine_status: 'ACTIVE',
+    generation: 'DATE_BOUNDARIES',
+    tags: ['document', 'date', 'validity', 'boundary', 'p0']
+  },
+  {
     key: 'document.tp_amb',
     group: 'documents',
     label: 'Ambiente SEFAZ',
@@ -802,6 +813,7 @@ const suites: TestLabSuiteTemplate[] = [
       'policy.aceita_averbacao_como_destinatario',
       'policy.vigencia_inicio',
       'policy.vigencia_fim',
+      'document.data_emissao',
       'policy.suspensao',
       'document.funcao_cnpj_segurado'
     ]
