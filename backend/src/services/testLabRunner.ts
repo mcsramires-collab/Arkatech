@@ -17,6 +17,7 @@ import { ConnectorFiscalService } from './connectorFiscalService';
 import { DocumentIngestionService } from './ingestion/documentIngestion';
 import { InsurerVisibilityService } from './insurerVisibilityService';
 import { MockGeneratorService, MockGenerationOptions } from './mockGenerator';
+import { RuleEngineService } from './ruleEngine';
 import { MockSefazService } from '../mockSefaz/mockSefazService';
 import { getTestLabCatalog } from './testLabCatalog';
 import { TestLabCatalogAuditService } from './testLabCatalogAudit';
@@ -1488,6 +1489,129 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
       return {
         assertions: [
           assertion('scope', 'Filtro mantém somente a seguradora A', ['lab-filter-a'], filteredA.map((item) => item.id))
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P1-PORTAL-UI-LIMIT-ALIASES',
+    suite_key: 'p1-portal-ui-contract',
+    priority: 'P1',
+    title: 'Compatibilidade das chaves de Tratamento de Recusas da UI',
+    description: 'Prova que as chaves recusas:* persistidas pelo Portal são normalizadas e realmente alteram o motor.',
+    tags: ['portal-contract', 'compatibility', 'limits'],
+    covers_flag_keys: [
+      'recusas:estrategia-lmg',
+      'recusas:sem-codigo-modo',
+      'recusas:teto-valor',
+      'recusas:teto-acima-acao',
+      'recusas:fila-aprovacao'
+    ],
+    execute: () => {
+      const ctx = setupBase({ lmi: 1000 });
+      setBusinessConfig(ctx, {
+        'recusas:estrategia-lmg': 'limite-apolice',
+        'recusas:sem-codigo-modo': 'teto',
+        'recusas:teto-valor': 'R$ 1.050,00',
+        'recusas:teto-acima-acao': 'fila',
+        'recusas:fila-aprovacao': true
+      });
+
+      const normalized = RuleEngineService.getBusinessConfig(mainPolicy(ctx));
+      const limitResult = processAverbacao(ctx, {
+        valorCarga: 1200,
+        documentNumber: 578001
+      });
+
+      const queueCtx = setupBase({ aceita_averbacao_como_destinatario: false });
+      setBusinessConfig(queueCtx, {
+        'recusas:fila-aprovacao': true
+      });
+      const queued = processAverbacao(queueCtx, {
+        funcaoTenant: 'DESTINATARIO',
+        documentNumber: 578002
+      });
+
+      return {
+        assertions: [
+          assertion('strategy_alias', 'Estratégia UI normalizada', 'truncar', normalized['regras:estrategia-lmg']),
+          assertion('mode_alias', 'Modo sem código normalizado', 'teto', normalized['regras:sem-codigo-modo']),
+          assertion('threshold_alias', 'Teto monetário convertido', 1050, normalized['regras:teto-valor']),
+          assertion('action_alias', 'Ação acima do teto', 'fila', normalized['regras:teto-acima-acao']),
+          assertion('queue_alias', 'Fila genérica normalizada', true, normalized['regras:fila-aprovacao-recusas']),
+          assertion('limit_status', 'Estratégia da UI chegou ao motor', 'sucesso', limitResult.status),
+          assertion('limit_value', 'Valor truncado pelo LMG', 1000, limitResult.valor_considerado_averbacao),
+          assertion('queue_status', 'Toggle da UI gera pendência', 'pendente', queued.status)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P1-PORTAL-UI-DEADLINE-ALIASES',
+    suite_key: 'p1-portal-ui-contract',
+    priority: 'P1',
+    title: 'Compatibilidade das chaves de prazo da UI',
+    description: 'Valida prazo-embarque-v2 e o trio modo/valor/unidade usado no cancelamento.',
+    tags: ['portal-contract', 'compatibility', 'deadline'],
+    covers_flag_keys: [
+      'regras:prazo-embarque-v2',
+      'regras:modo-canc',
+      'regras:canc-valor',
+      'regras:canc-unidade'
+    ],
+    execute: () => {
+      const shipmentCtx = setupBase();
+      setBusinessConfig(shipmentCtx, {
+        'regras:embarque': true,
+        'regras:prazo-embarque-v2': 'dia'
+      });
+      const shipmentConfig = RuleEngineService.getBusinessConfig(mainPolicy(shipmentCtx));
+      const shipment = processAverbacao(shipmentCtx, {
+        observationOverride: 'DATA_EMBARQUE=' + brDateFromNow(-1),
+        documentNumber: 578101
+      });
+
+      const cancelCtx = setupBase();
+      setBusinessConfig(cancelCtx, {
+        'regras:modo-canc': 'prazo',
+        'regras:canc-valor': '1',
+        'regras:canc-unidade': 'Dias'
+      });
+      const cancelConfig = RuleEngineService.getBusinessConfig(mainPolicy(cancelCtx));
+      const cancelResult = processAverbacao(cancelCtx, { documentNumber: 578102 });
+      const cancelRecord = successfulAverbacaoFromResponse(cancelResult);
+      cancelRecord.timestamp = isoFromNow(-2 * 24 * 60 * 60 * 1000);
+      const cancellation = CancelamentoService.processar({
+        averbacaoAnterior: cancelRecord,
+        xmlEvento: cancellationXml(cancelRecord.chave_documento || ''),
+        requisitante: 'SEGURADO'
+      });
+
+      const monthCtx = setupBase();
+      setBusinessConfig(monthCtx, {
+        'regras:modo-canc': 'prazo',
+        'regras:canc-valor': '1',
+        'regras:canc-unidade': 'Meses'
+      });
+      const monthResult = processAverbacao(monthCtx, { documentNumber: 578103 });
+      const monthRecord = successfulAverbacaoFromResponse(monthResult);
+      monthRecord.timestamp = isoFromNow(-20 * 24 * 60 * 60 * 1000);
+      const monthCancellation = CancelamentoService.processar({
+        averbacaoAnterior: monthRecord,
+        xmlEvento: cancellationXml(monthRecord.chave_documento || ''),
+        requisitante: 'SEGURADO'
+      });
+
+      return {
+        assertions: [
+          assertion('shipment_alias', 'Prazo de embarque normalizado', 'dia', shipmentConfig['regras:prazo-embarque']),
+          assertion('shipment_result', 'Prazo de embarque da UI aplicado', 'ERR-4015', shipment.codigo),
+          assertion('cancel_value', 'Valor de cancelamento normalizado', 1, cancelConfig['regras:prazo-cancelamento-valor']),
+          assertion('cancel_unit', 'Unidade de cancelamento normalizada', 'Dias', cancelConfig['regras:prazo-cancelamento-unidade']),
+          assertion('cancel_expired', 'Prazo em dias bloqueia após vencimento', 'ERR-4018', cancellation.codigo),
+          assertion('cancel_months', 'Unidade Meses é respeitada', 'sucesso', monthCancellation.status)
         ]
       };
     }
