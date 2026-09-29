@@ -521,6 +521,59 @@ const flags: TestLabFlagDefinition[] = [
     tags: ['cnpj', 'document-role', 'p0']
   },
   {
+    key: 'coverage.obrigatoria',
+    group: 'coverage',
+    label: 'Cobertura obrigatória',
+    description: 'Define se a ausência da cobertura deve gerar variável pendente/recuperação.',
+    source: { kind: 'COVERAGE', path: 'InsurerCoverage.obrigatoria' },
+    value_type: 'BOOLEAN',
+    engine_status: 'ACTIVE',
+    generation: 'BOOLEAN_BOTH',
+    tags: ['coverage', 'required', 'p1']
+  },
+  {
+    key: 'coverage.aplicar_todos_clientes',
+    group: 'coverage',
+    label: 'Cobertura para todos os segurados',
+    description: 'Controla se a cobertura vale globalmente para a seguradora ou somente para um tenant.',
+    source: { kind: 'COVERAGE', path: 'InsurerCoverage.aplicar_todos_clientes/tenant_id' },
+    value_type: 'BOOLEAN',
+    engine_status: 'ACTIVE',
+    generation: 'BOOLEAN_BOTH',
+    tags: ['coverage', 'scope', 'p1']
+  },
+  {
+    key: 'coverage.ramo',
+    group: 'coverage',
+    label: 'Ramo da cobertura',
+    description: 'Cobertura sem ramo vale para todos; quando preenchido, só deve afetar a apólice do ramo correspondente.',
+    source: { kind: 'COVERAGE', path: 'InsurerCoverage.ramo' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'RCTRC', label: 'RCTR-C' },
+      { value: 'RCDC', label: 'RC-DC' },
+      { value: 'RCV', label: 'RC-V' }
+    ],
+    tags: ['coverage', 'branch', 'p1']
+  },
+  {
+    key: 'coverage.tipo_valor',
+    group: 'coverage',
+    label: 'Tipo de valor da cobertura',
+    description: 'Monetária compõe o valor considerado; informativa nunca deve somar ao valor.',
+    source: { kind: 'COVERAGE', path: 'InsurerCoverage.tipo_valor' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'monetario', label: 'Monetário' },
+      { value: 'informativo', label: 'Informativo' }
+    ],
+    tags: ['coverage', 'value', 'p1']
+  },
+  {
     key: 'coverage.valor',
     group: 'coverage',
     label: 'Valor de cobertura adicional',
@@ -721,7 +774,14 @@ const suites: TestLabSuiteTemplate[] = [
     description: 'Valida obrigatoriedade, soma monetária e gaps conhecidos de cobertura.',
     priority: 'P1',
     tags: ['coverage'],
-    flag_keys: ['coverage.valor', 'coverage.desconta_lmi']
+    flag_keys: [
+      'coverage.obrigatoria',
+      'coverage.aplicar_todos_clientes',
+      'coverage.ramo',
+      'coverage.tipo_valor',
+      'coverage.valor',
+      'coverage.desconta_lmi'
+    ]
   },
   {
     key: 'p1-sefaz-contract',
