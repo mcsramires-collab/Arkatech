@@ -728,6 +728,210 @@ const suites: TestLabSuiteTemplate[] = [
   }
 ];
 
+
+const portalUiContractFlags: TestLabFlagDefinition[] = [
+  {
+    key: 'recusas:estrategia-lmg',
+    group: 'limits',
+    label: 'UI — Estratégia de LMG',
+    description: 'Chave persistida pelo Portal da Seguradora; normalizada para a estratégia canônica do motor.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Regras de Negócio -> recusas:estrategia-lmg' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'codigo', label: 'Exigir código' },
+      { value: 'sem-codigo', label: 'Permitir sem código' },
+      { value: 'sem-trava', label: 'Aceitar sem trava' },
+      { value: 'limite-apolice', label: 'Averbar no limite' }
+    ],
+    tags: ['portal-contract', 'limits', 'p1']
+  },
+  {
+    key: 'recusas:sem-codigo-modo',
+    group: 'limits',
+    label: 'UI — Modo sem código',
+    description: 'Alias do Portal para o comportamento sem código de liberação.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Regras de Negócio -> recusas:sem-codigo-modo' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'fila-sempre', label: 'Fila sempre' },
+      { value: 'teto', label: 'Teto de autoaprovação' }
+    ],
+    tags: ['portal-contract', 'limits', 'p1']
+  },
+  {
+    key: 'recusas:teto-valor',
+    group: 'limits',
+    label: 'UI — Teto de autoaprovação',
+    description: 'Valor monetário salvo pela UI e convertido para número pelo motor.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Regras de Negócio -> recusas:teto-valor' },
+    value_type: 'NUMBER',
+    engine_status: 'ACTIVE',
+    generation: 'NUMERIC_BOUNDARIES',
+    suggested_values: [1050],
+    tags: ['portal-contract', 'limits', 'p1']
+  },
+  {
+    key: 'recusas:teto-acima-acao',
+    group: 'limits',
+    label: 'UI — Ação acima do teto',
+    description: 'Alias do Portal para recusar ou enviar à fila acima do teto.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Regras de Negócio -> recusas:teto-acima-acao' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'recusar', label: 'Recusar' },
+      { value: 'fila', label: 'Fila' }
+    ],
+    tags: ['portal-contract', 'limits', 'p1']
+  },
+  {
+    key: 'recusas:fila-aprovacao',
+    group: 'limits',
+    label: 'UI — Fila de aprovação',
+    description: 'Toggle do Portal normalizado para regras:fila-aprovacao-recusas.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Regras de Negócio -> recusas:fila-aprovacao' },
+    value_type: 'BOOLEAN',
+    engine_status: 'ACTIVE',
+    generation: 'BOOLEAN_BOTH',
+    tags: ['portal-contract', 'approval', 'p1']
+  },
+  {
+    key: 'regras:prazo-embarque-v2',
+    group: 'deadlines',
+    label: 'UI — Prazo de embarque v2',
+    description: 'Chave atual do Portal, compatibilizada com regras:prazo-embarque no motor.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Prazos e Datas -> regras:prazo-embarque-v2' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'antes', label: 'Antes' },
+      { value: 'dia', label: 'No dia' },
+      { value: 'apos', label: 'Após' },
+      { value: 'nunca', label: 'Nunca recusar por prazo' }
+    ],
+    tags: ['portal-contract', 'deadline', 'p1']
+  },
+  {
+    key: 'regras:modo-canc',
+    group: 'deadlines',
+    label: 'UI — Modo de cancelamento',
+    description: 'Define se a UI habilita prazo de cancelamento.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Prazos e Datas -> regras:modo-canc' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'sem', label: 'Sem prazo configurado' },
+      { value: 'prazo', label: 'Prazo limite' }
+    ],
+    tags: ['portal-contract', 'cancellation', 'p1']
+  },
+  {
+    key: 'regras:canc-valor',
+    group: 'deadlines',
+    label: 'UI — Valor do prazo de cancelamento',
+    description: 'Valor salvo pelo Portal e normalizado para a chave canônica de cancelamento.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Prazos e Datas -> regras:canc-valor' },
+    value_type: 'NUMBER',
+    engine_status: 'ACTIVE',
+    generation: 'NUMERIC_BOUNDARIES',
+    suggested_values: [7],
+    tags: ['portal-contract', 'cancellation', 'p1']
+  },
+  {
+    key: 'regras:canc-unidade',
+    group: 'deadlines',
+    label: 'UI — Unidade do cancelamento',
+    description: 'Dias ou meses configurados na interface para o prazo de cancelamento.',
+    source: { kind: 'BUSINESS_SETTING', path: 'Portal Prazos e Datas -> regras:canc-unidade' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'Dias', label: 'Dias' },
+      { value: 'Meses', label: 'Meses' }
+    ],
+    tags: ['portal-contract', 'cancellation', 'p1']
+  },
+
+  // Configurações visíveis/persistidas no Portal que ainda não são consumidas diretamente
+  // pelo motor atual. Mantê-las no catálogo evita que pareçam cobertas quando não estão.
+  ...[
+    ['recusas:fila-lmg-prazo-valor', 'Prazo da fila de LMG — valor'],
+    ['recusas:fila-lmg-prazo-unidade', 'Prazo da fila de LMG — unidade'],
+    ['recusas:fila-prazo-valor', 'Prazo da fila genérica — valor'],
+    ['recusas:fila-prazo-unidade', 'Prazo da fila genérica — unidade'],
+    ['regras:metodos', 'Métodos de averbação'],
+    ['regras:isencao', 'Isenção de subcontratação'],
+    ['regras:susep', 'Região metropolitana SUSEP'],
+    ['regras:origem-destino', 'Origem/destino metropolitano'],
+    ['regras:regioes', 'Regiões customizadas'],
+    ['regras:hierarquia', 'Hierarquia de regiões'],
+    ['regras:sem-valor', 'Condições sem valor'],
+    ['regras:excecoes', 'Exceções de prazo'],
+    ['regras:regra-a', 'Estado local Regra A'],
+    ['regras:regra-b', 'Estado local Regra B'],
+    ['regras:funcoes-a', 'Funções locais da Regra A'],
+    ['regras:regrab-condicoes', 'Condições locais da Regra B'],
+    ['regras:regrab-restringir', 'Restrição local da Regra B'],
+    ['regras:averbacao-esporadica-limite', 'Averbação esporádica — limite'],
+    ['regras:averbacao-esporadica-prazo', 'Averbação esporádica — prazo'],
+    ['rcv:documentos-aceitos', 'RC-V — documentos aceitos'],
+    ['rcv:exigir-placa-embarque', 'RC-V — exigir placa no embarque'],
+    ['rcv:exigir-tag', 'RC-V — exigir TAG'],
+    ['rcv:exigir-tag-transporte', 'RC-V — exigir TAG por transporte'],
+    ['rcv:janela-averbacao-valor', 'RC-V — janela de averbação'],
+    ['rcv:janela-averbacao-unidade', 'RC-V — unidade da janela de averbação'],
+    ['rcv:janela-emissao-valor', 'RC-V — janela de emissão'],
+    ['rcv:janela-emissao-unidade', 'RC-V — unidade da janela de emissão'],
+    ['rcv:janela-placa-valor', 'RC-V — janela de placa'],
+    ['rcv:janela-placa-unidade', 'RC-V — unidade da janela de placa'],
+    ['rcv:replicacao-automatica', 'RC-V — replicação automática'],
+    ['rcv:transporte-aceitos', 'RC-V — transportes aceitos'],
+    ['rcv:faturamento:modelo', 'RC-V — modelo de faturamento'],
+    ['rcv:faturamento:taxa-unica', 'RC-V — taxa única'],
+    ['rcv:faturamento:faixas-km', 'RC-V — faixas de km'],
+    ['rcv:faturamento:km-linear', 'RC-V — km linear'],
+    ['rcv:faturamento:percursos', 'RC-V — percursos'],
+    ['rcv:faturamento:descontos', 'RC-V — descontos'],
+    ['rcv:faturamento:agravos', 'RC-V — agravos']
+  ].map(([key, label]) => ({
+    key,
+    group: 'future',
+    label: 'UI — ' + label,
+    description:
+      'Configuração detectada no Portal da Seguradora, mas não localizada como comportamento direto do motor nesta auditoria. Mantida como GAP planejado.',
+    source: { kind: 'BUSINESS_SETTING' as const, path: 'Portal da Seguradora -> ' + key },
+    value_type: 'STRING' as const,
+    engine_status: 'PLANNED' as const,
+    generation: 'MANUAL_ONLY' as const,
+    tags: ['portal-contract', 'gap', 'p1']
+  }))
+];
+
+flags.push(
+  ...portalUiContractFlags.filter(
+    (candidate) => !flags.some((existing) => existing.key === candidate.key)
+  )
+);
+
+
+suites.push({
+  key: 'p1-portal-ui-contract',
+  label: 'P1 — Contrato Portal da Seguradora → Motor',
+  description:
+    'Valida aliases ativos usados pela interface e torna explícitas configurações da UI que ainda são GAP de produto.',
+  priority: 'P1',
+  tags: ['portal-contract', 'compatibility'],
+  flag_keys: portalUiContractFlags.map((flag) => flag.key)
+});
+
 export function getTestLabCatalog() {
   const active = flags.filter((item) => item.engine_status === 'ACTIVE').length;
   const invariants = flags.filter((item) => item.engine_status === 'INVARIANT').length;
