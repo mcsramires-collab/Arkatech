@@ -65,6 +65,29 @@ Limites de proteção do Studio:
 
 Quando uma expectativa é informada, cada caso apresenta **esperado x obtido** e recebe PASS/FAIL. Sem expectativa, o Studio funciona como explorador de comportamento e expõe status, código, policy escolhida, valor considerado, regras aplicadas e variáveis faltantes.
 
+## Liberação explícita de execução no backend
+
+O backend pode ser executado com `NODE_ENV=production` mesmo quando o usuário está usando o Laboratório com dados sintéticos. Por isso, o runtime Node não é mais usado sozinho para decidir se o Test Lab pode rodar.
+
+Política:
+
+- `development/test/local/staging/homologacao`: execução permitida por padrão;
+- runtime production-like: bloqueado por padrão;
+- runtime production-like + `TEST_LAB_ENABLED=true`: execução permitida;
+- `TEST_LAB_ENABLED=false`: execução bloqueada em qualquer runtime.
+
+No Easypanel, para usar o Laboratório na aplicação publicada, configure no serviço **backend**:
+
+```text
+TEST_LAB_ENABLED=true
+```
+
+e faça um redeploy do backend.
+
+Essa flag libera apenas os executores do Test Lab. Os cenários continuam passando por `dbStore.runTestLabEphemeral()`, com dados sintéticos isolados; ela não altera `NODE_ENV` e não transforma o restante da aplicação em ambiente de desenvolvimento.
+
+O Studio expõe o estado dessa proteção na própria UI como **Execução liberada** ou **Execução bloqueada**.
+
 ## Deploy do painel interno / autenticação do Laboratório
 
 O frontend interno é servido por Nginx e, em produção, usa o próprio Nginx como BFF para as chamadas `/api/...`.
