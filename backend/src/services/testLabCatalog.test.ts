@@ -37,6 +37,16 @@ describe('TestLabCatalog', () => {
     expect(suite?.flag_keys).toContain('access.insurer_policy_isolation');
   });
 
+  test('data de emissão é dimensão P0 ativa e pertence ao motor de apólice', () => {
+    const emission = catalog.flags.find((item) => item.key === 'document.data_emissao');
+    expect(emission).toBeDefined();
+    expect(emission?.engine_status).toBe('ACTIVE');
+    expect(emission?.generation).toBe('DATE_BOUNDARIES');
+
+    const suite = catalog.suites.find((item) => item.key === 'p0-policy-engine');
+    expect(suite?.flag_keys).toContain('document.data_emissao');
+  });
+
   test('vigência inicial é regra P0 ativa do motor', () => {
     const flag = catalog.flags.find((item) => item.key === 'policy.vigencia_inicio');
     expect(flag).toBeDefined();
