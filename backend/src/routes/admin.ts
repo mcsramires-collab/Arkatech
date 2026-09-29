@@ -12,6 +12,9 @@ import { dbStore } from '../services/dbStore';
 import { ResponseTemplate, Tenant, Policy, PolicyRule, DocumentRule, TipoDocumento, InsurerCoverage, RbacProfile, TenantUser, BusinessRuleRequest, PolicyBusinessSettings, PolicySublimite, TipoCondicaoSublimite, Broker, DelegationException, DelegationExceptionLevel, PolicyCoverageValue, TenantCnpjAdicional, PolicyPartnerHistory, LiberationCode, Averbacao } from '../types';
 import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
+import { getTestLabCatalog } from '../services/testLabCatalog';
+import { TestLabRunnerService } from '../services/testLabRunner';
+import { TestLabCatalogAuditService } from '../services/testLabCatalogAudit';
 import { PurgeService } from '../services/purgeService';
 import { AverbacaoService } from '../services/averbacao';
 import { sendActivationInviteEmail } from '../services/emailService';
@@ -743,6 +746,99 @@ router.post('/importar-lote', upload.array('arquivos', 200), async (req: Backoff
     total_erro: totalErro,
     resultados
   });
+});
+
+// --- LABORATÓRIO DE TESTES (catálogo declarativo) ---
+// Ferramenta exclusivamente interna. A UI consome este catálogo para não precisar
+// codificar checkbox/campo novo a cada flag adicionada ao motor.
+router.get('/test-lab/catalog', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  return res.json({
+    status: 'sucesso',
+    catalog: getTestLabCatalog()
+  });
+});
+
+
+router.get('/test-lab/catalog-audit', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  return res.json({
+    status: 'sucesso',
+    audit: TestLabCatalogAuditService.audit()
+  });
+});
+
+router.post('/test-lab/plan', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  try {
+    return res.json({
+      status: 'sucesso',
+      plan: TestLabRunnerService.plan(req.body ?? {})
+    });
+  } catch (error) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: error instanceof Error ? error.message : 'Falha ao montar plano de testes.'
+    });
+  }
+});
+
+router.post('/test-lab/execute', async (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  try {
+    const run = await TestLabRunnerService.execute(req.body ?? {});
+    return res.json({ status: 'sucesso', run });
+  } catch (error) {
+    return res.status(400).json({
+      status: 'erro',
+      mensagem: error instanceof Error ? error.message : 'Falha ao executar o Laboratório.'
+    });
+  }
+});
+
+router.get('/test-lab/runs', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  const limit = Number(req.query.limit);
+  return res.json({
+    status: 'sucesso',
+    runs: TestLabRunnerService.history(Number.isFinite(limit) ? limit : 50)
+  });
+});
+
+router.get('/test-lab/runs/:id', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  const run = TestLabRunnerService.getRun(req.params.id);
+  if (!run) {
+    return res.status(404).json({ status: 'erro', mensagem: 'Execução do Laboratório não encontrada.' });
+  }
+  return res.json({ status: 'sucesso', run });
+});
+
+router.post('/test-lab/runs/:id/rerun-failed', async (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  try {
+    const run = await TestLabRunnerService.rerunFailed(req.params.id);
+    return res.json({ status: 'sucesso', run });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : 'TEST_LAB_RERUN_FAILED';
+    const status = code === 'TEST_LAB_RUN_NOT_FOUND' ? 404 : 400;
+    return res.status(status).json({ status: 'erro', codigo: code, mensagem: code });
+  }
+});
+
+router.get('/test-lab/runs/:id/export.csv', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  try {
+    const csv = TestLabRunnerService.exportCsv(req.params.id);
+    res.setHeader('content-type', 'text/csv; charset=utf-8');
+    res.setHeader('content-disposition', 'attachment; filename="arckatech-test-lab-' + req.params.id + '.csv"');
+    return res.send(csv);
+  } catch (error) {
+    return res.status(404).json({
+      status: 'erro',
+      mensagem: error instanceof Error ? error.message : 'Execução não encontrada.'
+    });
+  }
 });
 
 // --- 9. SIMULADOR DE CARGA EM LOTE MULTI-CLIENTE ---

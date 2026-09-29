@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { AsyncLocalStorage } from 'async_hooks';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { mirrorToPostgres } from './pgMirror';
@@ -18,6 +19,7 @@ import {
   FiscalEvent,
   RecoverySession,
   BatchTestRun,
+  TestLabRun,
   InternalUser,
   RbacProfile,
   TenantUser,
@@ -61,6 +63,7 @@ class DBStore {
   public fiscalEvents: FiscalEvent[] = [];
   public recoverySessions: RecoverySession[] = [];
   public batchTestRuns: BatchTestRun[] = [];
+  public testLabRuns: TestLabRun[] = [];
   // Fase 1 — novas entidades (visão empresa, RBAC, coberturas, delegação, ativação)
   public internalUsers: InternalUser[] = [];
   public rbacProfiles: RbacProfile[] = [];
@@ -132,6 +135,7 @@ class DBStore {
         this.fiscalEvents = parsed.fiscalEvents || [];
         this.recoverySessions = parsed.recoverySessions || [];
         this.batchTestRuns = parsed.batchTestRuns || [];
+        this.testLabRuns = parsed.testLabRuns || [];
         this.internalUsers = parsed.internalUsers || [];
         this.rbacProfiles = parsed.rbacProfiles || [];
         this.tenantUsers = parsed.tenantUsers || [];
@@ -185,6 +189,14 @@ class DBStore {
   private mirrorDebounceTimer: NodeJS.Timeout | null = null;
   private static readonly MIRROR_DEBOUNCE_MS = 3000;
 
+  // Laboratório de Testes: cenários sintéticos não podem vazar para data_store/Postgres.
+  // O runner abre uma janela efêmera, altera somente memória e restaura o snapshot ao final.
+  private testLabEphemeralDepth = 0;
+
+  public async runTestLabEphemeral<T>(fn: () => Promise<T> | T): Promise<T> {
+    return labStorage.run(createLabStore(this), async () => fn());
+  }
+
   private scheduleMirror() {
     if (this.mirrorDebounceTimer) {
       clearTimeout(this.mirrorDebounceTimer);
@@ -200,6 +212,7 @@ class DBStore {
   }
 
   public persist() {
+    if (this.testLabEphemeralDepth > 0) return;
     this.scheduleMirror();
     try {
       const dir = path.dirname(this.filePath);
@@ -225,6 +238,7 @@ class DBStore {
             fiscalEvents: this.fiscalEvents,
             recoverySessions: this.recoverySessions,
             batchTestRuns: this.batchTestRuns,
+            testLabRuns: this.testLabRuns,
             internalUsers: this.internalUsers,
             rbacProfiles: this.rbacProfiles,
             tenantUsers: this.tenantUsers,
@@ -1139,4 +1153,27 @@ class DBStore {
   }
 }
 
-export const dbStore = new DBStore();
+const labStorage = new AsyncLocalStorage<DBStore>();
+
+function createLabStore(source: DBStore): DBStore {
+  // Do not invoke the constructor: it loads and persists the real datastore.
+  const isolated = Object.create(Object.getPrototypeOf(source)) as DBStore;
+  for (const key of Object.keys(source)) {
+    const value = (source as any)[key];
+    (isolated as any)[key] = Array.isArray(value) ? structuredClone(value) : value;
+  }
+  isolated.persist = () => {};
+  return isolated;
+}
+
+const rootStore = new DBStore();
+// Every existing service keeps its dbStore API, while concurrent requests use their own context.
+export const dbStore = new Proxy(rootStore, {
+  get(target, key) {
+    const active = labStorage.getStore() ?? target;
+    return Reflect.get(active, key);
+  },
+  set(target, key, value) {
+    return Reflect.set(labStorage.getStore() ?? target, key, value);
+  }
+});

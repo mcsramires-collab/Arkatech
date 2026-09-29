@@ -58,9 +58,14 @@ app.use('/api/v1/tms', tmsRoutes);
 app.use('/api/v1/integrations/whatsapp', whatsappIntegrationRoutes);
 
 // Servidor HTTP
-app.listen(PORT, () => {
-  console.log(`🚀 ARCKATECH API de Averbação rodando na porta ${PORT}`);
-  console.log(`⚡ Ambientes isolados (teste vs producao) habilitados.`);
-});
+// Em produção/dev executado diretamente, sobe normalmente. Em testes de integração o módulo é
+// apenas importado e o próprio teste abre uma porta efêmera, evitando conflito de porta e
+// permitindo exercitar os contratos HTTP reais com Node fetch.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🚀 ARCKATECH API de Averbação rodando na porta ${PORT}`);
+    console.log(`⚡ Ambientes isolados (teste vs producao) habilitados.`);
+  });
+}
 
 export default app;

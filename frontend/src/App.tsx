@@ -25,6 +25,7 @@ import {
   ListChecks
 } from 'lucide-react';
 import { ApiClient } from './services/api';
+import { TestLabCatalog } from './components/TestLabCatalog';
 import { Tenant, Policy, PolicyRule, DocumentRule, ResponseTemplate, BatchTestRun, Insurer, Broker, TipoDocumento, InsurerCoverage } from './types';
 
 export function App() {
@@ -856,7 +857,7 @@ export function App() {
                 className={`nav-item ${activeTab === 'simulator' ? 'active' : ''}`}
                 onClick={() => setActiveTab('simulator')}
               >
-                <Play size={18} /> Simulador Multi-Cliente
+                <Play size={18} /> Laboratório de Testes
               </button>
             </li>
             <li>
@@ -2426,12 +2427,13 @@ export function App() {
           </div>
         )}
 
-        {/* TAB 6: SIMULADOR MULTI-CLIENTE */}
+        {/* TAB 6: LABORATÓRIO DE TESTES + SIMULADOR MULTI-CLIENTE */}
         {activeTab === 'simulator' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <TestLabCatalog />
             <div className="table-container" style={{ padding: '24px' }}>
               <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', marginBottom: '8px' }}>
-                Simulador de Carga em Lote Multi-Cliente (10 a 100.000 documentos)
+                Simulador de Carga Multi-Cliente (ferramenta de volume)
               </h2>
               <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '20px' }}>
                 Selecione os clientes do ambiente de teste para disparar simulações de carga de alto volume e verificar métricas de throughput e latência por cliente.

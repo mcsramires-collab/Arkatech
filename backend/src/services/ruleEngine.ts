@@ -19,7 +19,67 @@ export class RuleEngineService {
    * de assumir o padrão da tela para apólices que nunca abriram esta aba.
    */
   public static getBusinessConfig(policy: Policy): Record<string, any> {
-    return dbStore.policyBusinessSettings.find((s) => s.policy_id === policy.id)?.config ?? {};
+    const raw = dbStore.policyBusinessSettings.find((s) => s.policy_id === policy.id)?.config ?? {};
+    const config: Record<string, any> = { ...raw };
+
+    // Compatibilidade UI -> motor.
+    //
+    // A Ficha do Segurado historicamente persistiu algumas chaves com nomes de interface
+    // (ex.: "recusas:estrategia-lmg" e "regras:prazo-embarque-v2"), enquanto o motor consolidou
+    // nomes canônicos "regras:*". Sem esta normalização a seguradora via a configuração salva,
+    // mas a averbação seguia o default. Mantemos leitura dos dois formatos para não exigir
+    // migração imediata dos blobs já gravados.
+    if (!('regras:estrategia-lmg' in config) && 'recusas:estrategia-lmg' in raw) {
+      const uiStrategy = raw['recusas:estrategia-lmg'];
+      const map: Record<string, string> = {
+        codigo: 'exigir-codigo',
+        'sem-codigo': 'sem-codigo',
+        'sem-trava': 'aceitar-sem-trava',
+        'limite-apolice': 'truncar'
+      };
+      config['regras:estrategia-lmg'] = map[String(uiStrategy)] ?? uiStrategy;
+    }
+
+    if (!('regras:sem-codigo-modo' in config) && 'recusas:sem-codigo-modo' in raw) {
+      config['regras:sem-codigo-modo'] = raw['recusas:sem-codigo-modo'];
+    }
+
+    if (!('regras:teto-valor' in config) && 'recusas:teto-valor' in raw) {
+      const parsed = this.parseMoneyBR(String(raw['recusas:teto-valor'] ?? ''));
+      config['regras:teto-valor'] = Number.isFinite(parsed) ? parsed : raw['recusas:teto-valor'];
+    }
+
+    if (!('regras:teto-acima-acao' in config) && 'recusas:teto-acima-acao' in raw) {
+      config['regras:teto-acima-acao'] = raw['recusas:teto-acima-acao'];
+    }
+
+    if (!('regras:fila-aprovacao-recusas' in config) && 'recusas:fila-aprovacao' in raw) {
+      config['regras:fila-aprovacao-recusas'] = Boolean(raw['recusas:fila-aprovacao']);
+    }
+
+    if (!('regras:prazo-embarque' in config) && 'regras:prazo-embarque-v2' in raw) {
+      config['regras:prazo-embarque'] = raw['regras:prazo-embarque-v2'];
+    }
+
+    // A UI usa modo + valor/unidade. Só convertemos para a chave canônica quando o modo
+    // escolhido realmente é "prazo", evitando que os valores default escondidos habilitem
+    // um limite sem a seguradora ter escolhido essa opção.
+    if (raw['regras:modo-canc'] === 'prazo') {
+      config['regras:cancelamento-sem-limite'] = false;
+      if (!('regras:prazo-cancelamento-valor' in config) && 'regras:canc-valor' in raw) {
+        config['regras:prazo-cancelamento-valor'] = Number(raw['regras:canc-valor']);
+      }
+      if (!('regras:prazo-cancelamento-unidade' in config) && 'regras:canc-unidade' in raw) {
+        config['regras:prazo-cancelamento-unidade'] = raw['regras:canc-unidade'];
+      }
+    } else if (raw['regras:modo-canc'] === 'sem') {
+      // "Sem limite de tempo" é uma escolha explícita da interface. Diferente de a chave nem
+      // existir (apólice antiga/nunca configurada), esse modo habilita o cancelamento self-service
+      // sem janela máxima.
+      config['regras:cancelamento-sem-limite'] = true;
+    }
+
+    return config;
   }
 
   /** Converte string monetária BR ("R$ 25.000,00") em number. NaN se não for possível. */

@@ -10,6 +10,8 @@
     "start:worker": "ts-node src/worker.ts",
     "typecheck": "tsc --noEmit",
     "test": "jest --passWithNoTests",
+    "test:lab:p0": "ts-node scripts/runTestLabP0.ts",
+    "test:lab:p1": "ts-node scripts/runTestLabP1.ts",
     "migrate:up": "node-pg-migrate up -m migrations",
     "migrate:down": "node-pg-migrate down -m migrations",
     "migrate:create": "node-pg-migrate create -m migrations",

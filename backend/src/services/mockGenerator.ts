@@ -15,6 +15,16 @@ export interface MockGenerationOptions {
   ufDestino?: string;
   tpAmbSefaz?: 1 | 2; // 1=produção (default), 2=homologação — testa a regra do "protocolo TESTE"
   omitirGrupoSeguro?: boolean; // MDF-e apenas: gera sem o grupo <seg>, para testar a rejeição 699 do Sefaz
+  // Laboratório de Testes: quando informados, tornam a fixture 100% determinística.
+  documentNumber?: number;
+  valorCarga?: number;
+  emissionDate?: string;
+  protocoloSefaz?: string;
+  cStatSefaz?: string;
+  incluirProtocoloSefaz?: boolean;
+  produtoPredominante?: string;
+  contraparteCnpj?: string;
+  observationOverride?: string;
 }
 
 export class MockGeneratorService {
@@ -68,7 +78,16 @@ export class MockGeneratorService {
       ufOrigem,
       ufDestino,
       tpAmbSefaz = 1,
-      omitirGrupoSeguro
+      omitirGrupoSeguro,
+      documentNumber,
+      valorCarga: valorCargaInformado,
+      emissionDate,
+      protocoloSefaz,
+      cStatSefaz = '100',
+      incluirProtocoloSefaz = true,
+      produtoPredominante = 'Carga Geral Embalada',
+      contraparteCnpj,
+      observationOverride
     } = options;
     const tenant = dbStore.tenants.find((t) => t.id === tenantId);
 
@@ -85,13 +104,15 @@ export class MockGeneratorService {
     const policy = policyId ? dbStore.policies.find((p) => p.id === policyId) : undefined;
     const insurer = policy ? dbStore.insurers.find((i) => i.id === policy.insurer_id) : undefined;
 
-    const docNum = Math.floor(100000 + Math.random() * 900000);
-    const valorCarga = (Math.random() * 50000 + 1000).toFixed(2);
-    const dateISO = new Date().toISOString().slice(0, 19) + '-03:00';
-    const nProt = `1352${Date.now().toString().slice(-11)}`;
+    const docNum = documentNumber ?? Math.floor(100000 + Math.random() * 900000);
+    const valorCargaNumero = valorCargaInformado ?? (Math.random() * 50000 + 1000);
+    const valorCarga = valorCargaNumero.toFixed(2);
+    const dateISO = emissionDate ?? (new Date().toISOString().slice(0, 19) + '-03:00');
+    const nProt = protocoloSefaz ?? `1352${String(docNum).padStart(11, '0').slice(-11)}`;
+    const protocoloXml = incluirProtocoloSefaz ? `      <nProt>${nProt}</nProt>\n` : '';
 
     // Contraparte fictícia (usada em toda função do documento onde o tenant NÃO está)
-    const contraparteCNPJ = '98765432000188';
+    const contraparteCNPJ = contraparteCnpj ? normalizeCnpj(contraparteCnpj) : '98765432000188';
     const contraparteNome = 'INDUSTRIAS REUNIDAS TESTE SA';
     const tenantCNPJ = normalizeCnpj(tenant.cnpj);
 
@@ -115,9 +136,11 @@ export class MockGeneratorService {
     const ufIniFinal = ufOrigem || 'SP';
     const ufFimFinal = ufDestino || 'MG';
 
-    const obsField = incluirVariaveisApolice
-      ? this.buildObsField(policyId, omitirObrigatorias || [])
-      : `Averbação de Teste ARCKATECH - Doc Nº ${docNum}`;
+    const obsField = observationOverride !== undefined
+      ? observationOverride
+      : incluirVariaveisApolice
+        ? this.buildObsField(policyId, omitirObrigatorias || [])
+        : `Averbação de Teste ARCKATECH - Doc Nº ${docNum}`;
 
     // Grupo <seg> do MDF-e — obrigatório no modal rodoviário (rejeições 698/699 do Sefaz se ausente/incompleto)
     const grupoSeg =
@@ -132,7 +155,7 @@ export class MockGeneratorService {
           <CNPJ>${insurer ? normalizeCnpj(insurer.cnpj) : '33444555000166'}</CNPJ>
         </infSeg>
         <nApol>${policy?.numero_apolice || 'APOLICE-TESTE'}</nApol>
-        <nAver>ARCK${docNum}${Date.now().toString().slice(-6)}</nAver>
+        <nAver>ARCK${docNum}${emissionDate ? String(Date.parse(emissionDate)).slice(-6) : Date.now().toString().slice(-6)}</nAver>
       </seg>
 `
         : '';
@@ -186,7 +209,7 @@ export class MockGeneratorService {
       <infCTeNorm>
         <infCarga>
           <vCarga>${valorCarga}</vCarga>
-          <proPred>Carga Geral Embalada</proPred>
+          <proPred>${produtoPredominante}</proPred>
         </infCarga>
       </infCTeNorm>
       <compl>
@@ -199,8 +222,7 @@ export class MockGeneratorService {
       <tpAmb>${tpAmbSefaz}</tpAmb>
       <chCTe>${chave}</chCTe>
       <dhRecbto>${dateISO}</dhRecbto>
-      <nProt>${nProt}</nProt>
-      <cStat>100</cStat>
+${protocoloXml}      <cStat>${cStatSefaz}</cStat>
       <xMotivo>Autorizado o uso do CT-e</xMotivo>
     </infProt>
   </protCTe>
@@ -242,8 +264,7 @@ export class MockGeneratorService {
       <tpAmb>${tpAmbSefaz}</tpAmb>
       <chNFe>${chave}</chNFe>
       <dhRecbto>${dateISO}</dhRecbto>
-      <nProt>${nProt}</nProt>
-      <cStat>100</cStat>
+${protocoloXml}      <cStat>${cStatSefaz}</cStat>
       <xMotivo>Autorizado o uso da NF-e</xMotivo>
     </infProt>
   </protNFe>
@@ -280,8 +301,7 @@ ${grupoSeg}      <tot>
       <tpAmb>${tpAmbSefaz}</tpAmb>
       <chMDFe>${chave}</chMDFe>
       <dhRecbto>${dateISO}</dhRecbto>
-      <nProt>${nProt}</nProt>
-      <cStat>100</cStat>
+${protocoloXml}      <cStat>${cStatSefaz}</cStat>
       <xMotivo>Autorizado o uso do MDF-e</xMotivo>
     </infProt>
   </protMDFe>

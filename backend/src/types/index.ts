@@ -459,6 +459,53 @@ export interface BatchTestRun {
   created_at: string;
 }
 
+export type TestLabMode = 'QUICK' | 'STANDARD' | 'EXHAUSTIVE';
+export type TestLabScenarioStatus = 'PASS' | 'FAIL' | 'GAP';
+export type TestLabPriority = 'P0' | 'P1' | 'P2';
+
+export interface TestLabAssertionResult {
+  key: string;
+  label: string;
+  expected: unknown;
+  actual: unknown;
+  pass: boolean;
+  detail?: string;
+}
+
+export interface TestLabScenarioResult {
+  id: string;
+  suite_key: string;
+  priority: TestLabPriority;
+  title: string;
+  description: string;
+  tags: string[];
+  covers_flag_keys: string[];
+  status: TestLabScenarioStatus;
+  duration_ms: number;
+  assertions: TestLabAssertionResult[];
+  evidence?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface TestLabRun {
+  id: string;
+  mode: TestLabMode;
+  suite_keys: string[];
+  selected_flag_keys?: string[];
+  status: 'PLANNED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  environment: 'teste';
+  total_planned: number;
+  total_executed: number;
+  passed: number;
+  failed: number;
+  gaps: number;
+  duration_ms: number;
+  scenario_results: TestLabScenarioResult[];
+  rerun_of?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
 // ===================== VISÃO EMPRESA (ADM / AGENTE) =====================
 
 export interface InternalUser {

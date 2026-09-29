@@ -1,0 +1,37 @@
+import { test, expect } from '@playwright/test';
+
+test('real backend: execute P0, preserve gaps, inspect, export, compare and restore a preset', async ({ page }) => {
+  test.setTimeout(90000);
+  await page.route('http://127.0.0.1:4174/**', route => route.continue({ headers: { ...route.request().headers(), 'x-internal-api-key': 'test-lab-browser-local-only' } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
+  await expect(page.getByRole('heading', { name: 'Laboratório de Testes', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Só P0', exact: true }).click();
+  await page.getByLabel('Nome do preset').fill('Regressão P0');
+  await page.getByRole('button', { name: 'Salvar preset' }).click();
+  await page.getByRole('button', { name: 'Calcular cenários' }).click();
+  await expect(page.getByText('Plano calculado')).toBeVisible();
+  const firstExecution = page.waitForResponse(r => r.url().endsWith('/test-lab/execute') && r.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Executar testes', exact: true }).click();
+  const first = (await (await firstExecution).json()).run;
+  expect(first.failed).toBe(0);
+  expect(first.gaps).toBe(1);
+  expect(first.passed).toBeGreaterThan(0);
+  await expect(page.getByText('Resultado — ' + first.id)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Cobertura do catálogo e gaps' })).toBeVisible();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Exportar JSON detalhado' }).click();
+  expect((await download).suggestedFilename()).toBe(first.id + '.json');
+  const secondExecution = page.waitForResponse(r => r.url().endsWith('/test-lab/execute') && r.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Executar testes', exact: true }).click();
+  const second = (await (await secondExecution).json()).run;
+  await expect(page.getByText('Resultado — ' + second.id)).toBeVisible();
+  await page.getByLabel('Execução de referência').selectOption(first.id);
+  await expect(page.getByText('0 mudança(s) de resultado;', { exact: false })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('laboratorio-resultado.png'), fullPage: true });
+  await page.reload();
+  await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
+  await page.getByRole('button', { name: 'Aplicar Regressão P0', exact: true }).click();
+  await page.getByRole('button', { name: 'Calcular cenários' }).click();
+  await expect(page.getByText('Plano calculado')).toBeVisible();
+});

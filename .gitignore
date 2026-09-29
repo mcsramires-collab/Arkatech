@@ -24,3 +24,9 @@ ARCKATECH.zip
 
 # Mock SEFAZ development certificates (private keys / PFX)
 backend/.mock-certs/
+
+.npm-cache/
+playwright-report/
+test-results/
+.playwright/
+.lab-validation/

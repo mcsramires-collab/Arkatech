@@ -1,3 +1,4 @@
+import { now } from './clock';
 import { randomBytes } from 'crypto';
 import { normalizeAlphanumeric, normalizeCnpj } from '../utils/cnpj';
 import { v4 as uuidv4 } from 'uuid';
@@ -89,7 +90,7 @@ export class AverbacaoService {
     fmt: { codigo: string; mensagem: string },
     regrasAplicadas: string[]
   ): void {
-    const timestampISO = new Date().toISOString();
+    const timestampISO = new Date(now()).toISOString();
     const erroRecord: Averbacao = {
       id: uuidv4(),
       protocolo_interno_averbacao: `PI-${uuidv4()}`,
@@ -139,7 +140,7 @@ export class AverbacaoService {
     lmiSnapshot?: number,
     sublimiteSnapshot?: number
   ): Averbacao {
-    const timestampISO = new Date().toISOString();
+    const timestampISO = new Date(now()).toISOString();
     const pendenteRecord: Averbacao = {
       id: uuidv4(),
       protocolo_interno_averbacao: `PI-${uuidv4()}`,
@@ -223,7 +224,7 @@ export class AverbacaoService {
       const codigoValido =
         codigo &&
         codigo.ativo &&
-        new Date(codigo.validade).getTime() >= Date.now() &&
+        new Date(codigo.validade).getTime() >= now() &&
         (codigo.usos_maximos === undefined || codigo.usos_realizados < codigo.usos_maximos) &&
         (codigo.valor_carga_liberado === undefined || codigo.valor_carga_liberado >= excedente);
       if (!codigoValido) {
@@ -297,7 +298,7 @@ export class AverbacaoService {
         return null;
       }
 
-      if (Date.now() > limite.getTime()) {
+      if (now() > limite.getTime()) {
         return {
           codigo: 'ERR-4015',
           replacements: {
@@ -328,7 +329,7 @@ export class AverbacaoService {
     const unidadeMs = businessConfig['regras:prazo-unidade'] === 'Horas' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
     const limite = new Date(dataBase.getTime() + prazoValor * unidadeMs);
 
-    if (Date.now() > limite.getTime()) {
+    if (now() > limite.getTime()) {
       return {
         codigo: 'ERR-4014',
         replacements: {
@@ -371,7 +372,7 @@ export class AverbacaoService {
       // checado aqui — um token "expirado" continuava sendo aceito indefinidamente. Corrigido:
       // passado o prazo, o token deixa de valer e o documento precisa ser reenviado (o cliente
       // não tinha como saber que aquela pendência nunca mais seria averbável antes desta correção).
-      if (new Date(recoverySession.expira_em).getTime() <= Date.now()) {
+      if (new Date(recoverySession.expira_em).getTime() <= now()) {
         return this.erro('ERR-4012', { EXPIRA_EM: recoverySession.expira_em });
       }
     }
@@ -412,7 +413,7 @@ export class AverbacaoService {
       );
       const isPolicyUsavel = (p: Policy) =>
         p.status === 'ATIVA' &&
-        !(p.vigencia_fim && new Date(p.vigencia_fim).getTime() < Date.now());
+        !(p.vigencia_fim && new Date(p.vigencia_fim).getTime() < now());
       policy = policiesDoRamo.find(isPolicyUsavel) || policiesDoRamo[0];
     }
 
@@ -540,15 +541,15 @@ export class AverbacaoService {
     // sempre disse cobrir.
     const isTenantInactive = tenant.status === 'INATIVO';
     const isPolicyStatusInactive = policy.status !== 'ATIVA';
-    const isPolicyExpiredByDate = Boolean(policy.vigencia_fim) && new Date(policy.vigencia_fim).getTime() < Date.now();
+    const isPolicyExpiredByDate = Boolean(policy.vigencia_fim) && new Date(policy.vigencia_fim).getTime() < now();
     // Fase 2 do pacote de 21/09 (Suspensão de Apólice) — "está suspensa agora" é sempre
     // calculado a partir das duas datas, nunca lido de um boolean solto (ver comentário em
     // Policy.suspensa_desde em types/index.ts): evita ficar suspensa para sempre depois que o
     // prazo determinado já passou.
     const isPolicySuspensa =
       Boolean(policy.suspensa_desde) &&
-      new Date(policy.suspensa_desde!).getTime() <= Date.now() &&
-      (!policy.suspensa_ate || new Date(policy.suspensa_ate).getTime() >= Date.now());
+      new Date(policy.suspensa_desde!).getTime() <= now() &&
+      (!policy.suspensa_ate || new Date(policy.suspensa_ate).getTime() >= now());
     const isInactiveProblem = isTenantInactive || isPolicyStatusInactive || isPolicyExpiredByDate || isPolicySuspensa;
 
     let hasWarningBypass = false;
@@ -600,9 +601,9 @@ export class AverbacaoService {
         tipo_documento: parsedDoc.tipoDocumento,
         raw_xml_content: contentToParse,
         variaveis_faltantes: ruleResult.missingVariables,
-        expira_em: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        expira_em: new Date(now() + 24 * 60 * 60 * 1000).toISOString(),
         utilizada: false,
-        created_at: new Date().toISOString()
+        created_at: new Date(now()).toISOString()
       };
       dbStore.recoverySessions.push(newRecoverySession);
       dbStore.persist();
@@ -805,9 +806,9 @@ export class AverbacaoService {
     }
 
     // 12. Gerar Número de Averbação (formato de mercado) + Protocolo Interno (nosso, independente)
-    const timestampISO = new Date().toISOString();
+    const timestampISO = new Date(now()).toISOString();
     const testePrefix = isHomologacaoSefaz ? 'TESTE-' : '';
-    const numeroAverbacao = `${testePrefix}AVB-${dto.ramo}-${Date.now().toString().slice(-6)}-${randomBytes(2)
+    const numeroAverbacao = `${testePrefix}AVB-${dto.ramo}-${now().toString().slice(-6)}-${randomBytes(2)
       .toString('hex')
       .toUpperCase()}`;
     const protocoloInterno = `PI-${uuidv4()}`;
