@@ -1821,6 +1821,151 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
   });
 
   scenarios.push({
+    id: 'P1-TITULARITY-ALLOWED-FUNCTIONS',
+    suite_key: 'p1-titularity-bypass',
+    priority: 'P1',
+    title: 'Regra A — funções autorizadas do CNPJ',
+    description: 'PolicyTitularityRule habilitada deve aceitar a função configurada e bloquear função não habilitada.',
+    tags: ['titularity', 'regra-a'],
+    covers_flag_keys: ['titularity.allowed_functions'],
+    execute: () => {
+      const allowedCtx = setupBase({ aceita_averbacao_como_destinatario: false });
+      dbStore.policyTitularityRules = [
+        {
+          id: 'lab-titularity-tomador',
+          policy_id: allowedCtx.policyId,
+          funcao: 'TOMADOR',
+          habilitada: true
+        }
+      ];
+      const allowed = processAverbacao(allowedCtx, {
+        funcaoTenant: 'TOMADOR',
+        documentNumber: 576001
+      });
+
+      const deniedCtx = setupBase({ aceita_averbacao_como_destinatario: true });
+      dbStore.policyTitularityRules = [
+        {
+          id: 'lab-titularity-tomador-only',
+          policy_id: deniedCtx.policyId,
+          funcao: 'TOMADOR',
+          habilitada: true
+        }
+      ];
+      const denied = processAverbacao(deniedCtx, {
+        funcaoTenant: 'DESTINATARIO',
+        documentNumber: 576002
+      });
+
+      return {
+        assertions: [
+          assertion('allowed', 'Tomador habilitado passa', 'sucesso', allowed.status),
+          assertion('denied', 'Destinatário não habilitado é bloqueado', 'erro', denied.status),
+          assertion('denied_code', 'Código de titularidade preservado', 'ERR-4008', denied.codigo)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P1-BYPASS-ROUTE',
+    suite_key: 'p1-titularity-bypass',
+    priority: 'P1',
+    title: 'Regra B — bypass por rota',
+    description: 'Documento sem CNPJ do segurado só deve passar quando UF origem/destino correspondem ao bypass.',
+    tags: ['titularity', 'regra-b', 'route'],
+    covers_flag_keys: ['bypass.route'],
+    execute: () => {
+      const matchCtx = setupBase();
+      dbStore.policyBypassRules = [
+        {
+          id: 'lab-bypass-route',
+          policy_id: matchCtx.policyId,
+          rota_uf_origem: 'SP',
+          rota_uf_destino: 'MG'
+        }
+      ];
+      const match = processAverbacao(matchCtx, {
+        omitirCnpjTenant: true,
+        ufOrigem: 'SP',
+        ufDestino: 'MG',
+        documentNumber: 576101
+      });
+
+      const mismatchCtx = setupBase();
+      dbStore.policyBypassRules = [
+        {
+          id: 'lab-bypass-route-mismatch',
+          policy_id: mismatchCtx.policyId,
+          rota_uf_origem: 'SP',
+          rota_uf_destino: 'RJ'
+        }
+      ];
+      const mismatch = processAverbacao(mismatchCtx, {
+        omitirCnpjTenant: true,
+        ufOrigem: 'SP',
+        ufDestino: 'MG',
+        documentNumber: 576102
+      });
+
+      return {
+        assertions: [
+          assertion('match', 'Rota compatível libera', 'sucesso', match.status),
+          assertion('mismatch', 'Rota divergente bloqueia', 'erro', mismatch.status),
+          assertion('mismatch_code', 'Código de titularidade', 'ERR-4008', mismatch.codigo)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P1-BYPASS-PRODUCT',
+    suite_key: 'p1-titularity-bypass',
+    priority: 'P1',
+    title: 'Regra B — bypass por produto predominante',
+    description: 'Documento sem CNPJ do segurado só deve passar quando o produto predominante corresponde ao bypass.',
+    tags: ['titularity', 'regra-b', 'product'],
+    covers_flag_keys: ['bypass.product'],
+    execute: () => {
+      const matchCtx = setupBase();
+      dbStore.policyBypassRules = [
+        {
+          id: 'lab-bypass-product',
+          policy_id: matchCtx.policyId,
+          produto_predominante: 'ELETRONICOS'
+        }
+      ];
+      const match = processAverbacao(matchCtx, {
+        omitirCnpjTenant: true,
+        produtoPredominante: 'ELETRONICOS',
+        documentNumber: 576201
+      });
+
+      const mismatchCtx = setupBase();
+      dbStore.policyBypassRules = [
+        {
+          id: 'lab-bypass-product-mismatch',
+          policy_id: mismatchCtx.policyId,
+          produto_predominante: 'ALIMENTOS'
+        }
+      ];
+      const mismatch = processAverbacao(mismatchCtx, {
+        omitirCnpjTenant: true,
+        produtoPredominante: 'ELETRONICOS',
+        documentNumber: 576202
+      });
+
+      return {
+        assertions: [
+          assertion('match', 'Produto compatível libera', 'sucesso', match.status),
+          assertion('mismatch', 'Produto divergente bloqueia', 'erro', mismatch.status),
+          assertion('mismatch_code', 'Código de titularidade', 'ERR-4008', mismatch.codigo)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
     id: 'P1-CATALOG-AUDIT',
     suite_key: 'p1-catalog-governance',
     priority: 'P1',
