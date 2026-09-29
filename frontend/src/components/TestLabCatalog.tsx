@@ -164,6 +164,8 @@ export function TestLabCatalog() {
   const [run, setRun] = useState<TestLabRunData | null>(null);
   const [mode, setMode] = useState<RunMode>('STANDARD');
   const [selectedSuites, setSelectedSuites] = useState<Record<string, boolean>>({});
+  const [customFlags, setCustomFlags] = useState(false);
+  const [selectedFlags, setSelectedFlags] = useState<Record<string, boolean>>({});
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'ALL' | ScenarioStatus>('ALL');
   const [priorityFilter, setPriorityFilter] = useState<'ALL' | 'P0' | 'P1'>('ALL');
@@ -228,14 +230,24 @@ export function TestLabCatalog() {
     });
   }, [run, statusFilter, priorityFilter]);
 
+  const selectedFlagKeys = useMemo(
+    () => Object.entries(selectedFlags).filter(([, checked]) => checked).map(([key]) => key),
+    [selectedFlags]
+  );
+
   const requestPayload = () => ({
     mode,
-    suite_keys: selectedSuiteKeys
+    suite_keys: selectedSuiteKeys,
+    ...(customFlags ? { selected_flag_keys: selectedFlagKeys } : {})
   });
 
   const handlePlan = async () => {
     if (selectedSuiteKeys.length === 0) {
       setError('Selecione ao menos uma suíte P0/P1.');
+      return;
+    }
+    if (customFlags && selectedFlagKeys.length === 0) {
+      setError('No modo avançado, selecione ao menos uma regra/flag.');
       return;
     }
     setPlanning(true);
@@ -252,6 +264,10 @@ export function TestLabCatalog() {
   const handleExecute = async () => {
     if (selectedSuiteKeys.length === 0) {
       setError('Selecione ao menos uma suíte P0/P1.');
+      return;
+    }
+    if (customFlags && selectedFlagKeys.length === 0) {
+      setError('No modo avançado, selecione ao menos uma regra/flag.');
       return;
     }
     setRunning(true);
@@ -440,6 +456,44 @@ export function TestLabCatalog() {
                 <option value="EXHAUSTIVE">Exaustivo — maior cobertura</option>
               </select>
             </div>
+
+
+            <label style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '9px',
+              marginTop: '12px',
+              fontSize: '0.8rem',
+              cursor: 'pointer'
+            }}>
+              <input
+                type="checkbox"
+                checked={customFlags}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  setCustomFlags(enabled);
+                  setPlan(null);
+                  if (enabled && Object.keys(selectedFlags).length === 0) {
+                    const suiteFlagKeys = new Set(
+                      catalog.suites
+                        .filter((suite) => selectedSuiteKeys.includes(suite.key))
+                        .flatMap((suite) => suite.flag_keys)
+                    );
+                    setSelectedFlags(
+                      Object.fromEntries(
+                        catalog.flags.map((flag) => [flag.key, suiteFlagKeys.has(flag.key)])
+                      )
+                    );
+                  }
+                }}
+              />
+              Seleção avançada de regras
+            </label>
+            {customFlags && (
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                {selectedFlagKeys.length} regra(s) selecionada(s). Ajuste os checkboxes no catálogo abaixo.
+              </div>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '14px' }}>
               <button className="btn btn-secondary" disabled={planning || running} onClick={handlePlan}>
@@ -644,11 +698,27 @@ export function TestLabCatalog() {
 
         <table className="custom-table">
           <thead>
-            <tr><th>Regra / Flag</th><th>Tipo</th><th>Status</th><th>Geração</th><th>Origem técnica</th></tr>
+            <tr>
+              {customFlags && <th>Testar</th>}
+              <th>Regra / Flag</th><th>Tipo</th><th>Status</th><th>Geração</th><th>Origem técnica</th>
+            </tr>
           </thead>
           <tbody>
             {visibleFlags.map((flag) => (
               <tr key={flag.key}>
+                {customFlags && (
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Testar ${flag.label}`}
+                      checked={Boolean(selectedFlags[flag.key])}
+                      onChange={(event) => {
+                        setSelectedFlags({ ...selectedFlags, [flag.key]: event.target.checked });
+                        setPlan(null);
+                      }}
+                    />
+                  </td>
+                )}
                 <td>
                   <strong>{flag.label}</strong>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '3px' }}>{flag.description}</div>
