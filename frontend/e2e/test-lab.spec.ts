@@ -149,7 +149,7 @@ const studioCapabilities = {
   ]
 };
 
-async function mockApi(page: import('@playwright/test').Page) {
+async function mockApi(page: import('@playwright/test').Page, runs: unknown[] = []) {
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -249,7 +249,7 @@ async function mockApi(page: import('@playwright/test').Page) {
       return json({ status: 'sucesso', run: completedRun });
     }
     if (path.endsWith('/admin/test-lab/runs')) {
-      return json({ status: 'sucesso', runs: [] });
+      return json({ status: 'sucesso', runs });
     }
 
     if (path.endsWith('/admin/dashboard-stats')) {
@@ -313,22 +313,20 @@ test('Studio V2 calcula matriz e executa um cenário interativo', async ({ page 
 
   await page.getByRole('button', { name: 'Executar matriz' }).click();
   await expect(page.getByText('Execution Center — Cenário de negócio')).toBeVisible();
-  await expect(page.getByText('SUC-2000')).toBeVisible();
+  await expect(page.getByText('SUC-2000', { exact: true })).toBeVisible();
   await expect(page.getByText('Executado sem validação')).toBeVisible();
   await expect(page.getByText('0 PASS', {exact:true})).toBeVisible();
 });
 
 test('gate exige todos os cenários P0 do plano oficial', async ({ page }) => {
-  await mockApi(page);
-  await page.route('**/admin/test-lab/runs', route => route.fulfill({json:{status:'sucesso',runs:[{...completedRun, scenario_results:[], total_executed:0}]}}));
+  await mockApi(page, [{...completedRun, scenario_results:[], total_executed:0}]);
   await page.goto('/');
   await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
   await expect(page.getByText('P0 não validado integralmente')).toBeVisible();
   await expect(page.getByText('P0 saudável')).toHaveCount(0);
 });
 test('gate aprova execução completa dos cenários planejados', async ({ page }) => {
-  await mockApi(page);
-  await page.route('**/admin/test-lab/runs', route => route.fulfill({json:{status:'sucesso',runs:[completedRun]}}));
+  await mockApi(page, [completedRun]);
   await page.goto('/');
   await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
   await expect(page.getByText('P0 saudável')).toBeVisible();
