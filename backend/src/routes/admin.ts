@@ -14,6 +14,7 @@ import { MockGeneratorService } from '../services/mockGenerator';
 import { BatchRunnerService } from '../services/batchRunner';
 import { getTestLabCatalog } from '../services/testLabCatalog';
 import { TestLabRunnerService } from '../services/testLabRunner';
+import { TestLabSafetyService } from '../services/testLabSafety';
 import { TestLabStudioService } from '../services/testLabStudio';
 import { TestLabCatalogAuditService } from '../services/testLabCatalogAudit';
 import { PurgeService } from '../services/purgeService';
@@ -777,6 +778,14 @@ router.get('/test-lab/studio/capabilities', (req: BackofficeAuthenticatedRequest
   });
 });
 
+router.get('/test-lab/status', (req: BackofficeAuthenticatedRequest, res) => {
+  if (!apenasInternalUser(req, res)) return;
+  return res.json({
+    status: 'sucesso',
+    safety: TestLabSafetyService.status()
+  });
+});
+
 router.post('/test-lab/studio/preview', (req: BackofficeAuthenticatedRequest, res) => {
   if (!apenasInternalUser(req, res)) return;
   try {
@@ -798,9 +807,17 @@ router.post('/test-lab/studio/execute', async (req: BackofficeAuthenticatedReque
     const run = await TestLabStudioService.execute(req.body ?? {});
     return res.json({ status: 'sucesso', run });
   } catch (error) {
-    return res.status(400).json({
+    const codigo = error instanceof Error ? error.message : 'TEST_LAB_STUDIO_EXECUTION_FAILED';
+    const blocked = codigo === 'TEST_LAB_PRODUCTION_BLOCKED' || codigo === 'TEST_LAB_DISABLED';
+    return res.status(blocked ? 409 : 400).json({
       status: 'erro',
-      mensagem: error instanceof Error ? error.message : 'Falha ao executar cenário do Studio.'
+      codigo,
+      mensagem:
+        codigo === 'TEST_LAB_PRODUCTION_BLOCKED'
+          ? 'O backend está em runtime de produção e o Laboratório não recebeu opt-in explícito. Configure TEST_LAB_ENABLED=true no serviço backend e faça um redeploy.'
+          : codigo === 'TEST_LAB_DISABLED'
+            ? 'O Laboratório foi desabilitado por TEST_LAB_ENABLED=false no backend.'
+            : codigo
     });
   }
 });
@@ -826,9 +843,17 @@ router.post('/test-lab/execute', async (req: BackofficeAuthenticatedRequest, res
     const run = await TestLabRunnerService.execute(req.body ?? {});
     return res.json({ status: 'sucesso', run });
   } catch (error) {
-    return res.status(400).json({
+    const codigo = error instanceof Error ? error.message : 'TEST_LAB_EXECUTION_FAILED';
+    const blocked = codigo === 'TEST_LAB_PRODUCTION_BLOCKED' || codigo === 'TEST_LAB_DISABLED';
+    return res.status(blocked ? 409 : 400).json({
       status: 'erro',
-      mensagem: error instanceof Error ? error.message : 'Falha ao executar o Laboratório.'
+      codigo,
+      mensagem:
+        codigo === 'TEST_LAB_PRODUCTION_BLOCKED'
+          ? 'O backend está em runtime de produção e o Laboratório não recebeu opt-in explícito. Configure TEST_LAB_ENABLED=true no serviço backend e faça um redeploy.'
+          : codigo === 'TEST_LAB_DISABLED'
+            ? 'O Laboratório foi desabilitado por TEST_LAB_ENABLED=false no backend.'
+            : codigo
     });
   }
 });

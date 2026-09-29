@@ -19,6 +19,7 @@ import {
   TestLabScenarioGenerator
 } from './testLabScenarioGenerator';
 import { TestLabFixtureGenerator } from './testLabFixtureGenerator';
+import { TestLabSafetyService } from './testLabSafety';
 
 export type TestLabStudioStrategy = 'SINGLE' | 'PAIRWISE' | 'CARTESIAN';
 
@@ -205,18 +206,6 @@ function expectEqual(key: string, expected: unknown, actual: unknown) {
 }
 
 export class TestLabStudioService {
-  private static assertSafeEnvironment() {
-    for (const name of ['NODE_ENV', 'APP_ENV', 'ENVIRONMENT', 'DEPLOYMENT_ENV']) {
-      const value = process.env[name]?.toLowerCase();
-      if (
-        value &&
-        !['test', 'teste', 'development', 'dev', 'local', 'staging', 'homologacao', 'homologation'].includes(value)
-      ) {
-        throw new Error('TEST_LAB_PRODUCTION_BLOCKED');
-      }
-    }
-  }
-
   static capabilities() {
     const catalog = getTestLabCatalog();
     const capabilities: TestLabStudioCapability[] = catalog.flags.map((flag) => {
@@ -254,7 +243,8 @@ export class TestLabStudioService {
       default_reference_date: '2026-09-29T12:00:00.000-03:00',
       capabilities,
       interactive_count: capabilities.filter((item) => item.interactive).length,
-      official_only_count: capabilities.filter((item) => !item.interactive).length
+      official_only_count: capabilities.filter((item) => !item.interactive).length,
+      safety: TestLabSafetyService.status()
     };
   }
 
@@ -338,7 +328,7 @@ export class TestLabStudioService {
   }
 
   static async execute(request: TestLabStudioRequest) {
-    this.assertSafeEnvironment();
+    TestLabSafetyService.assertExecutionAllowed();
     const normalized = this.normalizeRequest(request);
     const preview = this.preview(request);
     const assignments = preview.preview.length === preview.cases
