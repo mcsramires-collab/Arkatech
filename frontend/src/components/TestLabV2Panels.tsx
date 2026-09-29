@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Activity,
   AlertTriangle,
   BarChart3,
   CheckCircle2,
   FlaskConical,
-  Grid3X3,
+  Grid,
   History,
   ShieldCheck,
   XCircle
 } from 'lucide-react';
+
+import { ApiClient } from '../services/api';
 
 export type LabTab = 'overview' | 'studio' | 'coverage' | 'history' | 'regression';
 
@@ -63,6 +65,7 @@ export interface LabScenarioResult {
 
 export interface LabRunData {
   id: string;
+  status?: string;
   mode: string;
   suite_keys: string[];
   total_planned: number;
@@ -132,7 +135,7 @@ export function TestLabV2Navigation(props: {
   const items: Array<{ key: LabTab; label: string; icon: React.ReactNode }> = [
     { key: 'overview', label: 'Visão Geral', icon: <Activity size={16} /> },
     { key: 'studio', label: 'Studio de Cenários', icon: <FlaskConical size={16} /> },
-    { key: 'coverage', label: 'Cobertura', icon: <Grid3X3 size={16} /> },
+    { key: 'coverage', label: 'Cobertura', icon: <Grid size={16} /> },
     { key: 'history', label: 'Execuções', icon: <History size={16} /> },
     { key: 'regression', label: 'Regressão Oficial', icon: <ShieldCheck size={16} /> }
   ];
@@ -159,9 +162,23 @@ export function TestLabOverview(props: {
   history: LabRunData[];
   onNavigate: (tab: LabTab) => void;
 }) {
+  const [requiredP0, setRequiredP0] = useState<string[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    setRequiredP0(null);
+    ApiClient.planTestLab({ mode: 'STANDARD', suite_keys: props.catalog.suites.filter(s => s.priority === 'P0').map(s => s.key) })
+      .then(response => {
+        if (active && response?.status === 'sucesso') {
+          setRequiredP0(response.plan.scenarios.filter((s: { priority: string }) => s.priority === 'P0').map((s: { id: string }) => s.id));
+        }
+      }).catch(() => { /* Sem plano, o gate permanece não validado. */ });
+    return () => { active = false; };
+  }, [props.catalog]);
   const latest = props.history[0];
   const latestPassRate = latest ? pct(latest.passed, latest.total_executed) : 0;
   const p0 = latest?.scenario_results?.filter((item) => item.priority === 'P0') ?? [];
+  const completeP0 = latest?.status === 'COMPLETED' && latest.total_executed === latest.total_planned &&
+    requiredP0 !== null && requiredP0.length > 0 && requiredP0.every(id => p0.some(result => result.id === id));
   const p0Failed = p0.filter((item) => item.status === 'FAIL').length;
   const p0Gaps = p0.filter((item) => item.status === 'GAP').length;
   const p0Pass = p0.filter((item) => item.status === 'PASS').length;
@@ -214,7 +231,9 @@ export function TestLabOverview(props: {
             <p style={{ ...labMuted, margin: '5px 0 0' }}>Qualquer FAIL ou GAP P0 deve bloquear a evolução.</p>
           </div>
           {latest ? (
-            p0Failed === 0 && p0Gaps === 0 ? (
+            !completeP0 ? (
+              <span className="badge badge-warning">P0 não validado integralmente</span>
+            ) : p0Failed === 0 && p0Gaps === 0 ? (
               <span className="badge badge-success"><CheckCircle2 size={14} /> P0 saudável</span>
             ) : (
               <span className="badge badge-error"><XCircle size={14} /> {p0Failed} FAIL · {p0Gaps} GAP</span>

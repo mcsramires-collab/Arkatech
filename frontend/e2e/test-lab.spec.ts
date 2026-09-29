@@ -199,13 +199,14 @@ async function mockApi(page: import('@playwright/test').Page) {
           strategy: 'PAIRWISE',
           reference_date: '2026-09-29T12:00:00.000-03:00',
           cases: 1,
-          passed: 1,
+          passed: 0,
           failed: 0,
+          unvalidated: 1,
           duration_ms: 8,
           results: [{
             index: 0,
             assignment: { 'policy.status': 'ATIVA', 'document.tipo': 'CTE' },
-            status: 'PASS',
+            status: 'UNVALIDATED',
             duration_ms: 8,
             expected: {},
             actual: {
@@ -313,4 +314,22 @@ test('Studio V2 calcula matriz e executa um cenário interativo', async ({ page 
   await page.getByRole('button', { name: 'Executar matriz' }).click();
   await expect(page.getByText('Execution Center — Cenário de negócio')).toBeVisible();
   await expect(page.getByText('SUC-2000')).toBeVisible();
+  await expect(page.getByText('Executado sem validação')).toBeVisible();
+  await expect(page.getByText('0 PASS', {exact:true})).toBeVisible();
+});
+
+test('gate exige todos os cenários P0 do plano oficial', async ({ page }) => {
+  await mockApi(page);
+  await page.route('**/admin/test-lab/runs', route => route.fulfill({json:{status:'sucesso',runs:[{...completedRun, scenario_results:[], total_executed:0}]}}));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
+  await expect(page.getByText('P0 não validado integralmente')).toBeVisible();
+  await expect(page.getByText('P0 saudável')).toHaveCount(0);
+});
+test('gate aprova execução completa dos cenários planejados', async ({ page }) => {
+  await mockApi(page);
+  await page.route('**/admin/test-lab/runs', route => route.fulfill({json:{status:'sucesso',runs:[completedRun]}}));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
+  await expect(page.getByText('P0 saudável')).toBeVisible();
 });

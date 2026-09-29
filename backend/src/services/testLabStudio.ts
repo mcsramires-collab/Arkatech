@@ -81,7 +81,7 @@ export interface TestLabStudioCapability {
 export interface TestLabStudioCaseResult {
   index: number;
   assignment: ScenarioAssignment;
-  status: 'PASS' | 'FAIL';
+  status: 'PASS' | 'FAIL' | 'UNVALIDATED';
   duration_ms: number;
   expected: TestLabStudioExpectation;
   actual: {
@@ -371,6 +371,7 @@ export class TestLabStudioService {
       cases: results.length,
       passed: results.filter((result) => result.status === 'PASS').length,
       failed: results.filter((result) => result.status === 'FAIL').length,
+      unvalidated: results.filter((result) => result.status === 'UNVALIDATED').length,
       duration_ms: Date.now() - startedAt,
       results
     };
@@ -699,7 +700,7 @@ export class TestLabStudioService {
     return {
       index,
       assignment,
-      status: passed ? 'PASS' : 'FAIL',
+      status: assertions.length === 0 ? 'UNVALIDATED' : passed ? 'PASS' : 'FAIL',
       duration_ms: Date.now() - started,
       expected: expectation,
       actual: {

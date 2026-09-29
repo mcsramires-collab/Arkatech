@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   FlaskConical,
-  Grid3X3,
-  Layers3,
+  Grid,
+  Layers,
   Play,
   RefreshCw,
   Settings2,
@@ -60,11 +60,12 @@ interface StudioRun {
   cases: number;
   passed: number;
   failed: number;
+  unvalidated: number;
   duration_ms: number;
   results: Array<{
     index: number;
     assignment: Record<string, Primitive>;
-    status: 'PASS' | 'FAIL';
+    status: 'PASS' | 'FAIL' | 'UNVALIDATED';
     duration_ms: number;
     actual: {
       status: string;
@@ -384,7 +385,7 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
               {grouped.map((row) => (
                 <div key={row.group.key}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                    <Layers3 size={15} /><strong>{row.group.label}</strong>
+                    <Layers size={15} /><strong>{row.group.label}</strong>
                     <span style={labMuted}>{row.items.length} dimensão(ões)</span>
                   </div>
                   <div style={{ display: 'grid', gap: 8 }}>
@@ -503,7 +504,7 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
             </div>
 
             <button className="btn btn-secondary" style={{ width: '100%', marginTop: 14 }} disabled={loading || running} onClick={calculate}>
-              {loading ? <RefreshCw size={15} className="spin" /> : <Grid3X3 size={15} />}{loading ? 'Calculando...' : 'Visualizar matriz'}
+              {loading ? <RefreshCw size={15} className="spin" /> : <Grid size={15} />}{loading ? 'Calculando...' : 'Visualizar matriz'}
             </button>
             <button className="btn btn-primary" style={{ width: '100%', marginTop: 8 }} disabled={running || loading} onClick={execute}>
               {running ? <RefreshCw size={15} className="spin" /> : <Play size={15} />}{running ? 'Executando...' : 'Executar matriz'}
@@ -527,7 +528,7 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
         <section style={labSectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
             <div><h3 style={{ margin: 0 }}>Execution Center — {run.name}</h3><div style={{ ...labMuted, marginTop: 4 }}>{run.id} · {run.strategy} · {run.duration_ms} ms</div></div>
-            <div style={{ display: 'flex', gap: 8 }}><span className="badge badge-success">{run.passed} PASS</span><span className={run.failed ? 'badge badge-error' : 'badge badge-success'}>{run.failed} FAIL</span></div>
+            <div style={{ display: 'flex', gap: 8 }}><span className="badge badge-success">{run.passed} PASS</span><span className={run.failed ? 'badge badge-error' : 'badge badge-success'}>{run.failed} FAIL</span><span className="badge badge-info">{run.unvalidated} sem validação</span></div>
           </div>
           <div style={{ overflowX: 'auto', marginTop: 16 }}>
             <table className="custom-table">
@@ -536,7 +537,7 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
                 {run.results.map((result) => (
                   <tr key={result.index}>
                     <td>#{result.index + 1}</td>
-                    <td><span className={result.status === 'PASS' ? 'badge badge-success' : 'badge badge-error'}>{result.status}</span></td>
+                    <td><span className={result.status === 'PASS' ? 'badge badge-success' : result.status === 'FAIL' ? 'badge badge-error' : 'badge badge-info'}>{result.status === 'UNVALIDATED' ? 'Executado sem validação' : result.status}</span></td>
                     <td>{result.actual.status}</td>
                     <td><code>{result.actual.codigo}</code></td>
                     <td>{result.actual.matched_policy ?? '—'}</td>

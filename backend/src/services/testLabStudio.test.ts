@@ -88,3 +88,11 @@ describe('TestLabStudioService', () => {
   });
 
 });
+
+test('exploração sem expectativa não conta como aprovação', async () => {
+  const run = await TestLabStudioService.execute({strategy: 'SINGLE'});
+  expect(run.passed).toBe(0);
+  expect(run.failed).toBe(0);
+  expect(run.unvalidated).toBe(1);
+  expect(run.results[0]?.status).toBe('UNVALIDATED');
+});
