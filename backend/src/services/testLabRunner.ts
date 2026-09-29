@@ -22,6 +22,7 @@ import { RuleEngineService } from './ruleEngine';
 import { MockSefazService } from '../mockSefaz/mockSefazService';
 import { getTestLabCatalog } from './testLabCatalog';
 import { TestLabCatalogAuditService } from './testLabCatalogAudit';
+import { TestLabSafetyService } from './testLabSafety';
 import { TestLabScenarioGenerator, ScenarioDimension } from './testLabScenarioGenerator';
 import { TestLabFixtureGenerator } from './testLabFixtureGenerator';
 
@@ -2431,13 +2432,8 @@ export class TestLabRunnerService {
   }
 
   static async execute(request: TestLabPlanRequest = {}): Promise<TestLabRun> {
-    // Guard the service itself so HTTP, CLI and future callers cannot bypass it.
-    for (const name of ['NODE_ENV', 'APP_ENV', 'ENVIRONMENT', 'DEPLOYMENT_ENV']) {
-      const value = process.env[name]?.toLowerCase();
-      if (value && !['test', 'teste', 'development', 'dev', 'local', 'staging', 'homologacao', 'homologation'].includes(value)) {
-        throw new Error('TEST_LAB_PRODUCTION_BLOCKED');
-      }
-    }
+    // HTTP, CLI e futuros callers compartilham a mesma política de segurança.
+    TestLabSafetyService.assertExecutionAllowed();
     const plan = this.plan(request);
     if (!plan.total_scenarios) throw new Error('TEST_LAB_EMPTY_PLAN');
     const allDefinitions = defineScenarios(plan.mode);
