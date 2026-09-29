@@ -132,7 +132,7 @@ router.post('/documents', authMiddleware, async (req: AuthenticatedRequest, res:
       continue;
     }
 
-    const policies = ConnectorFiscalService.resolveAutomaticPolicies(tenantId, parsed.tipoDocumento);
+    const policies = ConnectorFiscalService.resolveAutomaticPolicies(tenantId, parsed.tipoDocumento, parsed.dataEmissao);
     const notConfigured = allTenantPolicies.length > 0 && policies.length === 0;
 
     const [ingestion] = DocumentIngestionService.processXmlBatch({

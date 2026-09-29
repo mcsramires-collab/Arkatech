@@ -19,7 +19,7 @@ const DEFAULT_BUSINESS_TIMEZONE =
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function isDateOnly(value?: string): boolean {
-  return Boolean(value && DATE_ONLY_RE.test(value.trim()));
+  return typeof value === 'string' && DATE_ONLY_RE.test(value.trim());
 }
 
 function toDateKey(date: Date, timeZone: string): string {
@@ -41,7 +41,14 @@ function toDateKey(date: Date, timeZone: string): string {
   return `${year}-${month}-${day}`;
 }
 
+function validCalendarDate(value: string): boolean {
+  if (!DATE_ONLY_RE.test(value)) return false;
+  const parsed = new Date(value + 'T00:00:00.000Z');
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 function parseInstant(value: string): Date | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !validCalendarDate(value.slice(0, 10))) return undefined;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
@@ -62,10 +69,10 @@ function boundaryDateKey(value: string, timeZone: string): string | undefined {
  */
 export function validatePolicyDocumentDate(
   policy: Policy,
-  documentDateValue?: string,
+  documentDateValue?: unknown,
   timeZone: string = DEFAULT_BUSINESS_TIMEZONE
 ): PolicyDocumentValidity {
-  const rawDocumentDate = documentDateValue?.trim();
+  const rawDocumentDate = typeof documentDateValue === 'string' ? documentDateValue.trim() : undefined;
   if (!rawDocumentDate) {
     return {
       valid: false,
@@ -78,7 +85,7 @@ export function validatePolicyDocumentDate(
   const documentIsDateOnly = isDateOnly(rawDocumentDate);
   const documentInstant = documentIsDateOnly ? undefined : parseInstant(rawDocumentDate);
 
-  if (!documentIsDateOnly && !documentInstant) {
+  if ((documentIsDateOnly && !validCalendarDate(rawDocumentDate)) || (!documentIsDateOnly && !documentInstant)) {
     return {
       valid: false,
       reason: 'DOCUMENT_DATE_MISSING',

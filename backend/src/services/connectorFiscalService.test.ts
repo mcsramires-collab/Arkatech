@@ -82,11 +82,11 @@ describe('ConnectorFiscalService', () => {
       { id: 's2', policy_id: 'rcdc', config: { 'regras:documentos-aceitos': ['CT-e'] }, updated_at: '' }
     ] as any;
 
-    expect(ConnectorFiscalService.resolveAutomaticPolicies('tenant-1', 'NFE')).toEqual([
+    expect(ConnectorFiscalService.resolveAutomaticPolicies('tenant-1', 'NFE', '2026-09-28')).toEqual([
       { id: 'rctrc-current', numero_apolice: 'CURRENT', ramo: 'RCTRC' }
     ]);
 
-    expect(ConnectorFiscalService.resolveAutomaticPolicies('tenant-1', 'CTE')).toEqual([
+    expect(ConnectorFiscalService.resolveAutomaticPolicies('tenant-1', 'CTE', '2026-09-28')).toEqual([
       { id: 'rctrc-current', numero_apolice: 'CURRENT', ramo: 'RCTRC' },
       { id: 'rcdc', numero_apolice: 'RCDC', ramo: 'RCDC' }
     ]);
@@ -231,6 +231,21 @@ describe('ConnectorFiscalService', () => {
       }
     ] as any;
 
-    expect(ConnectorFiscalService.resolveAutomaticPolicies('tenant-1', 'CTE')).toEqual([]);
+    expect(ConnectorFiscalService.resolveAutomaticPolicies('tenant-1', 'CTE', '2026-09-28')).toEqual([]);
+  });
+});
+
+describe('matching histórico por emissão', () => {
+  afterEach(() => { dbStore.policies = []; dbStore.policyBusinessSettings = []; jest.restoreAllMocks(); });
+  it('encaminha OUTBOUND à apólice histórica e recusa ambiguidade no mesmo ramo', () => {
+    const base = {tenant_id:'historic', insurer_id:'i1', ramo:'RCTRC', status:'ATIVA', numero_apolice:'TEST', vigencia_inicio:'2026-01-01', vigencia_fim:'2026-08-31'};
+    dbStore.policies = [{...base, id:'old'}, {...base,id:'renewed',vigencia_inicio:'2026-09-01',vigencia_fim:'2027-08-31'}] as any;
+    dbStore.policyBusinessSettings = [];
+    const spy = jest.spyOn(DocumentIngestionService, 'processXmlBatch').mockReturnValue([{fiscal_document_id:'fd',arquivo:'test',aceito_em_alguma_apolice:true,tentativas:[]}]);
+    ConnectorFiscalService.ingestBatch({connector:{tenant_id:'historic',id:'connector'} as Connector, provider:'CTE', capture_mode:'OUTBOUND', app_base_url:'http://localhost', documents:[{xml:'<cteProc><CTe><infCte><ide><dhEmi>2026-08-20T12:00:00-03:00</dhEmi></ide></infCte></CTe><protCTe><infProt><nProt>123</nProt><cStat>100</cStat></infProt></protCTe></cteProc>'}]});
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({policies:[expect.objectContaining({id:'old'})]}));
+    dbStore.policies.push({...dbStore.policies[0]!, id:'overlap'});
+    expect(ConnectorFiscalService.resolveAutomaticPolicies('historic','CTE','2026-08-20')).toEqual([]);
+    expect(ConnectorFiscalService.resolveAutomaticPolicies('historic','CTE','invalid')).toEqual([]);
   });
 });

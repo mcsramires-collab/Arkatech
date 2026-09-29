@@ -6,6 +6,7 @@ import {
   RamoApolice,
   TipoDocumento
 } from '../types';
+import { validatePolicyDocumentDate } from './policyValidity';
 import { dbStore } from './dbStore';
 import { XMLParserService } from './xmlParser';
 import {
@@ -57,8 +58,7 @@ export class ConnectorFiscalService {
    * aceita o tipo do documento. Isso formaliza a regra documento → ramo/apólice em vez de
    * simplesmente tentar RCTR-C, RC-DC e RC-V para todo XML recebido.
    */
-  static resolveAutomaticPolicies(tenantId: string, tipoDocumento: TipoDocumento): PolicyTarget[] {
-    const now = Date.now();
+  static resolveAutomaticPolicies(tenantId: string, tipoDocumento: TipoDocumento, documentDate?: unknown): PolicyTarget[] {
     const policies = dbStore.policies.filter(
       (policy) => policy.tenant_id === tenantId && policyAcceptsDocument(policy.id, tipoDocumento)
     );
@@ -67,12 +67,10 @@ export class ConnectorFiscalService {
       const candidates = policies.filter((policy) => policy.ramo === ramo);
       if (candidates.length === 0) return [];
 
-      const usableCandidates = candidates.filter(
-        (policy) =>
-          policy.status === 'ATIVA' &&
-          !(policy.vigencia_fim && new Date(policy.vigencia_fim).getTime() < now)
-      );
-      const pool = usableCandidates.length > 0 ? usableCandidates : candidates;
+      const eligible = candidates.filter((policy) => validatePolicyDocumentDate(policy, documentDate).valid);
+      // Uma única candidata ainda passa pelo motor para registrar a pendência temporal.
+      const pool = eligible.length ? eligible : candidates.length === 1 ? candidates : [];
+      if (pool.length !== 1) return [];
 
       // Segurança P0: se o mesmo segurado chegar a ter mais de uma seguradora candidata
       // para o MESMO ramo (estado que pode surgir por migração/importação mesmo que o cadastro
@@ -123,7 +121,7 @@ export class ConnectorFiscalService {
 
       const policies =
         tipoDocumento && !providerMismatch && !outboundNotAuthorized
-          ? this.resolveAutomaticPolicies(params.connector.tenant_id, tipoDocumento)
+          ? this.resolveAutomaticPolicies(params.connector.tenant_id, tipoDocumento, parsedDocument?.dataEmissao)
           : [];
 
       const reference = document.nsu ?? document.external_id ?? 'outbound';

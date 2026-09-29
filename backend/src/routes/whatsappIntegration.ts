@@ -231,7 +231,8 @@ router.post('/inbound', async (req, res: Response) => {
 
       const policies = ConnectorFiscalService.resolveAutomaticPolicies(
         tenant.id,
-        parsed.tipoDocumento
+        parsed.tipoDocumento,
+        parsed.dataEmissao
       );
       const notConfigured = allTenantPolicies.length > 0 && policies.length === 0;
 

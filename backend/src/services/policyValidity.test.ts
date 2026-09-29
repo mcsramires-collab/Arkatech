@@ -50,3 +50,13 @@ describe('validatePolicyDocumentDate', () => {
       .toBe('DOCUMENT_DATE_MISSING');
   });
 });
+
+
+describe('datas recebidas de integrações', () => {
+  it.each(['2026-02-30', '2026-13-01', '2026-02-30T12:00:00Z', 20260929, {}, '2026-09-29T12:00:00'])('rejeita valor inválido %p sem lançar exceção', (value) => {
+    expect(validatePolicyDocumentDate(basePolicy, value).reason).toBe('DOCUMENT_DATE_MISSING');
+  });
+  it('aceita dia bissexto real', () => {
+    expect(validatePolicyDocumentDate({...basePolicy, vigencia_inicio:'2028-01-01', vigencia_fim:'2028-12-31'}, '2028-02-29').valid).toBe(true);
+  });
+});

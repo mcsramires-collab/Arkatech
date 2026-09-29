@@ -230,11 +230,8 @@ export class XMLParserService {
         cnpjDestinatario = nfseNode.tomador?.CNPJ || dpsNode.toma?.CNPJ;
         dataEmissao =
           nfseNode.dhEmi ||
-          nfseNode.dhProc ||
           nfseNode.dataEmissao ||
-          dpsNode.dhEmi ||
-          dpsNode.dCompet ||
-          dpsNode.dhCompet;
+          dpsNode.dhEmi;
         tpAmbSefaz = (nfseNode.tpAmb || dpsNode.tpAmb) ? Number(nfseNode.tpAmb || dpsNode.tpAmb) as 1 | 2 : undefined;
 
         tagsMap['vServicos'] = valorCarga;

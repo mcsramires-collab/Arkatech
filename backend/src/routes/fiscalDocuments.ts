@@ -117,7 +117,7 @@ router.post('/:id/reprocess', authMiddleware, (req: AuthenticatedRequest, res: R
     });
   }
 
-  const policies = ConnectorFiscalService.resolveAutomaticPolicies(tenantId, parsed.tipoDocumento);
+  const policies = ConnectorFiscalService.resolveAutomaticPolicies(tenantId, parsed.tipoDocumento, parsed.dataEmissao);
   const appBaseUrl = `${req.protocol}://${req.get('host')}`;
   const [result] = DocumentIngestionService.processXmlBatch({
     tenant_id: tenantId,
