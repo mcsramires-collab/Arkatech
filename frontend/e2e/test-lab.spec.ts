@@ -301,6 +301,22 @@ test('catálogo exibe governança e regra de isolamento', async ({ page }) => {
 });
 
 
+test('Laboratório V2 fica separado do teste de carga e abre jornada rápida', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
+  await expect(page.getByRole('heading', { name: 'Laboratório de Testes V2' })).toBeVisible();
+  await expect(page.getByText('Simulador de Carga Multi-Cliente')).not.toBeVisible();
+
+  await page.getByRole('button', { name: 'Vigência & renovação' }).click();
+  await expect(page.getByRole('heading', { name: 'Studio de Cenários' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Teste de Carga' }).click();
+  await expect(page.getByText('Simulador de Carga Multi-Cliente')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Laboratório de Testes V2' })).not.toBeVisible();
+});
+
 test('Studio V2 calcula matriz e executa um cenário interativo', async ({ page }) => {
   await mockApi(page);
   await page.goto('/');
