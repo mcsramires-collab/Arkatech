@@ -40,6 +40,13 @@ interface StudioCapabilities {
   capabilities: Capability[];
   interactive_count: number;
   official_only_count: number;
+  safety?: {
+    execution_allowed: boolean;
+    production_like_runtime: boolean;
+    explicit_opt_in: boolean;
+    explicit_disabled: boolean;
+    reason?: string;
+  };
 }
 
 interface StudioPreview {
@@ -356,6 +363,7 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
     });
   }, []);
 
+  const executionAllowed = studio?.safety?.execution_allowed !== false;
   const capabilities = studio?.capabilities ?? [];
   const interactive = capabilities.filter((item) => item.interactive);
   const available = interactive.filter((item) => !selectedKeys.includes(item.key));
@@ -456,9 +464,12 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
               gera o documento e chama o pipeline real de ingestão e averbação.
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <span className="badge badge-success">{studio.interactive_count} interativas</span>
             <span className="badge badge-info">{studio.official_only_count} oficiais</span>
+            <span className={executionAllowed ? 'badge badge-success' : 'badge badge-error'}>
+              {executionAllowed ? 'Execução liberada' : 'Execução bloqueada'}
+            </span>
           </div>
         </div>
       </section>
@@ -466,6 +477,21 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
       {error && (
         <section style={{ ...labSectionStyle, borderColor: 'var(--accent-red)' }}>
           <AlertTriangle size={16} style={{ marginRight: 8 }} />{error}
+        </section>
+      )}
+
+      {!executionAllowed && (
+        <section style={{ ...labSectionStyle, borderColor: 'var(--accent-amber)' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <AlertTriangle size={18} />
+            <div>
+              <strong>Execução protegida pelo backend</strong>
+              <div style={{ ...labMuted, marginTop: 5 }}>
+                Este deploy usa runtime de produção. Para liberar somente o laboratório sintético,
+                configure <code>TEST_LAB_ENABLED=true</code> no serviço backend e faça um redeploy.
+              </div>
+            </div>
+          </div>
         </section>
       )}
 
@@ -622,7 +648,7 @@ export function TestLabStudioV2(props: { catalog: LabCatalogData }) {
             <button className="btn btn-secondary" style={{ width: '100%', marginTop: 14 }} disabled={loading || running} onClick={calculate}>
               {loading ? <RefreshCw size={15} className="spin" /> : <Grid size={15} />}{loading ? 'Calculando...' : 'Visualizar matriz'}
             </button>
-            <button className="btn btn-primary" style={{ width: '100%', marginTop: 8 }} disabled={running || loading} onClick={execute}>
+            <button className="btn btn-primary" style={{ width: '100%', marginTop: 8 }} disabled={running || loading || !executionAllowed} onClick={execute}>
               {running ? <RefreshCw size={15} className="spin" /> : <Play size={15} />}{running ? 'Executando...' : 'Executar matriz'}
             </button>
 
