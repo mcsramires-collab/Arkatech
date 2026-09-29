@@ -950,7 +950,11 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
     title: 'Prazo de cancelamento self-service',
     description: 'Segurado pode cancelar dentro da janela e é bloqueado depois dela.',
     tags: ['deadline', 'cancellation'],
-    covers_flag_keys: ['regras:prazo-cancelamento-valor', 'regras:prazo-cancelamento-unidade'],
+    covers_flag_keys: [
+      'regras:cancelamento-sem-limite',
+      'regras:prazo-cancelamento-valor',
+      'regras:prazo-cancelamento-unidade'
+    ],
     execute: () => {
       const insideCtx = setupBase();
       setBusinessConfig(insideCtx, {
@@ -979,12 +983,26 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
         requisitante: 'SEGURADO'
       });
 
+      const unlimitedCtx = setupBase();
+      setBusinessConfig(unlimitedCtx, {
+        'regras:cancelamento-sem-limite': true
+      });
+      const unlimitedResult = processAverbacao(unlimitedCtx, { documentNumber: 573003 });
+      const unlimitedRecord = successfulAverbacaoFromResponse(unlimitedResult);
+      unlimitedRecord.timestamp = isoFromNow(-400 * 24 * 60 * 60 * 1000);
+      const unlimitedCancel = CancelamentoService.processar({
+        averbacaoAnterior: unlimitedRecord,
+        xmlEvento: cancellationXml(unlimitedRecord.chave_documento || ''),
+        requisitante: 'SEGURADO'
+      });
+
       return {
         assertions: [
           assertion('inside', 'Cancelamento dentro da janela', 'sucesso', insideCancel.status),
           assertion('inside_record', 'Status final cancelado', 'CANCELADO', insideCancel.averbacao?.status),
           assertion('outside', 'Cancelamento fora da janela', 'erro', outsideCancel.status),
-          assertion('outside_code', 'Código fora do prazo', 'ERR-4018', outsideCancel.codigo)
+          assertion('outside_code', 'Código fora do prazo', 'ERR-4018', outsideCancel.codigo),
+          assertion('unlimited', 'Cancelamento explicitamente sem limite', 'sucesso', unlimitedCancel.status)
         ]
       };
     }
@@ -1604,6 +1622,20 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
         requisitante: 'SEGURADO'
       });
 
+      const unlimitedCtx = setupBase();
+      setBusinessConfig(unlimitedCtx, {
+        'regras:modo-canc': 'sem'
+      });
+      const unlimitedConfig = RuleEngineService.getBusinessConfig(mainPolicy(unlimitedCtx));
+      const unlimitedResult = processAverbacao(unlimitedCtx, { documentNumber: 578104 });
+      const unlimitedRecord = successfulAverbacaoFromResponse(unlimitedResult);
+      unlimitedRecord.timestamp = isoFromNow(-400 * 24 * 60 * 60 * 1000);
+      const unlimitedCancellation = CancelamentoService.processar({
+        averbacaoAnterior: unlimitedRecord,
+        xmlEvento: cancellationXml(unlimitedRecord.chave_documento || ''),
+        requisitante: 'SEGURADO'
+      });
+
       return {
         assertions: [
           assertion('shipment_alias', 'Prazo de embarque normalizado', 'dia', shipmentConfig['regras:prazo-embarque']),
@@ -1611,7 +1643,9 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
           assertion('cancel_value', 'Valor de cancelamento normalizado', 1, cancelConfig['regras:prazo-cancelamento-valor']),
           assertion('cancel_unit', 'Unidade de cancelamento normalizada', 'Dias', cancelConfig['regras:prazo-cancelamento-unidade']),
           assertion('cancel_expired', 'Prazo em dias bloqueia após vencimento', 'ERR-4018', cancellation.codigo),
-          assertion('cancel_months', 'Unidade Meses é respeitada', 'sucesso', monthCancellation.status)
+          assertion('cancel_months', 'Unidade Meses é respeitada', 'sucesso', monthCancellation.status),
+          assertion('cancel_unlimited_alias', 'Modo sem limite normalizado', true, unlimitedConfig['regras:cancelamento-sem-limite']),
+          assertion('cancel_unlimited_result', 'Modo sem limite da UI é respeitado', 'sucesso', unlimitedCancellation.status)
         ]
       };
     }
