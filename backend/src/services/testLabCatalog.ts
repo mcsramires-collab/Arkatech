@@ -402,7 +402,8 @@ const flags: TestLabFlagDefinition[] = [
     generation: 'ENUM_ALL',
     options: [
       { value: 'Horas', label: 'Horas' },
-      { value: 'Dias', label: 'Dias' }
+      { value: 'Dias', label: 'Dias' },
+      { value: 'Meses', label: 'Meses' }
     ],
     tags: ['deadline', 'cancellation']
   },
@@ -929,7 +930,10 @@ suites.push({
     'Valida aliases ativos usados pela interface e torna explícitas configurações da UI que ainda são GAP de produto.',
   priority: 'P1',
   tags: ['portal-contract', 'compatibility'],
-  flag_keys: portalUiContractFlags.map((flag) => flag.key)
+  flag_keys: [
+    ...portalUiContractFlags.map((flag) => flag.key),
+    'regras:averbacao-esporadica-on'
+  ]
 });
 
 export function getTestLabCatalog() {
