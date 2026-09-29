@@ -111,8 +111,10 @@ describe('Test Lab HTTP/API contracts', () => {
           const blocked = await fetch(base + '/api/v1/admin/test-lab/execute', {
             method: 'POST', headers: { 'content-type': 'application/json', 'x-internal-api-key': internalKey }, body: '{}'
           });
-          expect(blocked.status).toBe(400);
-          expect((await blocked.json() as any).mensagem).toBe('TEST_LAB_PRODUCTION_BLOCKED');
+          expect(blocked.status).toBe(409);
+          const blockedBody = await blocked.json() as any;
+          expect(blockedBody.codigo).toBe('TEST_LAB_PRODUCTION_BLOCKED');
+          expect(blockedBody.mensagem).toContain('TEST_LAB_ENABLED=true');
         } finally { process.env.NODE_ENV = environment; }
         const planResponse = await fetch(base + '/api/v1/admin/test-lab/plan', {
           method: 'POST',
