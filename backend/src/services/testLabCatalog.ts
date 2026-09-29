@@ -221,6 +221,63 @@ const flags: TestLabFlagDefinition[] = [
     tags: ['policy', 'suspension', 'p0']
   },
   {
+    key: 'policy_rule.obrigatoria',
+    group: 'required-data',
+    label: 'Variável dinâmica obrigatória da apólice',
+    description: 'Mecanismo genérico de PolicyRule que permite adicionar novas variáveis sem alterar o motor.',
+    source: { kind: 'POLICY_FIELD', path: 'PolicyRule.obrigatoria/tag_path/nome_variavel' },
+    value_type: 'BOOLEAN',
+    engine_status: 'ACTIVE',
+    generation: 'BOOLEAN_BOTH',
+    tags: ['dynamic-rule', 'policy-rule', 'p1']
+  },
+  {
+    key: 'policy_rule.tipo_doc',
+    group: 'required-data',
+    label: 'Escopo da variável por tipo de documento',
+    description: 'PolicyRule pode valer para TODOS ou apenas para um tipo fiscal específico.',
+    source: { kind: 'POLICY_FIELD', path: 'PolicyRule.tipo_doc' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'TODOS', label: 'Todos' },
+      { value: 'CTE', label: 'CT-e' },
+      { value: 'NFE', label: 'NF-e' },
+      { value: 'MDFE', label: 'MDF-e' },
+      { value: 'NFSE', label: 'NFS-e' }
+    ],
+    tags: ['dynamic-rule', 'document-scope', 'p1']
+  },
+  {
+    key: 'document_rule.obrigatoria',
+    group: 'required-data',
+    label: 'Regra global obrigatória por documento',
+    description: 'DocumentRule exige uma variável/tag para todos os documentos do tipo configurado.',
+    source: { kind: 'DOCUMENT', path: 'DocumentRule.obrigatoria/tag_path/nome_variavel' },
+    value_type: 'BOOLEAN',
+    engine_status: 'ACTIVE',
+    generation: 'BOOLEAN_BOTH',
+    tags: ['dynamic-rule', 'document-rule', 'p1']
+  },
+  {
+    key: 'document_rule.tipo_documento',
+    group: 'required-data',
+    label: 'Tipo fiscal da regra global',
+    description: 'Escopo de uma DocumentRule para CT-e, NF-e, MDF-e ou NFS-e.',
+    source: { kind: 'DOCUMENT', path: 'DocumentRule.tipo_documento' },
+    value_type: 'ENUM',
+    engine_status: 'ACTIVE',
+    generation: 'ENUM_ALL',
+    options: [
+      { value: 'CTE', label: 'CT-e' },
+      { value: 'NFE', label: 'NF-e' },
+      { value: 'MDFE', label: 'MDF-e' },
+      { value: 'NFSE', label: 'NFS-e' }
+    ],
+    tags: ['dynamic-rule', 'document-scope', 'p1']
+  },
+  {
     key: 'regras:placa',
     group: 'required-data',
     label: 'Placa obrigatória',
@@ -749,7 +806,15 @@ const suites: TestLabSuiteTemplate[] = [
     description: 'Valida placa, motorista, embarque e preenchimento suplementar.',
     priority: 'P1',
     tags: ['required-data', 'recovery'],
-    flag_keys: ['regras:placa', 'regras:motorista', 'regras:embarque']
+    flag_keys: [
+      'policy_rule.obrigatoria',
+      'policy_rule.tipo_doc',
+      'document_rule.obrigatoria',
+      'document_rule.tipo_documento',
+      'regras:placa',
+      'regras:motorista',
+      'regras:embarque'
+    ]
   },
   {
     key: 'p1-deadlines',
