@@ -1015,7 +1015,7 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
     title: 'Cobertura monetária compõe valor considerado',
     description: 'Cobertura monetária informada deve ser somada antes do cálculo final.',
     tags: ['coverage', 'value'],
-    covers_flag_keys: ['coverage.valor'],
+    covers_flag_keys: ['coverage.valor', 'coverage.tipo_valor'],
     quick: true,
     execute: () => {
       const ctx = setupBase();
@@ -1029,17 +1029,27 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
           aplicar_todos_clientes: true,
           tipo_valor: 'monetario',
           created_at: new Date().toISOString()
+        },
+        {
+          id: 'lab-cov-info',
+          insurer_id: ctx.insurerAId,
+          ramo: 'RCTRC',
+          titulo: 'INFO_TESTE',
+          obrigatoria: false,
+          aplicar_todos_clientes: true,
+          tipo_valor: 'informativo',
+          created_at: new Date().toISOString()
         }
       ];
       const result = processAverbacao(
         ctx,
         { valorCarga: 1000 },
-        { supplemented_vars: { ADICIONAL_TESTE: 'R$ 200,00' } }
+        { supplemented_vars: { ADICIONAL_TESTE: 'R$ 200,00', INFO_TESTE: 'R$ 900,00' } }
       );
       return {
         assertions: [
           assertion('status', 'Status', 'sucesso', result.status),
-          assertion('value', 'Carga + cobertura', 1200, result.valor_considerado_averbacao)
+          assertion('value', 'Somente cobertura monetária compõe valor', 1200, result.valor_considerado_averbacao)
         ]
       };
     }
@@ -1052,7 +1062,7 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
     title: 'Cobertura obrigatória ausente',
     description: 'Cobertura obrigatória da seguradora deve gerar recuperação ERR-4004 quando ausente.',
     tags: ['coverage', 'required'],
-    covers_flag_keys: ['coverage.valor'],
+    covers_flag_keys: ['coverage.obrigatoria'],
     execute: () => {
       const ctx = setupBase();
       dbStore.insurerCoverages = [
@@ -1073,6 +1083,83 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
           assertion('status', 'Status', 'erro', result.status),
           assertion('codigo', 'Código', 'ERR-4004', result.codigo),
           includesAssertion('missing', 'Cobertura indicada', 'COBERTURA_OBRIGATORIA', result.variaveis_faltantes)
+        ]
+      };
+    }
+  });
+
+  scenarios.push({
+    id: 'P1-COVERAGE-SCOPE',
+    suite_key: 'p1-coverages',
+    priority: 'P1',
+    title: 'Escopo de cobertura por segurado e ramo',
+    description: 'Somente coberturas globais ou do tenant/ramo correspondente devem afetar a averbação.',
+    tags: ['coverage', 'scope'],
+    covers_flag_keys: ['coverage.aplicar_todos_clientes', 'coverage.ramo'],
+    execute: () => {
+      const ctx = setupBase();
+      dbStore.insurerCoverages = [
+        {
+          id: 'lab-cov-global',
+          insurer_id: ctx.insurerAId,
+          ramo: 'RCTRC',
+          titulo: 'GLOBAL',
+          obrigatoria: false,
+          aplicar_todos_clientes: true,
+          tipo_valor: 'monetario',
+          created_at: new Date().toISOString()
+        },
+        {
+          id: 'lab-cov-tenant',
+          insurer_id: ctx.insurerAId,
+          ramo: 'RCTRC',
+          titulo: 'TENANT_ONLY',
+          obrigatoria: false,
+          aplicar_todos_clientes: false,
+          tenant_id: ctx.tenantId,
+          tipo_valor: 'monetario',
+          created_at: new Date().toISOString()
+        },
+        {
+          id: 'lab-cov-other-tenant',
+          insurer_id: ctx.insurerAId,
+          ramo: 'RCTRC',
+          titulo: 'OTHER_TENANT_REQUIRED',
+          obrigatoria: true,
+          aplicar_todos_clientes: false,
+          tenant_id: 'other-tenant',
+          tipo_valor: 'monetario',
+          created_at: new Date().toISOString()
+        },
+        {
+          id: 'lab-cov-wrong-branch',
+          insurer_id: ctx.insurerAId,
+          ramo: 'RCDC',
+          titulo: 'WRONG_BRANCH_REQUIRED',
+          obrigatoria: true,
+          aplicar_todos_clientes: true,
+          tipo_valor: 'monetario',
+          created_at: new Date().toISOString()
+        }
+      ];
+
+      const result = processAverbacao(
+        ctx,
+        { valorCarga: 1000 },
+        {
+          supplemented_vars: {
+            GLOBAL: 'R$ 100,00',
+            TENANT_ONLY: 'R$ 200,00',
+            OTHER_TENANT_REQUIRED: 'R$ 300,00',
+            WRONG_BRANCH_REQUIRED: 'R$ 400,00'
+          }
+        }
+      );
+
+      return {
+        assertions: [
+          assertion('status', 'Coberturas fora do escopo não bloqueiam', 'sucesso', result.status),
+          assertion('value', 'Somente global + tenant/ramo correto são somados', 1300, result.valor_considerado_averbacao)
         ]
       };
     }
