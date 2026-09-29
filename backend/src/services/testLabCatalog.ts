@@ -221,6 +221,58 @@ const flags: TestLabFlagDefinition[] = [
     tags: ['policy', 'suspension', 'p0']
   },
   {
+    key: 'titularity.allowed_functions',
+    group: 'required-data',
+    label: 'Regra A — Funções autorizadas do CNPJ',
+    description: 'PolicyTitularityRule define em quais funções do documento o CNPJ do segurado pode aparecer.',
+    source: { kind: 'POLICY_FIELD', path: 'PolicyTitularityRule.funcao/habilitada' },
+    value_type: 'MULTISELECT',
+    engine_status: 'ACTIVE',
+    generation: 'PAIRWISE',
+    options: [
+      { value: 'DESTINATARIO', label: 'Destinatário' },
+      { value: 'REMETENTE', label: 'Remetente' },
+      { value: 'TOMADOR', label: 'Tomador' },
+      { value: 'EXPEDIDOR', label: 'Expedidor' },
+      { value: 'RECEBEDOR', label: 'Recebedor' },
+      { value: 'TRANSPORTADOR', label: 'Transportador' }
+    ],
+    tags: ['titularity', 'regra-a', 'p1']
+  },
+  {
+    key: 'bypass.route',
+    group: 'required-data',
+    label: 'Regra B — Bypass por rota',
+    description: 'PolicyBypassRule pode liberar documento sem CNPJ do segurado quando UF origem/destino correspondem.',
+    source: { kind: 'POLICY_FIELD', path: 'PolicyBypassRule.rota_uf_origem/rota_uf_destino' },
+    value_type: 'INVARIANT',
+    engine_status: 'ACTIVE',
+    generation: 'INVARIANT_MATRIX',
+    tags: ['titularity', 'regra-b', 'route', 'p1']
+  },
+  {
+    key: 'bypass.product',
+    group: 'required-data',
+    label: 'Regra B — Bypass por produto predominante',
+    description: 'PolicyBypassRule pode liberar documento sem CNPJ do segurado quando o produto predominante corresponde.',
+    source: { kind: 'POLICY_FIELD', path: 'PolicyBypassRule.produto_predominante' },
+    value_type: 'INVARIANT',
+    engine_status: 'ACTIVE',
+    generation: 'INVARIANT_MATRIX',
+    tags: ['titularity', 'regra-b', 'product', 'p1']
+  },
+  {
+    key: 'titularity.nfe_functions',
+    group: 'future',
+    label: 'Regra A — Funções específicas da NF-e',
+    description: 'O Portal mantém as funções da NF-e localmente por apólice; o contrato de API/backend ainda não as suporta como regra real.',
+    source: { kind: 'POLICY_FIELD', path: 'Portal useFuncoesNfe (local)' },
+    value_type: 'MULTISELECT',
+    engine_status: 'PLANNED',
+    generation: 'MANUAL_ONLY',
+    tags: ['titularity', 'nfe', 'portal-contract', 'gap', 'p1']
+  },
+  {
     key: 'policy_rule.obrigatoria',
     group: 'required-data',
     label: 'Variável dinâmica obrigatória da apólice',
@@ -1059,6 +1111,20 @@ flags.push(
   )
 );
 
+
+suites.push({
+  key: 'p1-titularity-bypass',
+  label: 'P1 — Titularidade e bypass',
+  description: 'Valida Regra A por funções do CNPJ, Regra B por rota/produto e mantém explícito o GAP de funções NF-e.',
+  priority: 'P1',
+  tags: ['titularity', 'regra-a', 'regra-b'],
+  flag_keys: [
+    'titularity.allowed_functions',
+    'bypass.route',
+    'bypass.product',
+    'titularity.nfe_functions'
+  ]
+});
 
 suites.push({
   key: 'p1-portal-ui-contract',
