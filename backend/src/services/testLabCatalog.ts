@@ -191,10 +191,10 @@ const flags: TestLabFlagDefinition[] = [
     key: 'policy.vigencia_inicio',
     group: 'deadlines',
     label: 'Início da vigência',
-    description: 'GAP: o motor ainda não aplica a data inicial de vigência; não considerar coberta pelo cenário de apólice ativa.',
+    description: 'Valida a data de emissão do documento contra o início da cobertura, inclusive fronteiras e matching por renovação.',
     source: { kind: 'POLICY_FIELD', path: 'Policy.vigencia_inicio' },
     value_type: 'DATE',
-    engine_status: 'PLANNED',
+    engine_status: 'ACTIVE',
     generation: 'DATE_BOUNDARIES',
     tags: ['date', 'validity', 'p0']
   },

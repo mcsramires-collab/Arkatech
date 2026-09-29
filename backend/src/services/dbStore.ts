@@ -481,6 +481,70 @@ class DBStore {
       },
       {
         id: uuidv4(),
+        codigo: 'ERR-4021',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          'ERRO 4021: O documento foi emitido em [DATA_DOCUMENTO], antes do início da vigência da apólice ([VIGENCIA_INICIO]).',
+        texto_customizado:
+          'ERRO 4021: O documento foi emitido em [DATA_DOCUMENTO], antes do início da vigência da apólice ([VIGENCIA_INICIO]).',
+        placeholders: ['[DATA_DOCUMENTO]', '[VIGENCIA_INICIO]'],
+        explicacao_nao_tecnica:
+          'A data de emissão do documento é anterior ao início da cobertura desta apólice.',
+        orientacao_correcao:
+          'O documento foi encaminhado para análise de exceção. Confirme a apólice correta ou trate a retroatividade com a seguradora/corretora.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4022',
+        tipo: 'erro',
+        categoria: 'REGRA_XML',
+        texto_padrao:
+          'ERRO 4022: Não foi possível identificar uma data de emissão válida no documento para validar a vigência da apólice.',
+        texto_customizado:
+          'ERRO 4022: Não foi possível identificar uma data de emissão válida no documento para validar a vigência da apólice.',
+        placeholders: [],
+        explicacao_nao_tecnica:
+          'Sem a data de emissão não é possível confirmar qual apólice cobria o documento.',
+        orientacao_correcao:
+          'Verifique se o documento fiscal contém a data de emissão oficial ou reenvie o XML autorizado completo.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4023',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          'ERRO 4023: Há [QTD_APOLICES] apólices elegíveis para a data [DATA_DOCUMENTO]. A seleção automática foi interrompida para evitar roteamento ambíguo.',
+        texto_customizado:
+          'ERRO 4023: Há [QTD_APOLICES] apólices elegíveis para a data [DATA_DOCUMENTO]. A seleção automática foi interrompida para evitar roteamento ambíguo.',
+        placeholders: ['[QTD_APOLICES]', '[DATA_DOCUMENTO]'],
+        explicacao_nao_tecnica:
+          'Mais de uma apólice cobre este documento e o sistema não pode escolher uma delas de forma segura.',
+        orientacao_correcao:
+          'Selecione explicitamente a apólice correta ou ajuste as regras/vigências para eliminar a ambiguidade.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
+        codigo: 'ERR-4024',
+        tipo: 'erro',
+        categoria: 'APOLICE',
+        texto_padrao:
+          'ERRO 4024: Nenhuma das apólices cadastradas para o ramo cobre a data de emissão [DATA_DOCUMENTO].',
+        texto_customizado:
+          'ERRO 4024: Nenhuma das apólices cadastradas para o ramo cobre a data de emissão [DATA_DOCUMENTO].',
+        placeholders: ['[DATA_DOCUMENTO]'],
+        explicacao_nao_tecnica:
+          'Existem apólices cadastradas, mas nenhuma estava vigente na data em que este documento foi emitido.',
+        orientacao_correcao:
+          'Revise a apólice correta para o período ou encaminhe o documento para tratamento de retroatividade.',
+        updated_at: new Date().toISOString()
+      },
+      {
+        id: uuidv4(),
         codigo: 'ERR-4012',
         tipo: 'erro',
         categoria: 'SISTEMA',

@@ -37,6 +37,16 @@ describe('TestLabCatalog', () => {
     expect(suite?.flag_keys).toContain('access.insurer_policy_isolation');
   });
 
+  test('vigência inicial é regra P0 ativa do motor', () => {
+    const flag = catalog.flags.find((item) => item.key === 'policy.vigencia_inicio');
+    expect(flag).toBeDefined();
+    expect(flag?.engine_status).toBe('ACTIVE');
+    expect(flag?.generation).toBe('DATE_BOUNDARIES');
+
+    const suite = catalog.suites.find((item) => item.key === 'p0-policy-engine');
+    expect(suite?.flag_keys).toContain('policy.vigencia_inicio');
+  });
+
   test('gaps conhecidos não são apresentados como motor validado', () => {
     const descontaLmi = catalog.flags.find((flag) => flag.key === 'coverage.desconta_lmi');
     expect(descontaLmi?.engine_status).toBe('PLANNED');

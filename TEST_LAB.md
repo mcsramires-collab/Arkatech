@@ -41,9 +41,9 @@ Defina `DATA_DIR` para uma pasta exclusiva de validação antes de iniciar o bac
 
 Uma configuração PLANNED nunca recebe PASS. Um executor ausente ou sem assertions é GAP. Regra não executada aparece como NOT_RUN/NÃO EXECUTADO na cobertura. Cobertura da execução indica cenários observados, não uma prova de todas as combinações possíveis.
 
-A auditoria confirmou um GAP de produto em `policy.vigencia_inicio`: o motor não consulta a data inicial da vigência. O teste anterior de apólice ativa atribuía indevidamente cobertura a esse campo. A flag agora é PLANNED e há um GAP explícito na suíte P0. O gate mantém uma exceção nominal somente para esse gap conhecido; qualquer FAIL ou outro GAP P0 falha o CI. Isso não transforma o GAP em PASS nem declara a regra pronta para produção.
+`policy.vigencia_inicio` passou a ser regra ACTIVE do motor: a data canônica de emissão do documento é comparada com o início e o fim da vigência, o matching automático considera a vigência histórica e chamadas com `policy_id` explícito passam pela mesma segunda barreira. Documentos anteriores ao início viram pendência `ERR-4021`; data ausente/inválida vira `ERR-4022`; sobreposição ambígua vira `ERR-4023`; e múltiplas apólices sem nenhuma cobertura temporal viram `ERR-4024`. O gate P0 não possui mais exceção nominal: qualquer FAIL ou GAP bloqueia o CI.
 
-P1 mantém 41 gaps planejados do catálogo, incluindo regras locais do Portal, RC-V/faturamento e configurações sem efeito no motor. Eles constam nos relatórios; falhas e gaps de regras ativas bloqueiam o gate. Implementar o comportamento dessas configurações é trabalho de produto distinto da construção do laboratório, e o laboratório não o simula como aprovado.
+P1 mantém gaps planejados do catálogo para regras ainda sem efeito no motor. Eles constam nos relatórios; falhas e gaps de regras ativas bloqueiam o gate. Implementar o comportamento dessas configurações é trabalho de produto distinto da construção do laboratório, e o laboratório não o simula como aprovado.
 
 SEFAZ real, WhatsApp Cloud API e conectores externos continuam dependentes de infraestrutura/credenciais externas. Os testes deste pacote usam os contratos e mocks locais e não comprovam disponibilidade desses serviços externos.
 

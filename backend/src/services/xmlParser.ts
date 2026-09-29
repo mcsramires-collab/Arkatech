@@ -8,6 +8,8 @@ export interface ParsedDocumentData {
   valorCarga: number;
   tagsMap: Record<string, any>;
   rawXml: string;
+  /** Data canônica de emissão usada por vigência, matching e prazos. */
+  dataEmissao?: string;
   cnpjEmitente?: string;
   cnpjDestinatario?: string;
   cnpjRemetente?: string;
@@ -106,6 +108,8 @@ export class XMLParserService {
           valorCarga: Number(json.valorCarga || json.vCarga || json.vProd || 1000.0),
           tagsMap: json,
           rawXml: trimmed,
+          dataEmissao:
+            json.dataEmissao || json.data_emissao || json.dhEmi || json.dEmi || json.dataEmissaoDocumento,
           cnpjEmitente: json.cnpjEmitente,
           cnpjDestinatario: json.cnpjDestinatario,
           cnpjRemetente: json.cnpjRemetente,
@@ -131,6 +135,7 @@ export class XMLParserService {
       let chaveDocumento = `CHAVE-SEFAZ-${Date.now()}`;
       let numeroDocumento = '0';
       let valorCarga = 0;
+      let dataEmissao: string | undefined;
       let cnpjEmitente: string | undefined;
       let cnpjDestinatario: string | undefined;
       let cnpjRemetente: string | undefined;
@@ -165,6 +170,7 @@ export class XMLParserService {
         cnpjExpedidor = cteNode.exped?.CNPJ;
         cnpjRecebedor = cteNode.receb?.CNPJ;
         cnpjTomador = cteNode.toma?.CNPJ ?? cteNode.toma4?.CNPJ ?? cteNode.toma3?.CNPJ;
+        dataEmissao = cteNode.ide?.dhEmi;
         serie = cteNode.ide?.serie !== undefined ? String(cteNode.ide.serie) : undefined;
         ufOrigem = cteNode.ide?.UFIni;
         ufDestino = cteNode.ide?.UFFim;
@@ -175,7 +181,7 @@ export class XMLParserService {
 
         tagsMap['vCarga'] = valorCarga;
         tagsMap['nCT'] = numeroDocumento;
-        tagsMap['dhEmi'] = cteNode.ide?.dhEmi;
+        tagsMap['dhEmi'] = dataEmissao;
         // Data de autorização Sefaz — alternativa a dhEmi como "campo base" do Prazo de Emissão
         // (aba Regras de Negócio da Ficha do Segurado, ver services/averbacao.ts checkPrazos()).
         tagsMap['dhRecBto'] = protNode?.dhRecbto;
@@ -197,6 +203,7 @@ export class XMLParserService {
         cnpjEmitente = nfeNode.emit?.CNPJ;
         cnpjDestinatario = nfeNode.dest?.CNPJ;
         cnpjTransportador = nfeNode.transp?.transporta?.CNPJ;
+        dataEmissao = nfeNode.ide?.dhEmi || nfeNode.ide?.dEmi;
         serie = nfeNode.ide?.serie !== undefined ? String(nfeNode.ide.serie) : undefined;
         tpAmbSefaz = nfeNode.ide?.tpAmb ? Number(nfeNode.ide.tpAmb) as 1 | 2 : undefined;
         protocoloAceitacaoSefaz = protNode?.nProt;
@@ -205,7 +212,7 @@ export class XMLParserService {
         tagsMap['vProd'] = valorCarga;
         tagsMap['vNF'] = Number(nfeNode.total?.ICMSTot?.vNF || valorCarga);
         tagsMap['nNF'] = numeroDocumento;
-        tagsMap['dhEmi'] = nfeNode.ide?.dhEmi;
+        tagsMap['dhEmi'] = dataEmissao;
         tagsMap['dhRecBto'] = protNode?.dhRecbto;
         obsText = nfeNode.infAdic?.infCpl || '';
         obsContRaw = nfeNode.infAdic?.obsCont;
@@ -221,10 +228,15 @@ export class XMLParserService {
         valorCarga = Number(nfseNode.valores?.vServicos || dpsNode.serv?.vServPrest?.vReceb || 0);
         cnpjEmitente = nfseNode.prestador?.CNPJ || dpsNode.prest?.CNPJ;
         cnpjDestinatario = nfseNode.tomador?.CNPJ || dpsNode.toma?.CNPJ;
+        dataEmissao =
+          nfseNode.dhEmi ||
+          nfseNode.dataEmissao ||
+          dpsNode.dhEmi;
         tpAmbSefaz = (nfseNode.tpAmb || dpsNode.tpAmb) ? Number(nfseNode.tpAmb || dpsNode.tpAmb) as 1 | 2 : undefined;
 
         tagsMap['vServicos'] = valorCarga;
         tagsMap['numero'] = numeroDocumento;
+        tagsMap['dhEmi'] = dataEmissao;
         obsText = nfseNode.outrasInformacoes || dpsNode.xInfComp || '';
       }
       // MDFe Parser (mdfeProc = MDFe + protMDFe)
@@ -237,6 +249,7 @@ export class XMLParserService {
         numeroDocumento = String(mdfeNode.ide?.nMDF || '0');
         valorCarga = Number(mdfeNode.tot?.vCarga || 0);
         cnpjEmitente = mdfeNode.emit?.CNPJ;
+        dataEmissao = mdfeNode.ide?.dhEmi;
         serie = mdfeNode.ide?.serie !== undefined ? String(mdfeNode.ide.serie) : undefined;
         ufOrigem = mdfeNode.ide?.UFIni;
         ufDestino = mdfeNode.ide?.UFFim;
@@ -245,7 +258,7 @@ export class XMLParserService {
         cStatAutorizacaoSefaz = protNode?.cStat !== undefined ? String(protNode.cStat) : undefined;
 
         tagsMap['nMDF'] = numeroDocumento;
-        tagsMap['dhEmi'] = mdfeNode.ide?.dhEmi;
+        tagsMap['dhEmi'] = dataEmissao;
         tagsMap['dhRecBto'] = protNode?.dhRecbto;
         tagsMap['vCarga'] = valorCarga;
         tagsMap['UFIni'] = mdfeNode.ide?.UFIni;
@@ -280,6 +293,7 @@ export class XMLParserService {
         valorCarga,
         tagsMap,
         rawXml: trimmed,
+        dataEmissao,
         cnpjEmitente,
         cnpjDestinatario,
         cnpjRemetente,

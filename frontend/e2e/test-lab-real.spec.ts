@@ -15,7 +15,7 @@ test('real backend: execute P0, preserve gaps, inspect, export, compare and rest
   await page.getByRole('button', { name: 'Executar testes', exact: true }).click();
   const first = (await (await firstExecution).json()).run;
   expect(first.failed).toBe(0);
-  expect(first.gaps).toBe(1);
+  expect(first.gaps).toBe(0);
   expect(first.passed).toBeGreaterThan(0);
   await expect(page.getByText('Resultado — ' + first.id)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Cobertura do catálogo e gaps' })).toBeVisible();

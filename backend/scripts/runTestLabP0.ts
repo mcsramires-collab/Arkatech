@@ -38,11 +38,8 @@ async function main() {
     );
   }
 
-  // Explicit product gap discovered by the lab. It remains GAP in every artifact.
-  // Any other P0 gap blocks CI; this is not inferred from arbitrary PLANNED additions.
-  const unexpectedGaps = run.scenario_results.filter(result => result.status === 'GAP' &&
-    (result.covers_flag_keys.length !== 1 || result.covers_flag_keys[0] !== 'policy.vigencia_inicio'));
-  if (run.failed > 0 || unexpectedGaps.length > 0) {
+  // P0 não aceita exceções conhecidas: qualquer FAIL ou GAP bloqueia o gate.
+  if (run.failed > 0 || run.gaps > 0) {
     process.exitCode = 1;
   }
 }
