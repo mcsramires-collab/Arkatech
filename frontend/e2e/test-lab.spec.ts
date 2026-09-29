@@ -86,6 +86,69 @@ const completedRun = {
   ]
 };
 
+const studioCapabilities = {
+  version: 'studio-v2',
+  max_cases: 250,
+  default_reference_date: '2026-09-29T12:00:00.000-03:00',
+  interactive_count: 3,
+  official_only_count: 1,
+  capabilities: [
+    {
+      key: 'policy.status',
+      label: 'Status da apólice',
+      group: 'policy',
+      description: 'Status operacional',
+      engine_status: 'ACTIVE',
+      value_type: 'ENUM',
+      generation: 'ENUM_ALL',
+      interactive: true,
+      control: 'ENUM',
+      options: [
+        { value: 'ATIVA', label: 'Ativa' },
+        { value: 'INATIVA', label: 'Inativa' }
+      ],
+      suggested_values: ['ATIVA', 'INATIVA']
+    },
+    {
+      key: 'document.tipo',
+      label: 'Tipo de documento',
+      group: 'policy',
+      description: 'Documento fiscal',
+      engine_status: 'ACTIVE',
+      value_type: 'ENUM',
+      generation: 'ENUM_ALL',
+      interactive: true,
+      control: 'ENUM',
+      options: [{ value: 'CTE', label: 'CT-e' }],
+      suggested_values: ['CTE']
+    },
+    {
+      key: 'document.valor_carga',
+      label: 'Valor da carga',
+      group: 'policy',
+      description: 'Valor para o motor',
+      engine_status: 'ACTIVE',
+      value_type: 'NUMBER',
+      generation: 'NUMERIC_BOUNDARIES',
+      interactive: true,
+      control: 'NUMBER',
+      suggested_values: [999, 1000, 1001]
+    },
+    {
+      key: 'access.insurer_policy_isolation',
+      label: 'Isolamento entre seguradoras',
+      group: 'access',
+      description: 'Invariante oficial',
+      engine_status: 'INVARIANT',
+      value_type: 'INVARIANT',
+      generation: 'INVARIANT_MATRIX',
+      interactive: false,
+      control: 'OFFICIAL_ONLY',
+      reason: 'Coberta pela regressão oficial.'
+    }
+  ]
+};
+
 async function mockApi(page: import('@playwright/test').Page) {
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url());
@@ -107,6 +170,52 @@ async function mockApi(page: import('@playwright/test').Page) {
           uncatalogued_business_keys: [],
           catalogued_not_detected_in_backend: [],
           ok: true
+        }
+      });
+    }
+    if (path.endsWith('/admin/test-lab/studio/capabilities')) {
+      return json({ status: 'sucesso', studio: studioCapabilities });
+    }
+    if (path.endsWith('/admin/test-lab/studio/preview') && method === 'POST') {
+      return json({
+        status: 'sucesso',
+        preview: {
+          name: 'Cenário de negócio',
+          strategy: 'PAIRWISE',
+          reference_date: '2026-09-29T12:00:00.000-03:00',
+          cartesian_estimate: 1,
+          cases: 1,
+          preview: [{ 'policy.status': 'ATIVA', 'document.tipo': 'CTE' }],
+          truncated_preview: false
+        }
+      });
+    }
+    if (path.endsWith('/admin/test-lab/studio/execute') && method === 'POST') {
+      return json({
+        status: 'sucesso',
+        run: {
+          id: 'STUDIO-E2E-001',
+          name: 'Cenário de negócio',
+          strategy: 'PAIRWISE',
+          reference_date: '2026-09-29T12:00:00.000-03:00',
+          cases: 1,
+          passed: 1,
+          failed: 0,
+          duration_ms: 8,
+          results: [{
+            index: 0,
+            assignment: { 'policy.status': 'ATIVA', 'document.tipo': 'CTE' },
+            status: 'PASS',
+            duration_ms: 8,
+            expected: {},
+            actual: {
+              status: 'sucesso',
+              codigo: 'SUC-2000',
+              matched_policy: 'PRIMARY',
+              mensagem: 'Averbação de teste realizada.'
+            },
+            assertions: []
+          }]
         }
       });
     }
@@ -188,4 +297,20 @@ test('catálogo exibe governança e regra de isolamento', async ({ page }) => {
 
   await expect(page.getByText('Nenhuma chave')).toBeVisible();
   await expect(page.getByText('Isolamento entre seguradoras')).toBeVisible();
+});
+
+
+test('Studio V2 calcula matriz e executa um cenário interativo', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Laboratório de Testes' }).click();
+  await page.getByRole('button', { name: 'Studio de Cenários' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Studio de Cenários' })).toBeVisible();
+  await page.getByRole('button', { name: 'Visualizar matriz' }).click();
+  await expect(page.getByText('Primeiras combinações')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Executar matriz' }).click();
+  await expect(page.getByText('Execution Center — Cenário de negócio')).toBeVisible();
+  await expect(page.getByText('SUC-2000')).toBeVisible();
 });
