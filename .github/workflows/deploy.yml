@@ -1,14 +1,15 @@
 name: CD - Deploy Automatico VPS
 
 on:
-  push:
+  workflow_run:
+    workflows: ['CI - Integracao Continua']
+    types: [completed]
     branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-test]
-    if: github.ref == 'refs/heads/main'
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
     steps:
       - name: Executar Deploy na VPS via SSH
         uses: appleboy/ssh-action@v0.1.10

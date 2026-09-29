@@ -2104,6 +2104,9 @@ export class TestLabRunnerService {
 
     if (request.only_scenario_ids && request.only_scenario_ids.length > 0) {
       const ids = new Set(request.only_scenario_ids);
+      if (request.only_scenario_ids.some(id => !definitions.some(definition => definition.id === id))) {
+        throw new Error('TEST_LAB_UNKNOWN_SCENARIO');
+      }
       definitions = definitions.filter((scenario) => ids.has(scenario.id));
     }
 
@@ -2256,6 +2259,7 @@ export class TestLabRunnerService {
               status: execution.assertions.length === 0 ? 'GAP' : passed ? 'PASS' : 'FAIL',
               duration_ms: Date.now() - started,
               assertions: execution.assertions,
+              error: execution.assertions.length === 0 ? 'Executor não produziu assertions verificáveis.' : undefined,
               evidence: execution.evidence
             };
           } catch (error) {

@@ -176,7 +176,7 @@ test('Laboratório planeja e executa uma regressão P0 pela interface', async ({
 
   await expect(page.getByText('Resultado — LAB-E2E-001')).toBeVisible();
   await expect(page.getByText('Apólice ativa dentro da vigência')).toBeVisible();
-  await expect(page.getByText('PASS', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('summary').filter({ hasText: 'Apólice ativa dentro da vigência' }).getByText('PASS', { exact: true })).toBeVisible();
 });
 
 test('catálogo exibe governança e regra de isolamento', async ({ page }) => {
