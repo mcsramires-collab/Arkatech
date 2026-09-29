@@ -205,6 +205,18 @@ function expectEqual(key: string, expected: unknown, actual: unknown) {
 }
 
 export class TestLabStudioService {
+  private static assertSafeEnvironment() {
+    for (const name of ['NODE_ENV', 'APP_ENV', 'ENVIRONMENT', 'DEPLOYMENT_ENV']) {
+      const value = process.env[name]?.toLowerCase();
+      if (
+        value &&
+        !['test', 'teste', 'development', 'dev', 'local', 'staging', 'homologacao', 'homologation'].includes(value)
+      ) {
+        throw new Error('TEST_LAB_PRODUCTION_BLOCKED');
+      }
+    }
+  }
+
   static capabilities() {
     const catalog = getTestLabCatalog();
     const capabilities: TestLabStudioCapability[] = catalog.flags.map((flag) => {
@@ -258,6 +270,10 @@ export class TestLabStudioService {
     const flagMap = new Map(catalog.flags.map((flag) => [flag.key, flag]));
     const seen = new Set<string>();
 
+    if ((request.dimensions ?? []).length > 30) {
+      throw new Error('TEST_LAB_STUDIO_TOO_MANY_DIMENSIONS');
+    }
+
     const dimensions: ScenarioDimension[] = (request.dimensions ?? []).map((dimension) => {
       const flag = flagMap.get(dimension.key);
       if (!flag) throw new Error('TEST_LAB_STUDIO_UNKNOWN_FLAG:' + dimension.key);
@@ -269,6 +285,7 @@ export class TestLabStudioService {
           value === null || ['string', 'number', 'boolean'].includes(typeof value)
       );
       if (!values.length) throw new Error('TEST_LAB_STUDIO_EMPTY_DIMENSION:' + dimension.key);
+      if (values.length > 25) throw new Error('TEST_LAB_STUDIO_TOO_MANY_VALUES:' + dimension.key);
       return { key: dimension.key, values };
     });
 
@@ -321,6 +338,7 @@ export class TestLabStudioService {
   }
 
   static async execute(request: TestLabStudioRequest) {
+    this.assertSafeEnvironment();
     const normalized = this.normalizeRequest(request);
     const preview = this.preview(request);
     const assignments = preview.preview.length === preview.cases
