@@ -798,6 +798,88 @@ function defineScenarios(mode: TestLabMode = 'STANDARD'): ScenarioDefinition[] {
     }
   });
 
+  scenarios.push({
+    id: 'P1-DYNAMIC-RULES',
+    suite_key: 'p1-required-data',
+    priority: 'P1',
+    title: 'Variáveis dinâmicas de apólice e documento',
+    description: 'Prova o mecanismo genérico que permite criar novas variáveis obrigatórias sem alterar o motor.',
+    tags: ['dynamic-rule', 'future-proof'],
+    covers_flag_keys: [
+      'policy_rule.obrigatoria',
+      'policy_rule.tipo_doc',
+      'document_rule.obrigatoria',
+      'document_rule.tipo_documento'
+    ],
+    execute: () => {
+      const policyCtx = setupBase();
+      dbStore.policyRules = [
+        {
+          id: 'lab-policy-rule',
+          policy_id: policyCtx.policyId,
+          tipo_doc: 'CTE',
+          tag_path: 'VARIAVEL_NOVA',
+          nome_variavel: 'VARIAVEL_NOVA',
+          obrigatoria: true,
+          exemplo_preenchimento: 'EXEMPLO',
+          created_at: new Date().toISOString()
+        }
+      ] as any;
+
+      const policyMissing = processAverbacao(policyCtx, { documentNumber: 577001 });
+      const policySupplied = processAverbacao(
+        policyCtx,
+        { documentNumber: 577002 },
+        { supplemented_vars: { VARIAVEL_NOVA: 'VALOR_OK' } }
+      );
+
+      const wrongTypeCtx = setupBase();
+      dbStore.policyRules = [
+        {
+          id: 'lab-policy-rule-nfe',
+          policy_id: wrongTypeCtx.policyId,
+          tipo_doc: 'NFE',
+          tag_path: 'SOMENTE_NFE',
+          nome_variavel: 'SOMENTE_NFE',
+          obrigatoria: true,
+          created_at: new Date().toISOString()
+        }
+      ] as any;
+      const wrongType = processAverbacao(wrongTypeCtx, { documentNumber: 577003 });
+
+      const documentCtx = setupBase();
+      dbStore.documentRules = [
+        {
+          id: 'lab-document-rule',
+          tipo_documento: 'CTE',
+          tag_path: 'REGRA_GLOBAL',
+          nome_variavel: 'REGRA_GLOBAL',
+          obrigatoria: true,
+          origem: 'CUSTOM',
+          created_at: new Date().toISOString()
+        }
+      ] as any;
+      const documentMissing = processAverbacao(documentCtx, { documentNumber: 577004 });
+      const documentSupplied = processAverbacao(
+        documentCtx,
+        { documentNumber: 577005 },
+        { supplemented_vars: { REGRA_GLOBAL: 'PREENCHIDO' } }
+      );
+
+      return {
+        assertions: [
+          assertion('policy_missing_status', 'PolicyRule ausente gera erro', 'erro', policyMissing.status),
+          assertion('policy_missing_code', 'PolicyRule usa recuperação genérica', 'ERR-4004', policyMissing.codigo),
+          includesAssertion('policy_missing_var', 'Nova variável aparece como faltante', 'VARIAVEL_NOVA', policyMissing.variaveis_faltantes),
+          assertion('policy_supplied', 'Variável suplementada libera averbação', 'sucesso', policySupplied.status),
+          assertion('wrong_type', 'Regra NFE não interfere no CT-e', 'sucesso', wrongType.status),
+          assertion('document_missing', 'DocumentRule ausente gera erro', 'ERR-4004', documentMissing.codigo),
+          assertion('document_supplied', 'DocumentRule suplementada libera averbação', 'sucesso', documentSupplied.status)
+        ]
+      };
+    }
+  });
+
   const requiredCases: Array<{
     id: string;
     key: string;
