@@ -3,6 +3,7 @@ import { TestLabRunnerService } from './testLabRunner';
 import { TestLabScenarioGenerator as Generator } from './testLabScenarioGenerator';
 import { MockGeneratorService } from './mockGenerator';
 import { TestLabFixtureGenerator } from './testLabFixtureGenerator';
+import { TestLabSafetyService } from './testLabSafety';
 
 describe('Test Lab safety and regression guarantees', () => {
   test('concurrent sandboxes and ordinary requests cannot see or overwrite one another', async () => {
@@ -33,13 +34,66 @@ describe('Test Lab safety and regression guarantees', () => {
     expect(dbStore.internalUsers).toBe(original);
   });
 
-  test('production is blocked before history or data can be modified', async () => {
+  test('production is blocked before history or data can be modified without explicit opt-in', async () => {
     const env = process.env.NODE_ENV;
+    const enabled = process.env.TEST_LAB_ENABLED;
     const runs = dbStore.testLabRuns.length;
     process.env.NODE_ENV = 'production';
-    try { await expect(TestLabRunnerService.execute()).rejects.toThrow('TEST_LAB_PRODUCTION_BLOCKED'); }
-    finally { process.env.NODE_ENV = env; }
+    delete process.env.TEST_LAB_ENABLED;
+    try {
+      await expect(TestLabRunnerService.execute()).rejects.toThrow('TEST_LAB_PRODUCTION_BLOCKED');
+    } finally {
+      if (env === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = env;
+      if (enabled === undefined) delete process.env.TEST_LAB_ENABLED;
+      else process.env.TEST_LAB_ENABLED = enabled;
+    }
     expect(dbStore.testLabRuns).toHaveLength(runs);
+  });
+
+  test('production runtime allows the isolated Test Lab only with TEST_LAB_ENABLED=true', async () => {
+    const env = process.env.NODE_ENV;
+    const enabled = process.env.TEST_LAB_ENABLED;
+    process.env.NODE_ENV = 'production';
+    process.env.TEST_LAB_ENABLED = 'true';
+    try {
+      expect(TestLabSafetyService.status()).toMatchObject({
+        execution_allowed: true,
+        production_like_runtime: true,
+        explicit_opt_in: true
+      });
+      const run = await TestLabRunnerService.execute({
+        mode: 'QUICK',
+        suite_keys: ['p0-access-isolation']
+      });
+      expect(run.status).toBe('COMPLETED');
+      expect(run.failed).toBe(0);
+    } finally {
+      if (env === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = env;
+      if (enabled === undefined) delete process.env.TEST_LAB_ENABLED;
+      else process.env.TEST_LAB_ENABLED = enabled;
+    }
+  });
+
+  test('TEST_LAB_ENABLED=false disables execution even in development', () => {
+    const env = process.env.NODE_ENV;
+    const enabled = process.env.TEST_LAB_ENABLED;
+    process.env.NODE_ENV = 'development';
+    process.env.TEST_LAB_ENABLED = 'false';
+    try {
+      expect(TestLabSafetyService.status()).toMatchObject({
+        execution_allowed: false,
+        explicit_disabled: true,
+        reason: 'TEST_LAB_DISABLED'
+      });
+      expect(() => TestLabSafetyService.assertExecutionAllowed()).toThrow('TEST_LAB_DISABLED');
+    } finally {
+      if (env === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = env;
+      if (enabled === undefined) delete process.env.TEST_LAB_ENABLED;
+      else process.env.TEST_LAB_ENABLED = enabled;
+    }
   });
 
   test('unknown, empty and invalid selections never silently execute the default suite', () => {
