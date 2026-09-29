@@ -67,6 +67,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build production frontend image
         run: docker build -t arckatech-frontend-ci ./frontend
+      - name: Smoke test Nginx BFF image
+        run: |
+          docker run -d --name arckatech-frontend-smoke \
+            -e INTERNAL_API_KEY=ci-only-test-key \
+            -e BACKEND_API_URL=http://127.0.0.1:65535 \
+            -p 8080:80 \
+            arckatech-frontend-ci
+          sleep 2
+          docker exec arckatech-frontend-smoke nginx -t
+          curl --fail http://127.0.0.1:8080/
+          docker rm -f arckatech-frontend-smoke
 
   test-lab-browser-e2e:
     runs-on: ubuntu-latest
