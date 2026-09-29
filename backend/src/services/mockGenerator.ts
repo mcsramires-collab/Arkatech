@@ -314,6 +314,7 @@ ${protocoloXml}      <cStat>${cStatSefaz}</cStat>
   <Nfse>
     <infNfse>
       <numero>${docNum}</numero>
+      <dhEmi>${dateISO}</dhEmi>
       <prestador>
         <CNPJ>${emitCNPJ}</CNPJ>
       </prestador>
