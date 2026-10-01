@@ -1,6 +1,7 @@
 import type { Policy, RamoApolice } from '../types';
 import { dbStore } from './dbStore';
 import {
+  OnboardingMigrationService,
   onboardingMigrationService,
   type MigrationRequest,
   type MigrationRamoCode
@@ -40,8 +41,11 @@ function targetPoliciesFor(request: MigrationRequest): Policy[] {
  * `OnboardingMigrationService.effectMigration`, que revalida data, origem e destinos de forma
  * atômica antes da troca.
  */
-export function reconcileMigrationOnboardingForInsurer(insurerId: string): MigrationReconcileResult {
-  const requests = onboardingMigrationService
+export function reconcileMigrationOnboardingForInsurer(
+  insurerId: string,
+  service: OnboardingMigrationService = onboardingMigrationService
+): MigrationReconcileResult {
+  const requests = service
     .listRequests(insurerId)
     .filter((request) => request.status === 'PROGRAMADA' && !request.onboarding_completed);
 
@@ -65,9 +69,6 @@ export function reconcileMigrationOnboardingForInsurer(insurerId: string): Migra
         missing = code;
         break;
       }
-      // Se houver histórico de mais de uma apólice ativa do mesmo ramo, não precisamos escolher
-      // por valor/ordem de criação para autorizar averbação; `completeOnboarding` exige apenas um
-      // destino válido por ramo. A escolha determinística pelo id evita resultado variável.
       selectedIds.push(matches[0]!.id);
     }
 
@@ -80,7 +81,7 @@ export function reconcileMigrationOnboardingForInsurer(insurerId: string): Migra
     }
 
     try {
-      onboardingMigrationService.completeOnboarding(request.id, insurerId, selectedIds);
+      service.completeOnboarding(request.id, insurerId, selectedIds);
       result.completed.push(request.id);
     } catch (error) {
       result.skipped.push({
