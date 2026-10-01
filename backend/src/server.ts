@@ -14,6 +14,7 @@ import whatsappIntegrationRoutes from './routes/whatsappIntegration';
 import { internalApiKeyMiddleware } from './middleware/internalApiKeyMiddleware';
 import { backofficeOrInternalKeyMiddleware } from './middleware/backofficeOrInternalKeyMiddleware';
 import { onboardingMigrationReconcileMiddleware } from './middleware/onboardingMigrationReconcileMiddleware';
+import { onboardingMigrationDueMiddleware } from './middleware/onboardingMigrationDueMiddleware';
 
 dotenv.config();
 
@@ -36,8 +37,10 @@ app.get('/health', (req, res) => {
 
 // Rotas da Aplicação
 app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/averbar', averbacaoRoutes);
-app.use('/api/v1/averbacoes', averbacaoRoutes);
+// Antes de qualquer averbação, materializa migrações cujo início programado já chegou e cujo
+// onboarding possui apólices ativas de destino para todos os ramos selecionados.
+app.use('/api/v1/averbar', onboardingMigrationDueMiddleware, averbacaoRoutes);
+app.use('/api/v1/averbacoes', onboardingMigrationDueMiddleware, averbacaoRoutes);
 // Painéis internos (Seguradora, Corretora, ARCKATECH).
 // /admin e /broker — Fase 3 do item "Login real + RBAC" (Backlog, seção 4): agora aceitam login
 // real (Authorization: Bearer <token> de POST /auth/backoffice-login) OU a chave interna antiga
