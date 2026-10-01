@@ -2,11 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
+import portalIdentityRoutes from './routes/portalIdentity';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
 import onboardingMigrationRoutes from './routes/onboardingMigration';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
+import tenantIdentityRoutes from './routes/tenantIdentity';
 import internalRoutes from './routes/internal';
 import connectorRoutes from './routes/connector';
 import tmsRoutes from './routes/tms';
@@ -36,6 +38,7 @@ app.get('/health', (req, res) => {
 });
 
 // Rotas da Aplicação
+app.use('/api/v1/auth', portalIdentityRoutes);
 app.use('/api/v1/auth', authRoutes);
 // Antes de qualquer averbação, materializa migrações cujo início programado já chegou e cujo
 // onboarding possui apólices ativas de destino para todos os ramos selecionados.
@@ -58,8 +61,9 @@ app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
 // /internal (CRUD de InternalUser/RbacProfile etc.) segue só com a chave interna por enquanto —
 // fora do escopo desta fase (ver Backlog).
 app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
-// Portal do Transportador — segue sem a chave interna (é o público final), mas ainda
-// sem autenticação por usuário real; ver seção de gaps no doc de estado técnico.
+// Portal do Transportador — endpoints seguros de convite entram antes do router legado para
+// coexistir com POST /tenant/users enquanto a UI migra sem quebra de compatibilidade.
+app.use('/api/v1/tenant', tenantIdentityRoutes);
 app.use('/api/v1/tenant', tenantRoutes);
 // Agente local: autenticação própria por device token, independente do login do portal.
 app.use('/api/v1/connector', connectorRoutes);
