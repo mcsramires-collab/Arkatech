@@ -270,7 +270,9 @@ function findTenantByCnpj(cnpj: string): Tenant | undefined {
   const normalized = normalizeCnpj(cnpj);
   const direct = dbStore.tenants.find((tenant) => normalizeCnpj(tenant.cnpj) === normalized);
   if (direct) return direct;
-  const additional = dbStore.tenantCnpjsAdicionais.find((item) => normalizeCnpj(item.cnpj) === normalized && item.ativo);
+  const additional = dbStore.tenantCnpjsAdicionais.find(
+    (item) => normalizeCnpj(item.cnpj) === normalized && item.status === 'ATIVO'
+  );
   return additional ? dbStore.tenants.find((tenant) => tenant.id === additional.tenant_id) : undefined;
 }
 
