@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
+import adminOperationalRoutes from './routes/adminOperational';
 import onboardingMigrationRoutes from './routes/onboardingMigration';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
@@ -48,6 +49,8 @@ app.use('/api/v1/averbacoes', onboardingMigrationDueMiddleware, averbacaoRoutes)
 // racional completo de por que a chave interna ainda é aceita (ponte até a Fase 4 terminar de
 // migrar admin.ts para nunca mais aceitar insurer_id/broker_id livres).
 app.use('/api/v1/admin/onboarding', backofficeOrInternalKeyMiddleware, onboardingMigrationRoutes);
+// Consulta operacional real de Movimentação; escopo da seguradora é derivado do Bearer.
+app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminOperationalRoutes);
 app.use(
   '/api/v1/admin',
   backofficeOrInternalKeyMiddleware,
