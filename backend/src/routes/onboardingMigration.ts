@@ -9,9 +9,10 @@ import {
 import { dbStore } from '../services/dbStore';
 
 const router = Router();
+const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024, files: 1 }
+  limits: { fileSize: MAX_DOCUMENT_BYTES, files: 1 }
 });
 
 function sendError(res: Response, error: unknown) {
@@ -69,15 +70,50 @@ function publicRequest(request: ReturnType<typeof onboardingMigrationService.cre
   return safe;
 }
 
-router.post('/documents/analyze', upload.single('document'), async (req: BackofficeAuthenticatedRequest, res) => {
-  try {
-    const insurerId = insurerContext(req);
-    if (!req.file) throw new OnboardingMigrationError('DOCUMENT_REQUIRED', 400, 'Envie o arquivo no campo document.');
-    const analyzed = await onboardingMigrationService.analyzeDocument(insurerId, {
+function uploadedDocument(req: BackofficeAuthenticatedRequest): {
+  originalname: string;
+  mimetype: string;
+  buffer: Buffer;
+} {
+  if (req.file) {
+    return {
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
       buffer: req.file.buffer
-    });
+    };
+  }
+
+  const filename = String(req.body?.filename ?? '').trim();
+  const mimetype = String(req.body?.mimetype ?? 'application/octet-stream').trim();
+  const contentBase64 = String(req.body?.content_base64 ?? '').trim();
+  if (!filename || !contentBase64) {
+    throw new OnboardingMigrationError(
+      'DOCUMENT_REQUIRED',
+      400,
+      'Envie o arquivo no campo document ou informe filename + content_base64.'
+    );
+  }
+
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(contentBase64)) {
+    throw new OnboardingMigrationError('INVALID_DOCUMENT_BASE64', 400, 'content_base64 inválido.');
+  }
+
+  const buffer = Buffer.from(contentBase64, 'base64');
+  if (!buffer.length) {
+    throw new OnboardingMigrationError('EMPTY_DOCUMENT', 400, 'Documento vazio.');
+  }
+  if (buffer.length > MAX_DOCUMENT_BYTES) {
+    throw new OnboardingMigrationError('DOCUMENT_TOO_LARGE', 413, 'O documento excede o limite de 15 MB.');
+  }
+
+  return { originalname: filename, mimetype, buffer };
+}
+
+router.post('/documents/analyze', upload.single('document'), async (req: BackofficeAuthenticatedRequest, res) => {
+  try {
+    const insurerId = insurerContext(req);
+    const documentInput = uploadedDocument(req);
+    const analyzed = await onboardingMigrationService.analyzeDocument(insurerId, documentInput);
     const {
       insurer_id: _insurer,
       stored_path: _stored,
