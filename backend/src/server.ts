@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
+import adminConsistencyRoutes from './routes/adminConsistency';
 import onboardingMigrationRoutes from './routes/onboardingMigration';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
@@ -48,6 +49,10 @@ app.use('/api/v1/averbacoes', onboardingMigrationDueMiddleware, averbacaoRoutes)
 // racional completo de por que a chave interna ainda é aceita (ponte até a Fase 4 terminar de
 // migrar admin.ts para nunca mais aceitar insurer_id/broker_id livres).
 app.use('/api/v1/admin/onboarding', backofficeOrInternalKeyMiddleware, onboardingMigrationRoutes);
+// Pacote de consistência/auditoria fica ANTES das rotas legadas: ele intercepta apenas os
+// contratos que precisam de semântica nova (CNPJ lifecycle e desfazer parceria sem apagar
+// histórico) e adiciona auditoria/save atômico, mantendo o restante do admin intacto.
+app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminConsistencyRoutes);
 app.use(
   '/api/v1/admin',
   backofficeOrInternalKeyMiddleware,
