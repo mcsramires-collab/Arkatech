@@ -6,6 +6,11 @@ import {
   OnboardingMigrationError,
   onboardingMigrationService
 } from '../services/onboardingMigration';
+import {
+  effectDueMigrationsForInsurer,
+  isMigrationDueAt,
+  reconcileMigrationOnboardingForInsurer
+} from '../services/onboardingMigrationReconcile';
 import { dbStore } from '../services/dbStore';
 
 const router = Router();
@@ -34,8 +39,6 @@ function insurerContext(req: BackofficeAuthenticatedRequest): string {
     return actor.insurer_id;
   }
 
-  // Compatibilidade temporária com o BFF antigo: a chave interna é um superusuário sem insurer_id.
-  // Nesse caso o contexto precisa vir em header explícito, nunca no body da regra/migração.
   if (actor.actor_type === 'INTERNAL_USER' && actor.role === 'ADM') {
     const raw = req.headers['x-insurer-id'];
     const insurerId = Array.isArray(raw) ? raw[0] : raw;
@@ -165,6 +168,11 @@ router.post('/migration-requests', (req: BackofficeAuthenticatedRequest, res) =>
 router.get('/migration-requests', (req: BackofficeAuthenticatedRequest, res) => {
   try {
     const insurerId = insurerContext(req);
+    // Reconciliar aqui torna a leitura autorreparável caso uma apólice tenha sido criada por um
+    // caminho antigo que não passou pelo middleware pós-mutação. Depois materializamos as que já
+    // venceram pela data civil de São Paulo.
+    reconcileMigrationOnboardingForInsurer(insurerId);
+    effectDueMigrationsForInsurer(insurerId);
     const requests = onboardingMigrationService.listRequests(insurerId).map(publicRequest);
     return res.json({ status: 'sucesso', migration_requests: requests });
   } catch (error) {
@@ -205,6 +213,14 @@ router.post('/migration-requests/:id/complete-onboarding', (req: BackofficeAuthe
 router.post('/migration-requests/:id/effect', (req: BackofficeAuthenticatedRequest, res) => {
   try {
     const insurerId = insurerContext(req);
+    const pending = onboardingMigrationService.listRequests(insurerId).find((item) => item.id === req.params.id);
+    if (pending?.scheduled_start && !isMigrationDueAt(pending.scheduled_start)) {
+      throw new OnboardingMigrationError(
+        'MIGRATION_NOT_DUE',
+        409,
+        `Migração programada para ${pending.scheduled_start} no calendário operacional de São Paulo.`
+      );
+    }
     const request = onboardingMigrationService.effectMigration(req.params.id, insurerId);
     return res.json({ status: 'sucesso', migration_request: publicRequest(request) });
   } catch (error) {
