@@ -5,6 +5,7 @@ import authRoutes from './routes/auth';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
 import adminConsistencyRoutes from './routes/adminConsistency';
+import adminAuditAnnotationsRoutes from './routes/adminAuditAnnotations';
 import onboardingMigrationRoutes from './routes/onboardingMigration';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
@@ -53,6 +54,9 @@ app.use('/api/v1/admin/onboarding', backofficeOrInternalKeyMiddleware, onboardin
 // contratos que precisam de semântica nova (CNPJ lifecycle e desfazer parceria sem apagar
 // histórico) e adiciona auditoria/save atômico, mantendo o restante do admin intacto.
 app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminConsistencyRoutes);
+// Ponte temporária: módulos antigos do portal que já chamavam registrarAuditoria() persistem uma
+// anotação server-side; identidade e seguradora são sempre derivadas do token, nunca do browser.
+app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminAuditAnnotationsRoutes);
 app.use(
   '/api/v1/admin',
   backofficeOrInternalKeyMiddleware,
