@@ -13,6 +13,7 @@ import tmsRoutes from './routes/tms';
 import whatsappIntegrationRoutes from './routes/whatsappIntegration';
 import { internalApiKeyMiddleware } from './middleware/internalApiKeyMiddleware';
 import { backofficeOrInternalKeyMiddleware } from './middleware/backofficeOrInternalKeyMiddleware';
+import { onboardingMigrationReconcileMiddleware } from './middleware/onboardingMigrationReconcileMiddleware';
 
 dotenv.config();
 
@@ -44,7 +45,12 @@ app.use('/api/v1/averbacoes', averbacaoRoutes);
 // racional completo de por que a chave interna ainda é aceita (ponte até a Fase 4 terminar de
 // migrar admin.ts para nunca mais aceitar insurer_id/broker_id livres).
 app.use('/api/v1/admin/onboarding', backofficeOrInternalKeyMiddleware, onboardingMigrationRoutes);
-app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminRoutes);
+app.use(
+  '/api/v1/admin',
+  backofficeOrInternalKeyMiddleware,
+  onboardingMigrationReconcileMiddleware,
+  adminRoutes
+);
 app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
 // /internal (CRUD de InternalUser/RbacProfile etc.) segue só com a chave interna por enquanto —
 // fora do escopo desta fase (ver Backlog).
