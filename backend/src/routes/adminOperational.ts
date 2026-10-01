@@ -6,7 +6,9 @@ import { OperationalMovementService } from '../services/operationalMovementServi
 
 const router = Router();
 
-router.get('/insurer-movements', requirePermission('averbacoes', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
+// Movimentação é uma visão analítica/operacional de averbações. O RBAC atual não possui um
+// módulo "averbacoes" separado; "relatorios" é o domínio já usado para consultas consolidadas.
+router.get('/insurer-movements', requirePermission('relatorios', 'ver'), (req: BackofficeAuthenticatedRequest, res) => {
   const insurerId = resolveInsurerId(req, res, req.query.insurer_id);
   if (!insurerId) return;
 
