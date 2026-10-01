@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
+import onboardingMigrationRoutes from './routes/onboardingMigration';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
 import internalRoutes from './routes/internal';
@@ -12,6 +13,8 @@ import tmsRoutes from './routes/tms';
 import whatsappIntegrationRoutes from './routes/whatsappIntegration';
 import { internalApiKeyMiddleware } from './middleware/internalApiKeyMiddleware';
 import { backofficeOrInternalKeyMiddleware } from './middleware/backofficeOrInternalKeyMiddleware';
+import { onboardingMigrationReconcileMiddleware } from './middleware/onboardingMigrationReconcileMiddleware';
+import { onboardingMigrationDueMiddleware } from './middleware/onboardingMigrationDueMiddleware';
 
 dotenv.config();
 
@@ -34,15 +37,23 @@ app.get('/health', (req, res) => {
 
 // Rotas da Aplicação
 app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/averbar', averbacaoRoutes);
-app.use('/api/v1/averbacoes', averbacaoRoutes);
+// Antes de qualquer averbação, materializa migrações cujo início programado já chegou e cujo
+// onboarding possui apólices ativas de destino para todos os ramos selecionados.
+app.use('/api/v1/averbar', onboardingMigrationDueMiddleware, averbacaoRoutes);
+app.use('/api/v1/averbacoes', onboardingMigrationDueMiddleware, averbacaoRoutes);
 // Painéis internos (Seguradora, Corretora, ARCKATECH).
 // /admin e /broker — Fase 3 do item "Login real + RBAC" (Backlog, seção 4): agora aceitam login
 // real (Authorization: Bearer <token> de POST /auth/backoffice-login) OU a chave interna antiga
 // (x-internal-api-key), nessa ordem — ver middleware/backofficeOrInternalKeyMiddleware.ts para o
 // racional completo de por que a chave interna ainda é aceita (ponte até a Fase 4 terminar de
 // migrar admin.ts para nunca mais aceitar insurer_id/broker_id livres).
-app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminRoutes);
+app.use('/api/v1/admin/onboarding', backofficeOrInternalKeyMiddleware, onboardingMigrationRoutes);
+app.use(
+  '/api/v1/admin',
+  backofficeOrInternalKeyMiddleware,
+  onboardingMigrationReconcileMiddleware,
+  adminRoutes
+);
 app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
 // /internal (CRUD de InternalUser/RbacProfile etc.) segue só com a chave interna por enquanto —
 // fora do escopo desta fase (ver Backlog).
