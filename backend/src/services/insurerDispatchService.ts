@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { dbStore } from './dbStore';
+import { NotificationService } from './notificationService';
 import { Averbacao, Policy, Tenant } from '../types';
 
 export type InsurerDispatchStatus =
@@ -135,6 +136,32 @@ function markFiscalDocument(
   }
 }
 
+function notifyFinalFailure(
+  dispatch: InsurerDispatch,
+  codigo: string,
+  mensagem: string,
+  averbacao?: Averbacao
+): void {
+  NotificationService.create({
+    tenant_id: dispatch.tenant_id,
+    type: 'AVERBACAO_RECUSADA',
+    severity: 'ERROR',
+    title: 'Averbação não confirmada pela seguradora',
+    message: mensagem,
+    context: {
+      insurer_dispatch_id: dispatch.id,
+      insurer_id: dispatch.insurer_id,
+      policy_id: dispatch.policy_id,
+      averbacao_id: dispatch.averbacao_id,
+      tipo_documento: averbacao?.tipo_documento,
+      chave_documento: averbacao?.chave_documento,
+      codigo,
+      attempt_count: dispatch.attempt_count,
+      http_status: dispatch.last_http_status
+    }
+  });
+}
+
 function buildPayload(
   dispatch: InsurerDispatch,
   averbacao: Averbacao,
@@ -243,8 +270,6 @@ export class InsurerDispatchService {
   }> {
     const snapshot = readOutbox();
     const nowMs = Date.now();
-    // Um processo pode cair depois de gravar SENDING e antes do ACK. Após um lease conservador,
-    // essa entrada volta a ser elegível com a MESMA idempotency key, evitando fila presa.
     const staleSendingCutoff = nowMs - Math.max(60_000, REQUEST_TIMEOUT_MS * 2);
     const due = snapshot
       .filter((item) => {
@@ -291,6 +316,7 @@ export class InsurerDispatchService {
           item.last_error = 'Referência interna ausente para montar o despacho.';
           item.updated_at = new Date().toISOString();
           persistDispatch(item);
+          notifyFinalFailure(item, 'INSURER_DISPATCH_INTERNAL_REFERENCE_MISSING', item.last_error, averbacao);
           failed += 1;
           continue;
         }
@@ -364,6 +390,7 @@ export class InsurerDispatchService {
             averbacao.mensagem_resposta = message;
             markFiscalDocument(averbacao.id, 'RECUSADO', averbacao.codigo_resposta, message);
             dbStore.persist();
+            notifyFinalFailure(item, averbacao.codigo_resposta, message, averbacao);
             failed += 1;
           } else {
             item.status = 'RETRY';
@@ -391,6 +418,7 @@ export class InsurerDispatchService {
               averbacao.mensagem_resposta
             );
             dbStore.persist();
+            notifyFinalFailure(item, averbacao.codigo_resposta, averbacao.mensagem_resposta, averbacao);
             failed += 1;
           } else {
             item.status = 'RETRY';
