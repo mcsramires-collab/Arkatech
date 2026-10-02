@@ -8,6 +8,7 @@ import onboardingMigrationRoutes from './routes/onboardingMigration';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
 import internalRoutes from './routes/internal';
+import insurerDispatchRoutes from './routes/insurerDispatch';
 import connectorRoutes from './routes/connector';
 import tmsRoutes from './routes/tms';
 import whatsappIntegrationRoutes from './routes/whatsappIntegration';
@@ -57,6 +58,7 @@ app.use(
 app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
 // /internal (CRUD de InternalUser/RbacProfile etc.) segue só com a chave interna por enquanto —
 // fora do escopo desta fase (ver Backlog).
+app.use('/api/v1/internal/insurer-dispatches', internalApiKeyMiddleware, insurerDispatchRoutes);
 app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
 // Portal do Transportador — segue sem a chave interna (é o público final), mas ainda
 // sem autenticação por usuário real; ver seção de gaps no doc de estado técnico.
