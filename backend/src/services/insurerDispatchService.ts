@@ -45,6 +45,7 @@ interface AdapterResponse {
 
 const MAX_ATTEMPTS = Math.max(1, Number(process.env.INSURER_DISPATCH_MAX_ATTEMPTS || 8));
 const REQUEST_TIMEOUT_MS = Math.max(1000, Number(process.env.INSURER_DISPATCH_TIMEOUT_MS || 15000));
+const processingIds = new Set<string>();
 
 function outboxPath(): string {
   return path.join(
@@ -72,6 +73,19 @@ function writeOutbox(items: InsurerDispatch[]): void {
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(items, null, 2), 'utf-8');
   fs.renameSync(tmp, file);
+}
+
+/**
+ * Persiste somente o registro alterado sobre a versão MAIS RECENTE do arquivo. O processador
+ * externo contém awaits de rede; durante esse intervalo outra requisição pode enfileirar uma
+ * averbação nova. Regravar o snapshot capturado antes do await apagaria esse novo registro.
+ */
+function persistDispatch(record: InsurerDispatch): void {
+  const latest = readOutbox();
+  const index = latest.findIndex((item) => item.id === record.id);
+  if (index >= 0) latest[index] = { ...record };
+  else latest.unshift({ ...record });
+  writeOutbox(latest);
 }
 
 function envSuffix(insurerId: string): string {
@@ -227,13 +241,23 @@ export class InsurerDispatchService {
     failed: number;
     blocked: number;
   }> {
-    const outbox = readOutbox();
+    const snapshot = readOutbox();
     const nowMs = Date.now();
-    const due = outbox
-      .filter((item) =>
-        (item.status === 'PENDING' || item.status === 'RETRY' || item.status === 'BLOCKED_CONFIG') &&
-        (!item.next_attempt_at || new Date(item.next_attempt_at).getTime() <= nowMs)
-      )
+    // Um processo pode cair depois de gravar SENDING e antes do ACK. Após um lease conservador,
+    // essa entrada volta a ser elegível com a MESMA idempotency key, evitando fila presa.
+    const staleSendingCutoff = nowMs - Math.max(60_000, REQUEST_TIMEOUT_MS * 2);
+    const due = snapshot
+      .filter((item) => {
+        if (processingIds.has(item.id)) return false;
+        const normalDue =
+          (item.status === 'PENDING' || item.status === 'RETRY' || item.status === 'BLOCKED_CONFIG') &&
+          (!item.next_attempt_at || new Date(item.next_attempt_at).getTime() <= nowMs);
+        const staleSending =
+          item.status === 'SENDING' &&
+          Boolean(item.last_attempt_at) &&
+          new Date(item.last_attempt_at!).getTime() <= staleSendingCutoff;
+        return normalDue || staleSending;
+      })
       .slice(0, Math.max(1, Math.min(limit, 100)));
 
     let confirmed = 0;
@@ -242,137 +266,148 @@ export class InsurerDispatchService {
     let blocked = 0;
 
     for (const item of due) {
-      const config = adapterConfig(item.insurer_id);
-      if (!config.url || !config.token) {
-        item.status = 'BLOCKED_CONFIG';
-        item.last_error = 'Endpoint/token do adapter não configurados.';
-        item.next_attempt_at = undefined;
-        item.updated_at = new Date().toISOString();
-        blocked += 1;
-        continue;
-      }
-
-      const averbacao = dbStore.averbacoes.find((record) => record.id === item.averbacao_id);
-      const policy = dbStore.policies.find((record) => record.id === item.policy_id);
-      const tenant = dbStore.tenants.find((record) => record.id === item.tenant_id);
-      const raw = averbacao
-        ? dbStore.rawXmlStore.find((record) => record.id === averbacao.raw_xml_id)
-        : undefined;
-
-      if (!averbacao || !policy || !tenant || !raw) {
-        item.status = 'FAILED_FINAL';
-        item.last_error = 'Referência interna ausente para montar o despacho.';
-        item.updated_at = new Date().toISOString();
-        failed += 1;
-        continue;
-      }
-
-      item.status = 'SENDING';
-      item.attempt_count += 1;
-      item.last_attempt_at = new Date().toISOString();
-      item.updated_at = item.last_attempt_at;
-      writeOutbox(outbox);
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      processingIds.add(item.id);
       try {
-        const response = await fetch(config.url, {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${config.token}`,
-            'idempotency-key': item.idempotency_key,
-            'x-arckatech-dispatch-id': item.id
-          },
-          body: JSON.stringify(buildPayload(item, averbacao, policy, tenant, raw.content_xml))
-        });
-        const text = await response.text();
-        const body = parseJsonSafe(text);
-        item.last_http_status = response.status;
-
-        if (response.ok && !isRejectedBody(body)) {
-          const externalNumber = body.numero_averbacao;
-          const externalReference = body.external_reference || body.protocolo || externalNumber;
-          item.status = 'CONFIRMED';
-          item.external_number = externalNumber;
-          item.external_reference = externalReference;
-          item.confirmed_at = new Date().toISOString();
+        const config = adapterConfig(item.insurer_id);
+        if (!config.url || !config.token) {
+          item.status = 'BLOCKED_CONFIG';
+          item.last_error = 'Endpoint/token do adapter não configurados.';
           item.next_attempt_at = undefined;
-          item.last_error = undefined;
-          item.updated_at = item.confirmed_at;
-
-          averbacao.status = 'SUCESSO';
-          if (externalNumber) averbacao.numero_averbacao = externalNumber;
-          averbacao.protocolo_seguradora = externalReference;
-          averbacao.codigo_resposta = body.codigo || 'SUC-2000';
-          averbacao.mensagem_resposta =
-            body.mensagem ||
-            `Averbação confirmada pela seguradora${externalNumber ? ` sob o número ${externalNumber}` : ''}.`;
-          markFiscalDocument(
-            averbacao.id,
-            'AVERBADO',
-            averbacao.codigo_resposta,
-            averbacao.mensagem_resposta
-          );
-          dbStore.persist();
-          confirmed += 1;
+          item.updated_at = new Date().toISOString();
+          persistDispatch(item);
+          blocked += 1;
           continue;
         }
 
-        const nonRetryableHttp = response.status >= 400 && response.status < 500 && ![408, 429].includes(response.status);
-        const retryable = body.retryable !== false && !nonRetryableHttp;
-        const message = body.mensagem || `Seguradora respondeu HTTP ${response.status}.`;
+        const averbacao = dbStore.averbacoes.find((record) => record.id === item.averbacao_id);
+        const policy = dbStore.policies.find((record) => record.id === item.policy_id);
+        const tenant = dbStore.tenants.find((record) => record.id === item.tenant_id);
+        const raw = averbacao
+          ? dbStore.rawXmlStore.find((record) => record.id === averbacao.raw_xml_id)
+          : undefined;
 
-        if (!retryable || item.attempt_count >= MAX_ATTEMPTS) {
+        if (!averbacao || !policy || !tenant || !raw) {
           item.status = 'FAILED_FINAL';
-          item.next_attempt_at = undefined;
-          item.last_error = message;
+          item.last_error = 'Referência interna ausente para montar o despacho.';
           item.updated_at = new Date().toISOString();
-          averbacao.status = 'ERRO';
-          averbacao.codigo_resposta = body.codigo || 'INSURER_DISPATCH_REJECTED';
-          averbacao.mensagem_resposta = message;
-          markFiscalDocument(averbacao.id, 'RECUSADO', averbacao.codigo_resposta, message);
-          dbStore.persist();
+          persistDispatch(item);
           failed += 1;
-        } else {
-          item.status = 'RETRY';
-          item.next_attempt_at = retryAt(item.attempt_count);
-          item.last_error = message;
-          item.updated_at = new Date().toISOString();
-          retried += 1;
+          continue;
         }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Falha desconhecida ao chamar adapter.';
-        if (item.attempt_count >= MAX_ATTEMPTS) {
-          item.status = 'FAILED_FINAL';
-          item.next_attempt_at = undefined;
-          item.last_error = message;
-          item.updated_at = new Date().toISOString();
-          averbacao.status = 'ERRO';
-          averbacao.codigo_resposta = 'INSURER_DISPATCH_RETRY_EXHAUSTED';
-          averbacao.mensagem_resposta = 'Não foi possível confirmar a averbação na seguradora após as tentativas configuradas.';
-          markFiscalDocument(
-            averbacao.id,
-            'RECUSADO',
-            averbacao.codigo_resposta,
-            averbacao.mensagem_resposta
-          );
-          dbStore.persist();
-          failed += 1;
-        } else {
-          item.status = 'RETRY';
-          item.next_attempt_at = retryAt(item.attempt_count);
-          item.last_error = message;
-          item.updated_at = new Date().toISOString();
-          retried += 1;
+
+        item.status = 'SENDING';
+        item.attempt_count += 1;
+        item.last_attempt_at = new Date().toISOString();
+        item.updated_at = item.last_attempt_at;
+        persistDispatch(item);
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        try {
+          const response = await fetch(config.url, {
+            method: 'POST',
+            signal: controller.signal,
+            headers: {
+              'content-type': 'application/json',
+              authorization: `Bearer ${config.token}`,
+              'idempotency-key': item.idempotency_key,
+              'x-arckatech-dispatch-id': item.id
+            },
+            body: JSON.stringify(buildPayload(item, averbacao, policy, tenant, raw.content_xml))
+          });
+          const text = await response.text();
+          const body = parseJsonSafe(text);
+          item.last_http_status = response.status;
+
+          if (response.ok && !isRejectedBody(body)) {
+            const externalNumber = body.numero_averbacao;
+            const externalReference = body.external_reference || body.protocolo || externalNumber;
+            item.status = 'CONFIRMED';
+            item.external_number = externalNumber;
+            item.external_reference = externalReference;
+            item.confirmed_at = new Date().toISOString();
+            item.next_attempt_at = undefined;
+            item.last_error = undefined;
+            item.updated_at = item.confirmed_at;
+            persistDispatch(item);
+
+            averbacao.status = 'SUCESSO';
+            if (externalNumber) averbacao.numero_averbacao = externalNumber;
+            averbacao.protocolo_seguradora = externalReference;
+            averbacao.codigo_resposta = body.codigo || 'SUC-2000';
+            averbacao.mensagem_resposta =
+              body.mensagem ||
+              `Averbação confirmada pela seguradora${externalNumber ? ` sob o número ${externalNumber}` : ''}.`;
+            markFiscalDocument(
+              averbacao.id,
+              'AVERBADO',
+              averbacao.codigo_resposta,
+              averbacao.mensagem_resposta
+            );
+            dbStore.persist();
+            confirmed += 1;
+            continue;
+          }
+
+          const nonRetryableHttp = response.status >= 400 && response.status < 500 && ![408, 429].includes(response.status);
+          const retryable = body.retryable !== false && !nonRetryableHttp;
+          const message = body.mensagem || `Seguradora respondeu HTTP ${response.status}.`;
+
+          if (!retryable || item.attempt_count >= MAX_ATTEMPTS) {
+            item.status = 'FAILED_FINAL';
+            item.next_attempt_at = undefined;
+            item.last_error = message;
+            item.updated_at = new Date().toISOString();
+            persistDispatch(item);
+            averbacao.status = 'ERRO';
+            averbacao.codigo_resposta = body.codigo || 'INSURER_DISPATCH_REJECTED';
+            averbacao.mensagem_resposta = message;
+            markFiscalDocument(averbacao.id, 'RECUSADO', averbacao.codigo_resposta, message);
+            dbStore.persist();
+            failed += 1;
+          } else {
+            item.status = 'RETRY';
+            item.next_attempt_at = retryAt(item.attempt_count);
+            item.last_error = message;
+            item.updated_at = new Date().toISOString();
+            persistDispatch(item);
+            retried += 1;
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Falha desconhecida ao chamar adapter.';
+          if (item.attempt_count >= MAX_ATTEMPTS) {
+            item.status = 'FAILED_FINAL';
+            item.next_attempt_at = undefined;
+            item.last_error = message;
+            item.updated_at = new Date().toISOString();
+            persistDispatch(item);
+            averbacao.status = 'ERRO';
+            averbacao.codigo_resposta = 'INSURER_DISPATCH_RETRY_EXHAUSTED';
+            averbacao.mensagem_resposta = 'Não foi possível confirmar a averbação na seguradora após as tentativas configuradas.';
+            markFiscalDocument(
+              averbacao.id,
+              'RECUSADO',
+              averbacao.codigo_resposta,
+              averbacao.mensagem_resposta
+            );
+            dbStore.persist();
+            failed += 1;
+          } else {
+            item.status = 'RETRY';
+            item.next_attempt_at = retryAt(item.attempt_count);
+            item.last_error = message;
+            item.updated_at = new Date().toISOString();
+            persistDispatch(item);
+            retried += 1;
+          }
+        } finally {
+          clearTimeout(timer);
         }
       } finally {
-        clearTimeout(timer);
+        processingIds.delete(item.id);
       }
     }
 
-    writeOutbox(outbox);
     return { processed: due.length, confirmed, retried, failed, blocked };
   }
 }
