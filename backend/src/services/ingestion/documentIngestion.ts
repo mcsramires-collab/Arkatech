@@ -4,6 +4,7 @@ import { dbStore } from '../dbStore';
 import { RawDocumentService } from '../rawDocumentService';
 import { NotificationService } from '../notificationService';
 import { XMLParserService } from '../xmlParser';
+import { InsurerDispatchService } from '../insurerDispatchService';
 import { normalizeAlphanumeric } from '../../utils/cnpj';
 import {
   DocumentIngestionSource,
@@ -215,6 +216,65 @@ export class DocumentIngestionService {
     return 'RECUSADO';
   }
 
+  /**
+   * O motor interno continua síncrono e valida todas as regras. Em produção, porém, o aceite
+   * interno não significa que a seguradora registrou a averbação. Aqui convertemos esse aceite
+   * em despacho externo pendente e só o worker volta a marcar SUCESSO depois do ACK do adapter.
+   * Ambientes de teste e XML tpAmb=2 preservam o comportamento sintético do laboratório.
+   */
+  private static queueExternalConfirmation(
+    tenantId: string,
+    response: AverbacaoResponseDTO
+  ): AverbacaoResponseDTO {
+    if (!response.averbacao_id || (response.status !== 'sucesso' && response.status !== 'aviso')) {
+      return response;
+    }
+
+    const tenant = dbStore.tenants.find((item) => item.id === tenantId);
+    const averbacao = dbStore.averbacoes.find((item) => item.id === response.averbacao_id);
+    if (!tenant || !averbacao) return response;
+    if (tenant.ambiente !== 'producao' || averbacao.tp_amb_sefaz === 2) return response;
+
+    const policy = dbStore.policies.find((item) => item.id === averbacao.policy_id);
+    if (!policy) {
+      (averbacao as any).status = 'ERRO';
+      averbacao.codigo_resposta = 'INSURER_DISPATCH_POLICY_NOT_FOUND';
+      averbacao.mensagem_resposta = 'A apólice deixou de existir antes do despacho à seguradora.';
+      delete averbacao.numero_averbacao;
+      dbStore.persist();
+      return {
+        status: 'erro',
+        codigo: averbacao.codigo_resposta,
+        mensagem: averbacao.mensagem_resposta,
+        averbacao_id: averbacao.id,
+        protocolo_interno_averbacao: averbacao.protocolo_interno_averbacao
+      };
+    }
+
+    const dispatch = InsurerDispatchService.enqueue({ averbacao, policy, tenant });
+    delete averbacao.numero_averbacao;
+    (averbacao as any).status = 'PENDENTE_ENVIO';
+    (averbacao as any).insurer_dispatch_id = dispatch.id;
+    averbacao.codigo_resposta = 'PENDING_INSURER_DISPATCH';
+    averbacao.mensagem_resposta =
+      dispatch.status === 'BLOCKED_CONFIG'
+        ? 'Averbação validada internamente, mas o adapter da seguradora ainda não está configurado. O envio permanece pendente.'
+        : 'Averbação validada internamente e enfileirada para confirmação da seguradora.';
+    dbStore.persist();
+
+    return {
+      status: 'pendente',
+      codigo: averbacao.codigo_resposta,
+      mensagem: averbacao.mensagem_resposta,
+      averbacao_id: averbacao.id,
+      protocolo_interno_averbacao: averbacao.protocolo_interno_averbacao,
+      valor_considerado_averbacao: averbacao.valor_considerado_averbacao,
+      regras_internas_aplicadas: averbacao.regras_internas_aplicadas,
+      timestamp: averbacao.timestamp,
+      hash_validacao: response.hash_validacao
+    };
+  }
+
   private static finishFiscalDocument(
     document: FiscalDocument,
     status: FiscalDocumentStatus,
@@ -295,10 +355,11 @@ export class DocumentIngestionService {
     }
 
     this.markProcessing(document);
-    const result = AverbacaoService.process(
+    const internalResult = AverbacaoService.process(
       { ...averbacaoInput, raw_xml_id: document.raw_xml_id },
       app_base_url
     );
+    const result = this.queueExternalConfirmation(input.tenant_id, internalResult);
     this.finishFiscalDocument(document, this.statusFromResponse(result), [result]);
 
     return result;
@@ -373,7 +434,7 @@ export class DocumentIngestionService {
 
       const rawResponses: AverbacaoResponseDTO[] = [];
       const tentativas = input.policies.map((policy) => {
-        const resultado = AverbacaoService.process(
+        const internalResult = AverbacaoService.process(
           {
             tenant_id: input.tenant_id,
             ramo: policy.ramo,
@@ -383,6 +444,7 @@ export class DocumentIngestionService {
           },
           input.app_base_url
         );
+        const resultado = this.queueExternalConfirmation(input.tenant_id, internalResult);
         rawResponses.push(resultado);
 
         return {
