@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
+import adminOperationalRoutes from './routes/adminOperational';
 import adminConsistencyRoutes from './routes/adminConsistency';
 import adminAuditAnnotationsRoutes from './routes/adminAuditAnnotations';
 import adminIntegrityRoutes from './routes/adminIntegrity';
@@ -59,6 +60,7 @@ app.use(
   '/api/v1/admin',
   backofficeOrInternalKeyMiddleware,
   onboardingMigrationReconcileMiddleware,
+  adminOperationalRoutes,
   adminConsistencyRoutes,
   adminAuditAnnotationsRoutes,
   adminRoutes
