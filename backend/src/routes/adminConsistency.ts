@@ -11,7 +11,7 @@ const router = Router();
 const TEN_MINUTES = 10 * 60 * 1000;
 
 function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
+  return value === undefined ? value : JSON.parse(JSON.stringify(value));
 }
 
 function actor(req: BackofficeAuthenticatedRequest): AuditActor {
@@ -345,7 +345,10 @@ router.put('/insured-profile/:tenantId', requirePermission('clientes', 'editar')
     ...(Array.isArray(req.body?.bypass_rules) ? req.body.bypass_rules : []),
     ...(Array.isArray(req.body?.sublimits) ? req.body.sublimits : []),
     ...(Array.isArray(req.body?.coverage_values) ? req.body.coverage_values : [])
-  ].map((item: any) => item?.policy_id).filter(Boolean);
+  ].map((item: any) => item?.policy_id);
+  if (referencedPolicyIds.some(id => typeof id !== 'string' || !id)) {
+    return res.status(400).json({ status: 'erro', mensagem: 'policy_id obrigatório em cada configuração.' });
+  }
   for (const policyId of referencedPolicyIds) {
     const policy = dbStore.policies.find((item) => item.id === policyId && item.tenant_id === tenantId);
     if (!policy) return res.status(400).json({ status: 'erro', mensagem: `Referência inválida à policy ${policyId}.` });
@@ -353,6 +356,13 @@ router.put('/insured-profile/:tenantId', requirePermission('clientes', 'editar')
     policyIds.add(policyId);
   }
 
+  const visiblePolicy = (item: { id: string; tenant_id: string; insurer_id: string }) =>
+    item.tenant_id === tenantId && (req.backoffice?.actor_type === 'INTERNAL_USER' || item.insurer_id === req.backoffice?.insurer_id);
+  const visibleIds = new Set(dbStore.policies.filter(visiblePolicy).map(item => item.id));
+  const publicTenant = (value: typeof tenant) => {
+    const { client_secret_hash, ...safe } = value;
+    return safe;
+  };
   const snapshot = {
     tenant: clone(tenant),
     policies: clone(dbStore.policies),
@@ -432,8 +442,8 @@ router.put('/insured-profile/:tenantId', requirePermission('clientes', 'editar')
 
     dbStore.persist();
     const after = {
-      tenant: clone(tenant),
-      policies: dbStore.policies.filter((item) => item.tenant_id === tenantId),
+      tenant: publicTenant(tenant),
+      policies: dbStore.policies.filter(visiblePolicy),
       cnpjs: dbStore.tenantCnpjsAdicionais.filter((item) => item.tenant_id === tenantId),
       policy_ids: Array.from(policyIds)
     };
@@ -444,12 +454,22 @@ router.put('/insured-profile/:tenantId', requirePermission('clientes', 'editar')
       entity_type: 'INSURED_PROFILE',
       entity_id: tenantId,
       action: 'BULK_UPDATE',
-      before: snapshot,
+      before: {
+        tenant: publicTenant(snapshot.tenant),
+        policies: snapshot.policies.filter(visiblePolicy),
+        cnpjs: snapshot.cnpjs.filter(item => item.tenant_id === tenantId),
+        settings: snapshot.settings.filter(item => visibleIds.has(item.policy_id)),
+        titularity: snapshot.titularity.filter(item => visibleIds.has(item.policy_id)),
+        bypass: snapshot.bypass.filter(item => visibleIds.has(item.policy_id)),
+        sublimits: snapshot.sublimits.filter(item => visibleIds.has(item.policy_id)),
+        coverageValues: snapshot.coverageValues.filter(item => visibleIds.has(item.policy_id))
+      },
       after,
       reason: req.body?.reason ? String(req.body.reason) : 'Salvar Ficha do Segurado'
     });
     return res.json({ status: 'sucesso', profile: after });
   } catch (error) {
+    for (const key of Object.keys(tenant)) delete (tenant as any)[key];
     Object.assign(tenant, snapshot.tenant);
     dbStore.policies = snapshot.policies;
     dbStore.tenantCnpjsAdicionais = snapshot.cnpjs;

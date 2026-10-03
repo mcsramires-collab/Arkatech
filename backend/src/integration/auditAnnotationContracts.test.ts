@@ -25,8 +25,10 @@ describe('Portal audit annotation contracts', () => {
         { id: 'policy-b', numero_apolice: 'B', ramo: 'RCTRC', tenant_id: 'tenant-b', insurer_id: 'insurer-b', broker_id: 'broker-b', status: 'ATIVA', permitir_inativo_vencido: false, vigencia_inicio: now, vigencia_fim: '2027-12-31T23:59:59.000Z', aceita_averbacao_como_destinatario: false }
       ] as any;
 
+      dbStore.rbacProfiles = [{id:'audit-editor', nome_perfil:'Editor', permissions:{clientes:'editar'}}] as any;
       const token = jwt.sign({
         actor_type: 'SEGURADORA',
+        rbac_profile_id: 'audit-editor',
         user_id: 'user-a',
         nome: 'Ana Seguradora',
         email: 'ana@example.com',
@@ -63,6 +65,21 @@ describe('Portal audit annotation contracts', () => {
           insurer_id: 'insurer-a',
           tenant_id: 'tenant-a'
         });
+
+        dbStore.policies.push({ ...dbStore.policies[1]!, id: 'policy-shared-foreign', tenant_id: 'tenant-a' });
+        const save = await fetch(base + '/api/v1/admin/insured-profile/tenant-a', {
+          method: 'PUT', headers, body: JSON.stringify({company: {nome_fantasia:'Atualizado'}})
+        });
+        expect(save.status).toBe(200);
+        const saved = JSON.stringify(await save.json());
+        expect(saved).not.toContain('policy-shared-foreign');
+        expect(saved).not.toContain('client_secret_hash');
+        const events = auditService.list({insurer_id:'insurer-a', action:'BULK_UPDATE'});
+        expect(events).toHaveLength(1);
+        const serialized = JSON.stringify(events);
+        expect(serialized).not.toContain('policy-shared-foreign');
+        expect(serialized).not.toContain('tenant-b');
+        expect(serialized).not.toContain('client_secret_hash');
 
         const denied = await fetch(base + '/api/v1/admin/audit-events/portal', {
           method: 'POST',

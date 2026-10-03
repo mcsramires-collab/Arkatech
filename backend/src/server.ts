@@ -50,17 +50,12 @@ app.use('/api/v1/averbacoes', onboardingMigrationDueMiddleware, averbacaoRoutes)
 // racional completo de por que a chave interna ainda é aceita (ponte até a Fase 4 terminar de
 // migrar admin.ts para nunca mais aceitar insurer_id/broker_id livres).
 app.use('/api/v1/admin/onboarding', backofficeOrInternalKeyMiddleware, onboardingMigrationRoutes);
-// Pacote de consistência/auditoria fica ANTES das rotas legadas: ele intercepta apenas os
-// contratos que precisam de semântica nova (CNPJ lifecycle e desfazer parceria sem apagar
-// histórico) e adiciona auditoria/save atômico, mantendo o restante do admin intacto.
-app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminConsistencyRoutes);
-// Ponte temporária: módulos antigos do portal que já chamavam registrarAuditoria() persistem uma
-// anotação server-side; identidade e seguradora são sempre derivadas do token, nunca do browser.
-app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminAuditAnnotationsRoutes);
 app.use(
   '/api/v1/admin',
   backofficeOrInternalKeyMiddleware,
   onboardingMigrationReconcileMiddleware,
+  adminConsistencyRoutes,
+  adminAuditAnnotationsRoutes,
   adminRoutes
 );
 app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
