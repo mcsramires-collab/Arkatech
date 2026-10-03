@@ -203,15 +203,17 @@ class PortalIdentityServiceImpl {
     if (!record) throw new Error('PORTAL_ACCESS_TOKEN_INVALID');
     if (password.length < 8) throw new Error('PORTAL_PASSWORD_TOO_SHORT');
 
+    const passwordHash = await bcrypt.hash(password, 10);
+    // Revalida após o await: outro consumo, expiração ou reenvio pode ter invalidado o link.
+    if (this.findValidRecord(token) !== record) throw new Error('PORTAL_ACCESS_TOKEN_INVALID');
     const targetUsers = dbStore.tenantUsers.filter((user) => {
       if (!record.target_user_ids.includes(user.id)) return false;
-      if (!isInsuredPortalUser(user)) return false;
+      if (!isInsuredPortalUser(user) || normalizeEmail(user.email) !== record.email) return false;
       if (record.purpose === 'PASSWORD_RESET') return user.status === 'ATIVO';
       return true;
     });
     if (targetUsers.length === 0) throw new Error('PORTAL_ACCESS_TARGET_MISSING');
 
-    const passwordHash = await bcrypt.hash(password, 10);
     for (const user of targetUsers) {
       user.password_hash = passwordHash;
       if (record.purpose === 'USER_INVITE') user.status = 'ATIVO';

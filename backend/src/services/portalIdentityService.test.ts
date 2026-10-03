@@ -67,8 +67,12 @@ describe('PortalIdentityService', () => {
     expect(PortalIdentityService.inspect(invite.token)?.purpose).toBe('USER_INVITE');
     expect(user.status).toBe('INATIVO');
 
-    const result = await PortalIdentityService.consume(invite.token, 'MinhaSenha123');
-    expect(result.purpose).toBe('USER_INVITE');
+    const results = await Promise.allSettled([
+      PortalIdentityService.consume(invite.token, 'MinhaSenha123'),
+      PortalIdentityService.consume(invite.token, 'MinhaSenha123')
+    ]);
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
     expect(user.status).toBe('ATIVO');
     expect(await bcrypt.compare('MinhaSenha123', user.password_hash)).toBe(true);
     expect(PortalIdentityService.inspect(invite.token)).toBeNull();
