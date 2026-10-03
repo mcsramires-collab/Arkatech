@@ -12,6 +12,7 @@ import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
 import tenantIntegrityRoutes from './routes/tenantIntegrity';
 import internalRoutes from './routes/internal';
+import internalEcosystemRoutes from './routes/internalEcosystem';
 import connectorRoutes from './routes/connector';
 import tmsRoutes from './routes/tms';
 import whatsappIntegrationRoutes from './routes/whatsappIntegration';
@@ -64,9 +65,10 @@ app.use(
   adminRoutes
 );
 app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
-// /internal (CRUD de InternalUser/RbacProfile etc.) segue só com a chave interna por enquanto —
-// fora do escopo desta fase (ver Backlog).
-app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
+// /internal segue exclusivamente pela chave interna do BFF da administração ARCKATECH.
+// O cadastro do ecossistema entra antes do router legado para concentrar seguradoras,
+// corretoras/co-corretoras e assessorias numa única superfície administrativa.
+app.use('/api/v1/internal', internalApiKeyMiddleware, internalEcosystemRoutes, internalRoutes);
 // Regra de solicitação multi-seguradora do pacote de integridade intercepta apenas o POST
 // específico; o restante segue normalmente para o router completo do Portal do Segurado.
 app.use('/api/v1/tenant', tenantIntegrityRoutes);
