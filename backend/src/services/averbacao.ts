@@ -10,30 +10,17 @@ import { ResponseEngine } from './responseEngine';
 import { RawDocumentService } from './rawDocumentService';
 import { efetivarInativacaoProgramadaSeNecessaria, sincronizarStatusCadastroSeNecessario } from './tenantLifecycle';
 import { validatePolicyDocumentDate } from './policyValidity';
+import { PolicyFinancialLimitsService } from './policyFinancialLimits';
+import { DocumentTitularityService } from './documentTitularity';
 
 export interface AverbacaoRequestDTO {
   tenant_id: string;
   ramo: RamoApolice;
-  /**
-   * Opcional — permite ao chamador apontar exatamente qual apólice usar (id), em vez de deixar
-   * o motor resolver por tenant_id + ramo (ver passo 4 de process()). Usado pelo seletor de
-   * apólices ativas do Portal do Segurado (o segurado escolhe a apólice diretamente, não mais só
-   * o ramo) e pela rota de recuperação (`POST /tenant/recovery/:token/corrigir`), que já sabe o
-   * policy_id exato da sessão de recuperação. Quando ausente, mantém o comportamento legado de
-   * resolver por ramo (usado hoje pelas rotas /admin).
-   */
   policy_id?: string;
   xml_content: string;
-  /** Raw XML já persistido pela camada de ingestão; evita duplicar o mesmo blob por canal/apólice. */
   raw_xml_id?: string;
   recovery_token?: string;
   supplemented_vars?: Record<string, any>;
-  /**
-   * Fase 4 do pacote de 21/09 (Tratamento de Recusas, Bloco 1 — estratégia 'exigir-codigo') —
-   * código de liberação (Averbação Esporádica) para destravar um valor acima do LMI/sublimite.
-   * Aplicado só à checagem de LMI (9b); sublimites (9c) nunca consomem um código — ver comentário
-   * em avaliarLimiteComEstrategia.
-   */
   codigo_liberacao?: string;
 }
 
@@ -75,14 +62,6 @@ export class AverbacaoService {
     };
   }
 
-  /**
-   * Persiste um registro de Averbacao com status='ERRO' para documentos rejeitados DEPOIS que já
-   * sabemos a qual apólice/policy_id o documento se refere (titularidade, deduplicação, apólice
-   * vencida/cadastro inativo). Rejeições anteriores a esse ponto (tenant não encontrado, XML
-   * inválido, token de recuperação inválido) não têm policy_id e por isso não geram este
-   * registro — a única exceção histórica é ERR-4004 (variável faltante), que já é rastreada via
-   * RecoverySession em vez de Averbacao.
-   */
   private static persistErro(
     tenant: Tenant,
     policy: Policy,
@@ -122,14 +101,6 @@ export class AverbacaoService {
     dbStore.persist();
   }
 
-  /**
-   * Fase 4 do pacote de 21/09 (Tratamento de Recusas / Documentos Pendentes) — mesma ideia de
-   * `persistErro`, mas grava status='PENDENTE_APROVACAO' em vez de 'ERRO': o motivo de recusa
-   * (`codigo`) fica em `motivo_pendencia`, e `codigo_resposta`/`mensagem_resposta` recebem o
-   * mesmo texto por enquanto (são atualizados de verdade quando a seguradora decidir, via
-   * `POST /admin/averbacoes/:id/decidir`). Devolve o registro criado (não só grava) porque quem
-   * chama precisa do `id` para montar a resposta HTTP (`averbacao_id`).
-   */
   private static persistPendente(
     tenant: Tenant,
     policy: Policy,
@@ -176,26 +147,6 @@ export class AverbacaoService {
     return pendenteRecord;
   }
 
-  /**
-   * Fase 4 — decide o destino de um excedente de LMI/sublimite conforme a estratégia configurada
-   * em Tratamento de Recusas (Bloco 1, `PolicyBusinessSettings.config`, chaves `regras:*` — ainda
-   * um blob genérico, ver gap registrado no documento de validação técnica). Valores possíveis de
-   * `regras:estrategia-lmg` (default `'exigir-codigo'`, igual ao padrão descrito no relatório):
-   * - `'exigir-codigo'`: só passa com um `LiberationCode` válido para o excedente; sem código
-   *   informado ou código inválido/expirado/esgotado/insuficiente → recusa direto (não enfileira
-   *   — sem código não há o que esperar).
-   * - `'sem-codigo'` + `regras:sem-codigo-modo === 'teto'`: dentro do teto (`regras:teto-valor`)
-   *   passa direto; acima do teto, vai para `regras:teto-acima-acao` (`'fila'` → pendente,
-   *   `'recusar'` → recusa direto).
-   * - `'sem-codigo'` + modo `'fila-sempre'`: qualquer excedente vira pendente.
-   * - `'aceitar-sem-trava'`: passa sempre, mesmo acima do limite.
-   * - `'truncar'`: passa, mas o valor considerado é limitado ao teto (LMI/sublimite) — nunca gera
-   *   pendência nem recusa.
-   * Sublimites (9c) NUNCA consomem `codigo_liberacao` — os campos do código (`valor_carga_liberado`
-   * etc.) são pensados no nível da apólice/LMI, não por sublimite específico; um excedente de
-   * sublimite sob estratégia `'exigir-codigo'` sempre recusa direto (não enfileira, mesmo padrão
-   * de "sem código não há o que esperar").
-   */
   private static avaliarLimiteComEstrategia(params: {
     valorConsiderado: number;
     limite: number;
@@ -207,12 +158,8 @@ export class AverbacaoService {
     const { valorConsiderado, limite, tipoLimite, businessConfig, policy, codigoLiberacaoInformado } = params;
     const estrategia = businessConfig['regras:estrategia-lmg'] ?? 'exigir-codigo';
 
-    if (estrategia === 'aceitar-sem-trava') {
-      return { resultado: 'aprovado', valorFinal: valorConsiderado };
-    }
-    if (estrategia === 'truncar') {
-      return { resultado: 'aprovado', valorFinal: Math.min(valorConsiderado, limite) };
-    }
+    if (estrategia === 'aceitar-sem-trava') return { resultado: 'aprovado', valorFinal: valorConsiderado };
+    if (estrategia === 'truncar') return { resultado: 'aprovado', valorFinal: Math.min(valorConsiderado, limite) };
     if (estrategia === 'exigir-codigo') {
       if (tipoLimite === 'SUBLIMITE' || !codigoLiberacaoInformado) {
         return { resultado: 'recusado', valorFinal: valorConsiderado };
@@ -228,41 +175,27 @@ export class AverbacaoService {
         new Date(codigo.validade).getTime() >= now() &&
         (codigo.usos_maximos === undefined || codigo.usos_realizados < codigo.usos_maximos) &&
         (codigo.valor_carga_liberado === undefined || codigo.valor_carga_liberado >= excedente);
-      if (!codigoValido) {
-        return { resultado: 'recusado', valorFinal: valorConsiderado };
-      }
+      if (!codigoValido) return { resultado: 'recusado', valorFinal: valorConsiderado };
       codigo!.usos_realizados += 1;
       return { resultado: 'aprovado', valorFinal: valorConsiderado, codigoConsumido: codigo!.codigo };
     }
-    // 'sem-codigo'
+
     const modo = businessConfig['regras:sem-codigo-modo'] ?? 'fila-sempre';
-    if (modo === 'fila-sempre') {
-      return { resultado: 'pendente', valorFinal: valorConsiderado };
-    }
-    // modo === 'teto'
+    if (modo === 'fila-sempre') return { resultado: 'pendente', valorFinal: valorConsiderado };
     const teto = Number(businessConfig['regras:teto-valor']);
-    if (!isNaN(teto) && valorConsiderado <= teto) {
-      return { resultado: 'aprovado', valorFinal: valorConsiderado };
-    }
+    if (!isNaN(teto) && valorConsiderado <= teto) return { resultado: 'aprovado', valorFinal: valorConsiderado };
     const acaoAcimaTeto = businessConfig['regras:teto-acima-acao'] ?? 'fila';
     return { resultado: acaoAcimaTeto === 'recusar' ? 'recusado' : 'pendente', valorFinal: valorConsiderado };
   }
 
-  /** Faz o parse de "DD/MM/AAAA" (formato da variável DATA_EMBARQUE) para Date local. undefined se inválido. */
   private static parseDataEmbarqueBR(value: string): Date | undefined {
-    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value.trim());
-    if (!m) return undefined;
-    const [, d, mo, y] = m;
+    const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value.trim());
+    if (!match) return undefined;
+    const [, d, mo, y] = match;
     const date = new Date(Number(y), Number(mo) - 1, Number(d));
     return isNaN(date.getTime()) ? undefined : date;
   }
 
-  /**
-   * Checa os Blocos 1 e 2 de "Prazos e Datas" (Regras de Negócio da apólice — ver comentário no
-   * passo 9d de process()). Retorna null quando não há nada a bloquear (inclusive quando a
-   * seguradora nunca configurou nada nesta apólice, ou quando falta dado suficiente pra avaliar
-   * um prazo — nesse caso preferimos não bloquear a arriscar um falso positivo).
-   */
   private static checkPrazos(
     businessConfig: Record<string, any>,
     tagsMap: Record<string, any>
@@ -272,315 +205,151 @@ export class AverbacaoService {
       typeof dataEmbarqueRaw === 'string' ? this.parseDataEmbarqueBR(dataEmbarqueRaw) : undefined;
 
     if (dataEmbarque) {
-      // "Quando encontrada no XML, esta data tem prioridade sobre o Prazo de Emissão" — Bloco 2
-      // (Regra de Prazo de Embarque). Só aplica se a seguradora configurou algo diferente do
-      // padrão "nunca" (chave pode nem existir — nesse caso também não bloqueia).
       const prazoEmbarque = businessConfig['regras:prazo-embarque'];
       if (!prazoEmbarque || prazoEmbarque === 'nunca') return null;
-
-      const inicioDiaEmbarque = new Date(
-        dataEmbarque.getFullYear(),
-        dataEmbarque.getMonth(),
-        dataEmbarque.getDate()
-      );
+      const inicioDiaEmbarque = new Date(dataEmbarque.getFullYear(), dataEmbarque.getMonth(), dataEmbarque.getDate());
       const fimDiaEmbarque = new Date(inicioDiaEmbarque.getTime() + 24 * 60 * 60 * 1000 - 1);
-
       let limite: Date;
-      if (prazoEmbarque === 'antes') {
-        // "Deve averbar antes do embarque" -> até 23h59m59 do dia ANTERIOR ao embarque.
-        limite = new Date(inicioDiaEmbarque.getTime() - 1);
-      } else if (prazoEmbarque === 'dia') {
-        limite = fimDiaEmbarque;
-      } else if (prazoEmbarque === 'apos') {
+      if (prazoEmbarque === 'antes') limite = new Date(inicioDiaEmbarque.getTime() - 1);
+      else if (prazoEmbarque === 'dia') limite = fimDiaEmbarque;
+      else if (prazoEmbarque === 'apos') {
         const dias = Number(businessConfig['regras:dias-apos']);
-        const diasValidos = !isNaN(dias) && dias > 0 ? dias : 0;
-        limite = new Date(fimDiaEmbarque.getTime() + diasValidos * 24 * 60 * 60 * 1000);
-      } else {
-        return null;
-      }
+        limite = new Date(fimDiaEmbarque.getTime() + (!isNaN(dias) && dias > 0 ? dias : 0) * 24 * 60 * 60 * 1000);
+      } else return null;
 
       if (now() > limite.getTime()) {
         return {
           codigo: 'ERR-4015',
-          replacements: {
-            DATA_EMBARQUE: dataEmbarqueRaw,
-            PRAZO_LIMITE: limite.toLocaleString('pt-BR')
-          }
+          replacements: { DATA_EMBARQUE: dataEmbarqueRaw, PRAZO_LIMITE: limite.toLocaleString('pt-BR') }
         };
       }
       return null;
     }
 
-    // Sem Data de Embarque no documento: cai no Bloco 1 (Prazo de Emissão) — só se a seguradora
-    // salvou explicitamente um prazo nesta apólice (a chave precisa EXISTIR no config; ver
-    // RuleEngineService.getBusinessConfig — nunca assumimos os 90 dias exibidos como padrão na
-    // tela para uma apólice que nunca configurou nada).
     if (!('regras:prazo-valor' in businessConfig)) return null;
-
     const campoBase = businessConfig['regras:prazo-campo'] === 'dhRecBto' ? 'dhRecBto' : 'dhEmi';
     const dataBaseRaw = tagsMap[campoBase];
-    if (!dataBaseRaw) return null; // sem a data-base não dá pra avaliar o prazo — nunca bloqueia por isso
-
+    if (!dataBaseRaw) return null;
     const dataBase = new Date(dataBaseRaw);
     if (isNaN(dataBase.getTime())) return null;
-
     const prazoValor = Number(businessConfig['regras:prazo-valor']);
     if (isNaN(prazoValor) || prazoValor <= 0) return null;
-
     const unidadeMs = businessConfig['regras:prazo-unidade'] === 'Horas' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
     const limite = new Date(dataBase.getTime() + prazoValor * unidadeMs);
-
     if (now() > limite.getTime()) {
       return {
         codigo: 'ERR-4014',
-        replacements: {
-          DATA_BASE: dataBase.toLocaleString('pt-BR'),
-          PRAZO_LIMITE: limite.toLocaleString('pt-BR')
-        }
+        replacements: { DATA_BASE: dataBase.toLocaleString('pt-BR'), PRAZO_LIMITE: limite.toLocaleString('pt-BR') }
       };
     }
     return null;
   }
 
-  /**
-   * Processa a solicitação de averbação de um documento fiscal.
-   */
   public static process(dto: AverbacaoRequestDTO, appBaseUrl: string = 'http://localhost:5173'): AverbacaoResponseDTO {
-    // 1. Localizar o Cliente / Tenant
     const tenant = dbStore.tenants.find((t) => t.id === dto.tenant_id);
-    if (!tenant) {
-      return this.erro('ERR-4001');
-    }
-    // Efetiva uma inativação agendada cuja data já chegou, antes de checar tenant.status abaixo
-    // — sem isso, o bloqueio (ERR-4002) só valeria depois que alguém abrisse a tela de
-    // Consultar Segurados (ver services/tenantLifecycle.ts).
+    if (!tenant) return this.erro('ERR-4001');
+
     efetivarInativacaoProgramadaSeNecessaria(tenant);
-    // Inativação Automática por Ausência de Apólice Vigente (pacote de 27/09, confirmado pelo
-    // usuário) — mesmo motivo: o bloqueio precisa valer aqui, não só quando alguém abrir a tela.
     sincronizarStatusCadastroSeNecessario(tenant, dbStore.policies.filter((p) => p.tenant_id === tenant.id));
 
-    // 2. Se for um envio de recuperação via Token existente
     let recoverySession: RecoverySession | undefined;
     if (dto.recovery_token) {
-      recoverySession = dbStore.recoverySessions.find(
-        (r) => r.token === dto.recovery_token && !r.utilizada
-      );
-      if (!recoverySession) {
-        return this.erro('ERR-4006');
-      }
-      // Achado da auditoria de 27/08 (Documentos Pendentes): "expira_em" era gravado e exibido
-      // na tela (Portal do Segurado e link de e-mail) como um prazo real de 24h, mas nunca era
-      // checado aqui — um token "expirado" continuava sendo aceito indefinidamente. Corrigido:
-      // passado o prazo, o token deixa de valer e o documento precisa ser reenviado (o cliente
-      // não tinha como saber que aquela pendência nunca mais seria averbável antes desta correção).
+      recoverySession = dbStore.recoverySessions.find((r) => r.token === dto.recovery_token && !r.utilizada);
+      if (!recoverySession) return this.erro('ERR-4006');
       if (new Date(recoverySession.expira_em).getTime() <= now()) {
         return this.erro('ERR-4012', { EXPIRA_EM: recoverySession.expira_em });
       }
     }
 
-    // 3. Parse do Documento XML / JSON
     const contentToParse = dto.xml_content || recoverySession?.raw_xml_content || '';
     let parsedDoc;
     try {
       parsedDoc = XMLParserService.parse(contentToParse);
-    } catch (err: any) {
+    } catch {
       return this.erro('ERR-4005');
     }
 
-    // 4. Buscar a Apólice a usar.
-    //
-    // A seleção automática agora usa a DATA DE EMISSÃO DO DOCUMENTO, e não "agora".
-    // Isso é essencial em renovação/retroatividade: um CT-e de 2025 deve casar com a
-    // apólice cuja vigência cobria 2025, mesmo que exista uma apólice nova ativa hoje.
-    // Quando mais de uma apólice cobre a mesma data, o motor NÃO escolhe "a primeira":
-    // devolve pendência explícita para revisão, evitando roteamento silencioso entre
-    // seguradoras diferentes para o mesmo tenant/ramo.
     const documentDate = parsedDoc.dataEmissao || parsedDoc.tagsMap['dhEmi'];
     let policy: Policy | undefined;
 
     if (dto.policy_id) {
-      // policy_id explícito continua respeitando tenant ownership. A vigência será
-      // revalidada novamente no passo 4d, portanto o caller não consegue contornar
-      // o matching apontando manualmente uma apólice fora da data.
       policy = dbStore.policies.find((p) => p.id === dto.policy_id && p.tenant_id === tenant.id);
     } else {
-      const policiesDoRamo = dbStore.policies.filter(
-        (p) => p.tenant_id === tenant.id && p.ramo === dto.ramo
-      );
-
+      const policiesDoRamo = dbStore.policies.filter((p) => p.tenant_id === tenant.id && p.ramo === dto.ramo);
       if (!documentDate && policiesDoRamo.length > 1) {
         const fmt = ResponseEngine.formatResponse('ERR-4022');
-        return {
-          status: 'pendente',
-          codigo: fmt.codigo,
-          mensagem: fmt.mensagem,
-          explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
-          orientacao_correcao: fmt.orientacao_correcao
-        };
+        return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, explicacao_nao_tecnica: fmt.explicacao_nao_tecnica, orientacao_correcao: fmt.orientacao_correcao };
       }
-
       if (documentDate) {
-        const policiesNaVigencia = policiesDoRamo.filter(
-          (candidate) => validatePolicyDocumentDate(candidate, documentDate).valid
-        );
-
-        if (policiesNaVigencia.length === 1) {
-          policy = policiesNaVigencia[0];
-        } else if (policiesNaVigencia.length > 1) {
-          const fmt = ResponseEngine.formatResponse('ERR-4023', {
-            DATA_DOCUMENTO: documentDate,
-            QTD_APOLICES: String(policiesNaVigencia.length)
-          });
-          return {
-            status: 'pendente',
-            codigo: fmt.codigo,
-            mensagem: fmt.mensagem,
-            explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
-            orientacao_correcao: fmt.orientacao_correcao
-          };
-        } else if (policiesDoRamo.length === 1) {
-          // Há uma única apólice possível: seleciona para que a barreira 4d gere
-          // o motivo temporal específico (antes do início/depois do fim) e preserve
-          // a pendência auditável vinculada à apólice.
-          policy = policiesDoRamo[0];
-        } else if (policiesDoRamo.length > 1) {
-          const fmt = ResponseEngine.formatResponse('ERR-4024', {
-            DATA_DOCUMENTO: documentDate
-          });
-          return {
-            status: 'pendente',
-            codigo: fmt.codigo,
-            mensagem: fmt.mensagem,
-            explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
-            orientacao_correcao: fmt.orientacao_correcao
-          };
+        const policiesNaVigencia = policiesDoRamo.filter((candidate) => validatePolicyDocumentDate(candidate, documentDate).valid);
+        if (policiesNaVigencia.length === 1) policy = policiesNaVigencia[0];
+        else if (policiesNaVigencia.length > 1) {
+          const fmt = ResponseEngine.formatResponse('ERR-4023', { DATA_DOCUMENTO: documentDate, QTD_APOLICES: String(policiesNaVigencia.length) });
+          return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, explicacao_nao_tecnica: fmt.explicacao_nao_tecnica, orientacao_correcao: fmt.orientacao_correcao };
+        } else if (policiesDoRamo.length === 1) policy = policiesDoRamo[0];
+        else if (policiesDoRamo.length > 1) {
+          const fmt = ResponseEngine.formatResponse('ERR-4024', { DATA_DOCUMENTO: documentDate });
+          return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, explicacao_nao_tecnica: fmt.explicacao_nao_tecnica, orientacao_correcao: fmt.orientacao_correcao };
         }
-      } else {
-        policy = policiesDoRamo[0];
-      }
+      } else policy = policiesDoRamo[0];
     }
 
-    if (!policy) {
-      return this.erro('ERR-4016');
-    }
+    if (!policy) return this.erro('ERR-4016');
 
-    // 4b. Gravação Bruta do XML (Criptografado / Hash SHA-256) - ISO 27001 / LGPD. Feito aqui
-    // (antes das checagens que podem rejeitar o documento) porque ERR-4007/4008/4002/4003 já
-    // conhecem o policy_id e passam a gerar um registro de Averbacao com status='ERRO', que
-    // exige um raw_xml_id — precisamos do XML bruto salvo mesmo quando o documento é rejeitado.
-    const rawXmlRecord =
-      RawDocumentService.get(dto.raw_xml_id) ?? RawDocumentService.store(contentToParse, tenant.id);
-
-    // 4c. Carrega o blob de Regras de Negócio da apólice cedo — Fase 4 do pacote de 21/09 precisa
-    // dele já na checagem de titularidade (passo 5), para saber se a "fila genérica" (Bloco 2 de
-    // Tratamento de Recusas, regras:fila-aprovacao-recusas) está ligada. Antes só era carregado
-    // no passo 9d (Prazos e Datas); mantido carregado uma única vez aqui, reaproveitado depois.
+    const rawXmlRecord = RawDocumentService.get(dto.raw_xml_id) ?? RawDocumentService.store(contentToParse, tenant.id);
     const businessConfig = RuleEngineService.getBusinessConfig(policy);
     const filaGenericaHabilitada = businessConfig['regras:fila-aprovacao-recusas'] === true;
-
-    // 4d. Segunda barreira de vigência: mesmo quando policy_id foi informado explicitamente,
-    // a data do documento precisa estar coberta. "permitir_inativo_vencido" NÃO libera
-    // documentos anteriores ao início da apólice; esse caso sempre exige análise.
     const regrasAplicadas: string[] = [];
     const policyDateValidity = validatePolicyDocumentDate(policy, documentDate);
 
     if (policyDateValidity.reason === 'DOCUMENT_DATE_MISSING') {
       const fmt = ResponseEngine.formatResponse('ERR-4022');
       regrasAplicadas.push('Vigência documental não avaliada: data de emissão ausente ou inválida.');
-      const registro = this.persistPendente(
-        tenant,
-        policy,
-        parsedDoc,
-        rawXmlRecord.id,
-        fmt,
-        regrasAplicadas
-      );
-      return {
-        status: 'pendente',
-        codigo: fmt.codigo,
-        mensagem: fmt.mensagem,
-        averbacao_id: registro.id,
-        explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
-        orientacao_correcao: fmt.orientacao_correcao
-      };
+      const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+      return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id, explicacao_nao_tecnica: fmt.explicacao_nao_tecnica, orientacao_correcao: fmt.orientacao_correcao };
     }
 
     if (policyDateValidity.reason === 'BEFORE_POLICY_START') {
-      const fmt = ResponseEngine.formatResponse('ERR-4021', {
-        DATA_DOCUMENTO: documentDate ?? '',
-        VIGENCIA_INICIO: policy.vigencia_inicio
-      });
-      regrasAplicadas.push(
-        `Vigência documental: emissão ${documentDate} anterior ao início da apólice ${policy.vigencia_inicio}; encaminhada para análise de exceção.`
-      );
-      const registro = this.persistPendente(
-        tenant,
-        policy,
-        parsedDoc,
-        rawXmlRecord.id,
-        fmt,
-        regrasAplicadas
-      );
-      return {
-        status: 'pendente',
-        codigo: fmt.codigo,
-        mensagem: fmt.mensagem,
-        averbacao_id: registro.id,
-        explicacao_nao_tecnica: fmt.explicacao_nao_tecnica,
-        orientacao_correcao: fmt.orientacao_correcao
-      };
+      const fmt = ResponseEngine.formatResponse('ERR-4021', { DATA_DOCUMENTO: documentDate ?? '', VIGENCIA_INICIO: policy.vigencia_inicio });
+      regrasAplicadas.push(`Vigência documental: emissão ${documentDate} anterior ao início da apólice ${policy.vigencia_inicio}; encaminhada para análise de exceção.`);
+      const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
+      return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id, explicacao_nao_tecnica: fmt.explicacao_nao_tecnica, orientacao_correcao: fmt.orientacao_correcao };
     }
 
-    // 5. Checagem de Titularidade v2 — Regra A (função do CNPJ no documento) + Regra B (bypass por rota/produto)
     const tenantCnpjLimpo = normalizeCnpj(tenant.cnpj);
-    // Aceita string ou number defensivamente — parsers de XML/JSON de terceiros podem
-    // entregar um CNPJ puramente numérico como Number em vez de String.
-    const norm = (v?: string | number) =>
-      v !== undefined && v !== null ? normalizeCnpj(v) : undefined;
-
+    const norm = (value?: string | number) => value !== undefined && value !== null ? normalizeCnpj(value) : undefined;
     const isEmitente = norm(parsedDoc.cnpjEmitente) === tenantCnpjLimpo;
-
-    const funcaoParaCnpj: Record<string, string | undefined> = {
-      DESTINATARIO: norm(parsedDoc.cnpjDestinatario),
-      REMETENTE: norm(parsedDoc.cnpjRemetente),
-      TOMADOR: norm(parsedDoc.cnpjTomador),
-      EXPEDIDOR: norm(parsedDoc.cnpjExpedidor),
-      RECEBEDOR: norm(parsedDoc.cnpjRecebedor),
-      TRANSPORTADOR: norm(parsedDoc.cnpjTransportador)
-    };
-
-    const titularityRules = dbStore.policyTitularityRules.filter((r) => r.policy_id === policy.id);
-
+    const titularityRules = dbStore.policyTitularityRules.filter((rule) => rule.policy_id === policy.id);
     let matchedByFuncao = false;
+    let funcaoUsada: string | undefined;
+
     if (!isEmitente) {
       if (titularityRules.length > 0) {
-        matchedByFuncao = titularityRules.some(
-          (r) => r.habilitada && funcaoParaCnpj[r.funcao] === tenantCnpjLimpo
-        );
+        const titularityMatch = DocumentTitularityService.match(parsedDoc, titularityRules, tenant.cnpj);
+        matchedByFuncao = titularityMatch.matched;
+        funcaoUsada = titularityMatch.funcao;
       } else {
-        // Sem regras cadastradas: cai no comportamento legado (só Destinatário, via flag antiga)
-        matchedByFuncao = Boolean(policy.aceita_averbacao_como_destinatario) && funcaoParaCnpj.DESTINATARIO === tenantCnpjLimpo;
+        matchedByFuncao =
+          Boolean(policy.aceita_averbacao_como_destinatario) &&
+          norm(parsedDoc.cnpjDestinatario) === tenantCnpjLimpo;
+        if (matchedByFuncao) funcaoUsada = 'DESTINATARIO';
       }
     }
 
     let matchedByBypass = false;
     if (!isEmitente && !matchedByFuncao) {
-      const bypassRules = dbStore.policyBypassRules.filter((r) => r.policy_id === policy.id);
-      matchedByBypass = bypassRules.some((r) => {
+      const bypassRules = dbStore.policyBypassRules.filter((rule) => rule.policy_id === policy.id);
+      matchedByBypass = bypassRules.some((rule) => {
         const rotaOk =
-          (!r.rota_uf_origem || r.rota_uf_origem === parsedDoc.ufOrigem) &&
-          (!r.rota_uf_destino || r.rota_uf_destino === parsedDoc.ufDestino);
-        const produtoOk = !r.produto_predominante || r.produto_predominante === parsedDoc.produtoPredominante;
+          (!rule.rota_uf_origem || rule.rota_uf_origem === parsedDoc.ufOrigem) &&
+          (!rule.rota_uf_destino || rule.rota_uf_destino === parsedDoc.ufDestino);
+        const produtoOk = !rule.produto_predominante || rule.produto_predominante === parsedDoc.produtoPredominante;
         return rotaOk && produtoOk;
       });
     }
 
     if (!isEmitente && !matchedByFuncao && !matchedByBypass) {
       const fmt = ResponseEngine.formatResponse('ERR-4008');
-      // Fase 4 — Bloco 2 de Tratamento de Recusas ("fila genérica"): quando ligado na apólice,
-      // motivos de recusa que não sejam LMI/sublimite (que têm sua própria estratégia no Bloco 1)
-      // viram pendência em vez de recusa definitiva. Desligado por padrão — preserva o
-      // comportamento anterior para quem nunca configurou essa aba.
       if (filaGenericaHabilitada) {
         const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
         return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
@@ -589,57 +358,31 @@ export class AverbacaoService {
       return this.erro('ERR-4008');
     }
 
-    if (matchedByFuncao) {
-      const funcaoUsada = Object.entries(funcaoParaCnpj).find(([, v]) => v === tenantCnpjLimpo)?.[0];
-      if (funcaoUsada) regrasAplicadas.push(`Titularidade aceita via função '${funcaoUsada}' do documento.`);
+    if (matchedByFuncao && funcaoUsada) {
+      regrasAplicadas.push(`Titularidade aceita via função '${funcaoUsada}' do documento.`);
     } else if (matchedByBypass) {
       regrasAplicadas.push('Titularidade aceita via bypass (Regra B — rota/produto), sem CNPJ presente no documento.');
     }
 
-    // 6. Checagem de Deduplicação — (chave_documento, protocolo_aceitacao_sefaz, ramo) já averbados?
     const jaAverbado = dbStore.averbacoes.find(
-      (a) =>
-        normalizeAlphanumeric(a.chave_documento) === normalizeAlphanumeric(parsedDoc.chaveDocumento) &&
-        a.protocolo_aceitacao_sefaz === parsedDoc.protocoloAceitacaoSefaz &&
-        a.policy_id === policy.id &&
-        a.status === 'SUCESSO'
+      (averbacao) =>
+        normalizeAlphanumeric(averbacao.chave_documento) === normalizeAlphanumeric(parsedDoc.chaveDocumento) &&
+        averbacao.protocolo_aceitacao_sefaz === parsedDoc.protocoloAceitacaoSefaz &&
+        averbacao.policy_id === policy.id &&
+        averbacao.status === 'SUCESSO'
     );
     if (jaAverbado) {
-      const fmt = ResponseEngine.formatResponse('ERR-4007', {
-        // status === 'SUCESSO' garante numero_averbacao preenchido; o '' é só para satisfazer o
-        // tipo (agora opcional, já que registros status='ERRO' não têm número).
-        NUMERO_AVERBACAO_EXISTENTE: jaAverbado.numero_averbacao ?? ''
-      });
+      const replacements = { NUMERO_AVERBACAO_EXISTENTE: jaAverbado.numero_averbacao ?? '' };
+      const fmt = ResponseEngine.formatResponse('ERR-4007', replacements);
       this.persistErro(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
-      return this.erro('ERR-4007', {
-        // status === 'SUCESSO' garante numero_averbacao preenchido; o '' é só para satisfazer o
-        // tipo (agora opcional, já que registros status='ERRO' não têm número).
-        NUMERO_AVERBACAO_EXISTENTE: jaAverbado.numero_averbacao ?? ''
-      });
+      return this.erro('ERR-4007', replacements);
     }
 
-    // 7. Validação de Inatividade / Apólice Vencida com Flag de Exceção
-    //
-    // Antes, "apólice vencida" só era detectado via policy.status !== 'ATIVA' — um campo MANUAL.
-    // Se ninguém trocasse esse campo à mão quando a vigência realmente expirava, o sistema
-    // aceitava a averbação normalmente mesmo com a data de vigência já passada. Agora a data de
-    // vigência (vigencia_fim) também é checada automaticamente, sem depender de ninguém lembrar
-    // de atualizar o status — mas continua respeitando o mesmo bypass (permitir_inativo_vencido)
-    // já usado pra apólice vencida/cadastro inativo, já que é exatamente o caso que esse flag
-    // sempre disse cobrir.
     const isTenantInactive = tenant.status === 'INATIVO';
     const isPolicyStatusInactive = policy.status !== 'ATIVA';
     const isPolicyExpiredByDate = policyDateValidity.reason === 'AFTER_POLICY_END';
-    // Fase 2 do pacote de 21/09 (Suspensão de Apólice) — "está suspensa agora" é sempre
-    // calculado a partir das duas datas, nunca lido de um boolean solto (ver comentário em
-    // Policy.suspensa_desde em types/index.ts): evita ficar suspensa para sempre depois que o
-    // prazo determinado já passou.
-    const isPolicySuspensa =
-      Boolean(policy.suspensa_desde) &&
-      new Date(policy.suspensa_desde!).getTime() <= now() &&
-      (!policy.suspensa_ate || new Date(policy.suspensa_ate).getTime() >= now());
+    const isPolicySuspensa = Boolean(policy.suspensa_desde) && new Date(policy.suspensa_desde!).getTime() <= now() && (!policy.suspensa_ate || new Date(policy.suspensa_ate).getTime() >= now());
     const isInactiveProblem = isTenantInactive || isPolicyStatusInactive || isPolicyExpiredByDate || isPolicySuspensa;
-
     let hasWarningBypass = false;
 
     if (isInactiveProblem) {
@@ -647,25 +390,12 @@ export class AverbacaoService {
         hasWarningBypass = true;
         regrasAplicadas.push('Bypass de apólice vencida/cadastro inativo/suspensa aplicado (exceção configurada na apólice).');
       } else {
-        // ERR-4002/ERR-4003 continuam recusa definitiva (cadastro/apólice inativos são um estado
-        // administrativo, não uma pendência a resolver por decisão pontual). ERR-4011 (vigência
-        // vencida) e ERR-4017 (nova — apólice suspensa) viram PENDENTE_APROVACAO — Fase 4 do
-        // pacote de 21/09 (documentos-pendentes-campos-api.md pede exatamente esses dois como
-        // cenários de "Documentos Pendentes", não recusa definitiva).
-        const errCode = isTenantInactive
-          ? 'ERR-4002'
-          : isPolicyStatusInactive
-            ? 'ERR-4003'
-            : isPolicySuspensa
-              ? 'ERR-4017'
-              : 'ERR-4011';
-        const fmt =
-          errCode === 'ERR-4011'
-            ? ResponseEngine.formatResponse(errCode, { VIGENCIA_FIM: policy.vigencia_fim })
-            : errCode === 'ERR-4017'
-              ? ResponseEngine.formatResponse(errCode, { SUSPENSA_ATE: policy.suspensa_ate ?? 'prazo indeterminado' })
-              : ResponseEngine.formatResponse(errCode);
-
+        const errCode = isTenantInactive ? 'ERR-4002' : isPolicyStatusInactive ? 'ERR-4003' : isPolicySuspensa ? 'ERR-4017' : 'ERR-4011';
+        const fmt = errCode === 'ERR-4011'
+          ? ResponseEngine.formatResponse(errCode, { VIGENCIA_FIM: policy.vigencia_fim })
+          : errCode === 'ERR-4017'
+            ? ResponseEngine.formatResponse(errCode, { SUSPENSA_ATE: policy.suspensa_ate ?? 'prazo indeterminado' })
+            : ResponseEngine.formatResponse(errCode);
         if (errCode === 'ERR-4011' || errCode === 'ERR-4017') {
           const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas);
           return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
@@ -675,13 +405,10 @@ export class AverbacaoService {
       }
     }
 
-    // 8. Validação do Motor de Regras (tags do documento + coberturas adicionais + variáveis de apólice)
     const ruleResult = RuleEngineService.validate(policy, parsedDoc, dto.supplemented_vars || {});
-
     if (!ruleResult.valid) {
       const missingVarName = ruleResult.missingVariables.join(', ');
       const recToken = `rec_${uuidv4().replace(/-/g, '')}`;
-
       const newRecoverySession: RecoverySession = {
         token: recToken,
         tenant_id: tenant.id,
@@ -695,74 +422,43 @@ export class AverbacaoService {
       };
       dbStore.recoverySessions.push(newRecoverySession);
       dbStore.persist();
-
-      return this.erro(
-        'ERR-4004',
-        { NOME_VARIAVEL: missingVarName },
-        {
-          variaveis_faltantes: ruleResult.missingVariables,
-          recuperacao: {
-            token_recuperacao: recToken,
-            url_preenchimento: `${appBaseUrl}/recuperar/${recToken}`,
-            instrucao:
-              'O cliente pode preencher a variável pelo link acima, reenviar a requisição suplementando o campo, ou corrigir diretamente dentro do próprio Portal do Transportador.'
-          }
+      return this.erro('ERR-4004', { NOME_VARIAVEL: missingVarName }, {
+        variaveis_faltantes: ruleResult.missingVariables,
+        recuperacao: {
+          token_recuperacao: recToken,
+          url_preenchimento: `${appBaseUrl}/recuperar/${recToken}`,
+          instrucao: 'O cliente pode preencher a variável pelo link acima, reenviar a requisição suplementando o campo, ou corrigir diretamente dentro do próprio Portal do Transportador.'
         }
-      );
-    }
-
-    // Se veio de uma sessão de recuperação válida, marcar como utilizada
-    if (recoverySession) {
-      recoverySession.utilizada = true;
-    }
-
-    // 9. Somar Coberturas Adicionais Monetárias ao Valor Final da Averbação
-    const { total: totalCoberturas, aplicadas: coberturasAplicadas } = RuleEngineService.sumMonetaryCoverages(
-      policy,
-      parsedDoc,
-      dto.supplemented_vars || {}
-    );
-    let valorConsiderado = parsedDoc.valorCarga + totalCoberturas;
-    for (const c of coberturasAplicadas) {
-      regrasAplicadas.push(`Cobertura adicional '${c.titulo}' localizada e somada (R$ ${c.valor.toFixed(2)}).`);
-    }
-
-    // 9b. Checagem de LMI (Limite Máximo de Garantia) — antes, policy.lmi era gravado e editável
-    // pela seguradora nas telas de cadastro/edição de apólice, mas nunca era comparado com o
-    // valor da averbação em nenhum lugar do fluxo: dava pra averbar um valor acima do limite
-    // contratado sem nenhum aviso. Só aplica quando a apólice tem um LMI configurado (campo
-    // opcional) — sem LMI cadastrado, não há limite a enforçar.
-    //
-    // Fase 4 do pacote de 21/09 (Tratamento de Recusas, Bloco 1) — o excedente não é mais sempre
-    // uma recusa definitiva: passa por `avaliarLimiteComEstrategia`, que decide entre aprovar
-    // (com ou sem truncar), enfileirar como pendência, ou recusar, conforme a estratégia
-    // configurada na apólice (padrão 'exigir-codigo', igual ao descrito no relatório).
-    const lmiSnapshot = policy.lmi;
-    if (policy.lmi !== undefined && valorConsiderado > policy.lmi) {
-      const avaliacao = this.avaliarLimiteComEstrategia({
-        valorConsiderado,
-        limite: policy.lmi,
-        tipoLimite: 'LMI',
-        businessConfig,
-        policy,
-        codigoLiberacaoInformado: dto.codigo_liberacao
       });
-      const replacements = { VALOR_AVERBACAO: valorConsiderado.toFixed(2), LMI_APOLICE: policy.lmi.toFixed(2) };
+    }
 
+    if (recoverySession) recoverySession.utilizada = true;
+
+    const { total: totalCoberturas, aplicadas: coberturasAplicadas } = RuleEngineService.sumMonetaryCoverages(policy, parsedDoc, dto.supplemented_vars || {});
+    let valorConsiderado = parsedDoc.valorCarga + totalCoberturas;
+    for (const cobertura of coberturasAplicadas) {
+      regrasAplicadas.push(`Cobertura adicional '${cobertura.titulo}' localizada e somada (R$ ${cobertura.valor.toFixed(2)}).`);
+    }
+
+    const lmiSnapshot = policy.lmi;
+    const lmiAvailability = PolicyFinancialLimitsService.calculateLmiAvailability(policy);
+    const lmiDisponivel = lmiAvailability.available_lmi;
+    if (lmiAvailability.reserved_lmi > 0 && lmiSnapshot !== undefined) {
+      const detalhes = lmiAvailability.reservations.map((item) => `${item.titulo}: R$ ${item.valor.toFixed(2)}`).join('; ');
+      regrasAplicadas.push(`LMI contratual R$ ${lmiSnapshot.toFixed(2)}; reservas de coberturas adicionais R$ ${lmiAvailability.reserved_lmi.toFixed(2)} (${detalhes}); LMI disponível R$ ${(lmiDisponivel ?? 0).toFixed(2)}.`);
+    }
+
+    if (lmiDisponivel !== undefined && valorConsiderado > lmiDisponivel) {
+      const avaliacao = this.avaliarLimiteComEstrategia({ valorConsiderado, limite: lmiDisponivel, tipoLimite: 'LMI', businessConfig, policy, codigoLiberacaoInformado: dto.codigo_liberacao });
+      const replacements = { VALOR_AVERBACAO: valorConsiderado.toFixed(2), LMI_APOLICE: lmiDisponivel.toFixed(2) };
       if (avaliacao.resultado === 'aprovado') {
         valorConsiderado = avaliacao.valorFinal;
-        if (avaliacao.codigoConsumido) {
-          regrasAplicadas.push(`Código de liberação '${avaliacao.codigoConsumido}' aplicado para o excedente do LMI.`);
-        } else if (avaliacao.valorFinal < parsedDoc.valorCarga + totalCoberturas) {
-          regrasAplicadas.push(`Valor truncado no LMI da apólice (R$ ${policy.lmi.toFixed(2)}), conforme estratégia configurada.`);
-        } else {
-          regrasAplicadas.push('Excedente do LMI aceito sem trava, conforme estratégia configurada na apólice.');
-        }
+        if (avaliacao.codigoConsumido) regrasAplicadas.push(`Código de liberação '${avaliacao.codigoConsumido}' aplicado para o excedente do LMI disponível.`);
+        else if (avaliacao.valorFinal < parsedDoc.valorCarga + totalCoberturas) regrasAplicadas.push(`Valor truncado no LMI disponível da apólice (R$ ${lmiDisponivel.toFixed(2)}), conforme estratégia configurada.`);
+        else regrasAplicadas.push('Excedente do LMI disponível aceito sem trava, conforme estratégia configurada na apólice.');
       } else if (avaliacao.resultado === 'pendente') {
         const fmt = ResponseEngine.formatResponse('ERR-4010', replacements);
-        const registro = this.persistPendente(
-          tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas, valorConsiderado, lmiSnapshot
-        );
+        const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas, valorConsiderado, lmiSnapshot);
         return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
       } else {
         const fmt = ResponseEngine.formatResponse('ERR-4010', replacements);
@@ -771,93 +467,41 @@ export class AverbacaoService {
       }
     }
 
-    // 9c. Sublimites (aba "Sublimites" da Ficha do Segurado) — achado da auditoria de 28/08: acima
-    // do LMI da apólice inteira, a seguradora pode cadastrar um teto menor para uma condição mais
-    // específica, mas isso nunca era comparado com o valor da averbação aqui. Ampliado em 05/09
-    // (item D-10 do relatório técnico do wizard de cadastro, compartilhado pelo usuário): a
-    // seguradora agora pode cadastrar um sublimite por mercadoria (como antes), por CNPJ do
-    // tomador, ou pela combinação dos dois — quando mais de um bate com o mesmo documento, a
-    // condição mais específica prevalece: tomador_mercadoria > tomador > mercadoria. A
-    // comparação de mercadoria continua exigindo correspondência EXATA da palavra-chave (sem
-    // distinguir maiúsculas/acentos) com o produto predominante do documento (proPred, hoje só
-    // extraído de CT-e) — não por substring, para não recusar uma averbação por coincidência de
-    // texto livre. `tipo_condicao` ausente (sublimites cadastrados antes do D-10) é tratado como
-    // 'mercadoria', preservando o comportamento anterior.
-    const normalizeProduto = (v: string) =>
-      v
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')
-        .trim()
-        .toLowerCase();
-    const produtoNormalizado = parsedDoc.produtoPredominante
-      ? normalizeProduto(parsedDoc.produtoPredominante)
-      : undefined;
+    const normalizeProduto = (value: string) => value.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+    const produtoNormalizado = parsedDoc.produtoPredominante ? normalizeProduto(parsedDoc.produtoPredominante) : undefined;
     const cnpjTomadorDoc = norm(parsedDoc.cnpjTomador);
-
-    const PRIORIDADE_TIPO_CONDICAO: Record<string, number> = {
-      tomador_mercadoria: 3,
-      tomador: 2,
-      mercadoria: 1
-    };
-
-    const sublimitesCandidatos = dbStore.policySublimites.filter((s) => {
-      if (s.policy_id !== policy.id) return false;
-      const tipo = s.tipo_condicao ?? 'mercadoria';
-      const mercadoriaBate =
-        produtoNormalizado !== undefined && s.tag !== undefined && normalizeProduto(s.tag) === produtoNormalizado;
-      const tomadorBate = cnpjTomadorDoc !== undefined && norm(s.cnpj_tomador) === cnpjTomadorDoc;
-
+    const prioridade: Record<string, number> = { tomador_mercadoria: 3, tomador: 2, mercadoria: 1 };
+    const sublimitesCandidatos = dbStore.policySublimites.filter((sublimite) => {
+      if (sublimite.policy_id !== policy!.id) return false;
+      const tipo = sublimite.tipo_condicao ?? 'mercadoria';
+      const mercadoriaBate = produtoNormalizado !== undefined && sublimite.tag !== undefined && normalizeProduto(sublimite.tag) === produtoNormalizado;
+      const tomadorBate = cnpjTomadorDoc !== undefined && norm(sublimite.cnpj_tomador) === cnpjTomadorDoc;
       if (tipo === 'mercadoria') return mercadoriaBate;
       if (tipo === 'tomador') return tomadorBate;
-      return mercadoriaBate && tomadorBate; // tomador_mercadoria — os dois precisam bater
+      return mercadoriaBate && tomadorBate;
     });
-
-    const sublimite = sublimitesCandidatos.sort(
-      (a, b) =>
-        PRIORIDADE_TIPO_CONDICAO[b.tipo_condicao ?? 'mercadoria'] -
-        PRIORIDADE_TIPO_CONDICAO[a.tipo_condicao ?? 'mercadoria']
-    )[0];
-
+    const sublimite = sublimitesCandidatos.sort((a, b) => prioridade[b.tipo_condicao ?? 'mercadoria'] - prioridade[a.tipo_condicao ?? 'mercadoria'])[0];
     let sublimiteSnapshot: number | undefined;
     if (sublimite) {
       const valorSublimite = RuleEngineService.parseMoneyBR(sublimite.valor);
       sublimiteSnapshot = isNaN(valorSublimite) ? undefined : valorSublimite;
       if (!isNaN(valorSublimite) && valorConsiderado > valorSublimite) {
         const tipoSublimite = sublimite.tipo_condicao ?? 'mercadoria';
-        const descricaoCondicao =
-          tipoSublimite === 'tomador'
-            ? `tomador ${sublimite.cnpj_tomador}`
-            : tipoSublimite === 'tomador_mercadoria'
-              ? `tomador ${sublimite.cnpj_tomador} + mercadoria '${sublimite.tag}'`
-              : `mercadoria '${sublimite.tag}'`;
-        const replacements = {
-          VALOR_AVERBACAO: valorConsiderado.toFixed(2),
-          MERCADORIA: descricaoCondicao,
-          SUBLIMITE: valorSublimite.toFixed(2)
-        };
-
-        // Mesma estratégia do LMI (Bloco 1), mas sublimite nunca consome codigo_liberacao — ver
-        // comentário em avaliarLimiteComEstrategia.
-        const avaliacao = this.avaliarLimiteComEstrategia({
-          valorConsiderado,
-          limite: valorSublimite,
-          tipoLimite: 'SUBLIMITE',
-          businessConfig,
-          policy
-        });
-
+        const descricaoCondicao = tipoSublimite === 'tomador'
+          ? `tomador ${sublimite.cnpj_tomador}`
+          : tipoSublimite === 'tomador_mercadoria'
+            ? `tomador ${sublimite.cnpj_tomador} + mercadoria '${sublimite.tag}'`
+            : `mercadoria '${sublimite.tag}'`;
+        const replacements = { VALOR_AVERBACAO: valorConsiderado.toFixed(2), MERCADORIA: descricaoCondicao, SUBLIMITE: valorSublimite.toFixed(2) };
+        const avaliacao = this.avaliarLimiteComEstrategia({ valorConsiderado, limite: valorSublimite, tipoLimite: 'SUBLIMITE', businessConfig, policy });
         if (avaliacao.resultado === 'aprovado') {
           valorConsiderado = avaliacao.valorFinal;
-          regrasAplicadas.push(
-            valorConsiderado < parsedDoc.valorCarga + totalCoberturas
-              ? `Valor truncado no sublimite (${descricaoCondicao}, R$ ${valorSublimite.toFixed(2)}), conforme estratégia configurada.`
-              : `Excedente do sublimite (${descricaoCondicao}) aceito sem trava, conforme estratégia configurada na apólice.`
-          );
+          regrasAplicadas.push(valorConsiderado < parsedDoc.valorCarga + totalCoberturas
+            ? `Valor truncado no sublimite (${descricaoCondicao}, R$ ${valorSublimite.toFixed(2)}), conforme estratégia configurada.`
+            : `Excedente do sublimite (${descricaoCondicao}) aceito sem trava, conforme estratégia configurada na apólice.`);
         } else if (avaliacao.resultado === 'pendente') {
           const fmt = ResponseEngine.formatResponse('ERR-4013', replacements);
-          const registro = this.persistPendente(
-            tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas, valorConsiderado, lmiSnapshot, sublimiteSnapshot
-          );
+          const registro = this.persistPendente(tenant, policy, parsedDoc, rawXmlRecord.id, fmt, regrasAplicadas, valorConsiderado, lmiSnapshot, sublimiteSnapshot);
           return { status: 'pendente', codigo: fmt.codigo, mensagem: fmt.mensagem, averbacao_id: registro.id };
         } else {
           const fmt = ResponseEngine.formatResponse('ERR-4013', replacements);
@@ -867,13 +511,6 @@ export class AverbacaoService {
       }
     }
 
-    // 9d. Prazos e Datas (aba Regras de Negócio da Ficha do Segurado) — Bloco "Prazo de Emissão" e
-    // "Regra de Prazo de Embarque". Achado da auditoria de 28/08: também salvos e exibidos, nunca
-    // checados. Só aplicados quando a seguradora salvou explicitamente essa configuração NESTA
-    // apólice (ver comentário de getBusinessConfig em ruleEngine.ts) — nenhuma apólice que nunca
-    // abriu esta aba passa a ser bloqueada por um prazo "padrão" inventado por nós. O Bloco "Prazo
-    // de Cancelamento" NÃO foi implementado nesta rodada — o sistema ainda não tem nenhum fluxo de
-    // cancelamento de averbação para aplicar esse prazo contra (ver achado registrado no backlog).
     const prazoErro = this.checkPrazos(businessConfig, parsedDoc.tagsMap);
     if (prazoErro) {
       const fmt = ResponseEngine.formatResponse(prazoErro.codigo, prazoErro.replacements);
@@ -885,29 +522,15 @@ export class AverbacaoService {
       return this.erro(prazoErro.codigo, prazoErro.replacements);
     }
 
-    // 10. Tratamento de Ambiente Sefaz (tpAmb) — homologação nunca tem validade jurídica real
     const isHomologacaoSefaz = parsedDoc.tpAmbSefaz === 2;
-    if (isHomologacaoSefaz) {
-      regrasAplicadas.push(
-        'Documento identificado como emitido no ambiente de HOMOLOGAÇÃO do Sefaz (tpAmb=2) — averbação processada apenas para fins de teste, sem validade jurídica.'
-      );
-    }
+    if (isHomologacaoSefaz) regrasAplicadas.push('Documento identificado como emitido no ambiente de HOMOLOGAÇÃO do Sefaz (tpAmb=2) — averbação processada apenas para fins de teste, sem validade jurídica.');
 
-    // 12. Gerar Número de Averbação (formato de mercado) + Protocolo Interno (nosso, independente)
     const timestampISO = new Date(now()).toISOString();
     const testePrefix = isHomologacaoSefaz ? 'TESTE-' : '';
-    const numeroAverbacao = `${testePrefix}AVB-${dto.ramo}-${now().toString().slice(-6)}-${randomBytes(2)
-      .toString('hex')
-      .toUpperCase()}`;
+    const numeroAverbacao = `${testePrefix}AVB-${dto.ramo}-${now().toString().slice(-6)}-${randomBytes(2).toString('hex').toUpperCase()}`;
     const protocoloInterno = `PI-${uuidv4()}`;
-
-    // 13. Registrar Averbação
     const codigoSucesso = hasWarningBypass ? 'SUC-2001' : 'SUC-2000';
-    const resFormat = ResponseEngine.formatResponse(codigoSucesso, {
-      NUMERO_AVERBACAO: numeroAverbacao,
-      TIMESTAMP: timestampISO
-    });
-
+    const resFormat = ResponseEngine.formatResponse(codigoSucesso, { NUMERO_AVERBACAO: numeroAverbacao, TIMESTAMP: timestampISO });
     const averbacaoRecord: Averbacao = {
       id: uuidv4(),
       numero_averbacao: numeroAverbacao,
@@ -939,10 +562,8 @@ export class AverbacaoService {
       timestamp: timestampISO,
       created_at: timestampISO
     };
-
     dbStore.averbacoes.unshift(averbacaoRecord);
     dbStore.persist();
-
     return {
       status: hasWarningBypass ? 'aviso' : 'sucesso',
       codigo: resFormat.codigo,
@@ -957,40 +578,24 @@ export class AverbacaoService {
     };
   }
 
-  /**
-   * Fase 4 do pacote de 21/09 — reprocessa um documento PENDENTE_APROVACAO ou ERRO já existente,
-   * a partir do XML já salvo (`RawXMLStore`), sem exigir novo upload. Usado por
-   * `POST /tenant/averbacoes/:id/reenviar`. Cria um NOVO registro de Averbacao (o antigo
-   * permanece intacto para histórico/auditoria) — mesmo padrão de "cada tentativa é um registro"
-   * já usado no resto do motor. `supplementedVars` precisa ser reenviado por quem chama quando a
-   * pendência original dependia de uma variável suplementada (ex.: recuperação) — esse valor não
-   * fica gravado em nenhum lugar hoje, só o XML bruto.
-   */
   public static reenviar(
     averbacaoAnterior: Averbacao,
     appBaseUrl: string,
     codigoLiberacao?: string,
     supplementedVars?: Record<string, any>
   ): AverbacaoResponseDTO {
-    const rawXml = dbStore.rawXmlStore.find((r) => r.id === averbacaoAnterior.raw_xml_id);
-    if (!rawXml) {
-      return this.erro('ERR-4005', {}, {});
-    }
-
-    const policyAnterior = dbStore.policies.find((p) => p.id === averbacaoAnterior.policy_id);
+    const rawXml = dbStore.rawXmlStore.find((record) => record.id === averbacaoAnterior.raw_xml_id);
+    if (!rawXml) return this.erro('ERR-4005', {}, {});
+    const policyAnterior = dbStore.policies.find((policy) => policy.id === averbacaoAnterior.policy_id);
     const motivoAnterior = averbacaoAnterior.motivo_pendencia ?? averbacaoAnterior.codigo_resposta;
     const rematchearPorVigencia = motivoAnterior === 'ERR-4021';
-
-    return this.process(
-      {
-        tenant_id: averbacaoAnterior.tenant_id,
-        ramo: policyAnterior?.ramo ?? ('RCTRC' as RamoApolice),
-        ...(rematchearPorVigencia ? {} : { policy_id: averbacaoAnterior.policy_id }),
-        xml_content: rawXml.content_xml,
-        codigo_liberacao: codigoLiberacao,
-        supplemented_vars: supplementedVars
-      },
-      appBaseUrl
-    );
+    return this.process({
+      tenant_id: averbacaoAnterior.tenant_id,
+      ramo: policyAnterior?.ramo ?? ('RCTRC' as RamoApolice),
+      ...(rematchearPorVigencia ? {} : { policy_id: averbacaoAnterior.policy_id }),
+      xml_content: rawXml.content_xml,
+      codigo_liberacao: codigoLiberacao,
+      supplemented_vars: supplementedVars
+    }, appBaseUrl);
   }
 }

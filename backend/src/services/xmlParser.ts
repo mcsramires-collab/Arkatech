@@ -16,25 +16,26 @@ export interface ParsedDocumentData {
   cnpjExpedidor?: string;
   cnpjRecebedor?: string;
   cnpjTomador?: string;
-  /**
-   * Item 6.6.2 do relatório técnico de 20/09 (compartilhado pelo usuário) — nova função
-   * TRANSPORTADOR da Regra A: segurado que transporta a carga de uma NF-e sem ser quem a emite.
-   * Extraído de transp/transporta/CNPJ (grupo de transporte da NF-e) — só faz sentido para NF-e;
-   * no CT-e o emissor já é sempre o próprio transportador (EMISSOR cobre esse caso).
-   */
   cnpjTransportador?: string;
-  serie?: string; // série do documento (ide.serie no CT-e/NF-e/MDF-e)
+  /** NF-e: modalidade do frete em transp/modFrete. */
+  modFrete?: string;
+  /** NF-e: CNPJ/CPF autorizados a acessar o XML (grupo autXML). */
+  autXmlIds?: string[];
+  /** Chaves NF-e referenciadas pelo CT-e/MDF-e atual. */
+  referencedNfeKeys?: string[];
+  /** Chaves CT-e referenciadas pelo MDF-e atual. */
+  referencedCteKeys?: string[];
+  serie?: string;
   ufOrigem?: string;
   ufDestino?: string;
   produtoPredominante?: string;
-  tpAmbSefaz?: 1 | 2; // 1=produção, 2=homologação
-  protocoloAceitacaoSefaz?: string; // nProt do protXXX/infProt
-  cStatAutorizacaoSefaz?: string; // cStat do protXXX/infProt (100/150 = autorizado)
+  tpAmbSefaz?: 1 | 2;
+  protocoloAceitacaoSefaz?: string;
+  cStatAutorizacaoSefaz?: string;
 }
 
 export interface ParsedCancelamentoData {
   chaveDocumentoCancelado: string;
-  /** Precisa ser '110111' (código padrão Sefaz de Cancelamento) — validado por CancelamentoService. */
   tipoEvento: string;
   protocoloEvento?: string;
   justificativa?: string;
@@ -45,21 +46,24 @@ export class XMLParserService {
   private static parser = new FastXMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
-    // Sem isso, o fast-xml-parser converte automaticamente qualquer tag cujo conteúdo
-    // "pareça" numérico (ex.: <CNPJ>11111111000111</CNPJ>, <serie>01</serie>) para
-    // Number — o que quebra CNPJs (perde zeros à esquerda / vira número em vez de
-    // string) e derrubava o processo inteiro em services/averbacao.ts (norm() chama
-    // .replace() esperando string). Os poucos campos que precisam ser número
-    // (vCarga, tpAmb etc.) já são explicitamente convertidos com Number(...) abaixo.
     parseTagValue: false
   });
 
-  /**
-   * Extrai variáveis embutidas em um campo de observação livre (xObs / infCpl / xObsMDFe)
-   * no formato "NOME_VARIAVEL=valor; OUTRA_VARIAVEL=valor". É assim que o sistema lê,
-   * dentro de um campo texto do documento fiscal, o preenchimento de variáveis de apólice
-   * que não têm uma tag XML própria no padrão Sefaz.
-   */
+  private static asArray<T = any>(value: T | T[] | undefined | null): T[] {
+    if (value === undefined || value === null) return [];
+    return Array.isArray(value) ? value : [value];
+  }
+
+  private static uniqueStrings(values: Array<unknown>): string[] {
+    return Array.from(
+      new Set(
+        values
+          .map((value) => (value === undefined || value === null ? '' : String(value).trim()))
+          .filter(Boolean)
+      )
+    );
+  }
+
   private static extractObsVariables(obsText: string | undefined | null): Record<string, string> {
     const result: Record<string, string> = {};
     if (!obsText) return result;
@@ -75,10 +79,6 @@ export class XMLParserService {
     return result;
   }
 
-  /**
-   * Extrai variáveis dos grupos <obsCont>/<obsFisco> repetíveis (xCampo/xTexto), comuns
-   * a CT-e e NF-e, complementando o que vier em texto livre no xObs/infCpl.
-   */
   private static extractObsContVariables(obsCont: any): Record<string, string> {
     const result: Record<string, string> = {};
     if (!obsCont) return result;
@@ -91,13 +91,39 @@ export class XMLParserService {
     return result;
   }
 
-  /**
-   * Realiza a leitura e extração de dados do XML ou JSON do documento Fiscal.
-   */
+  private static extractCteReferencedNfeKeys(cteNode: any): string[] {
+    const infDoc = cteNode?.infCTeNorm?.infDoc;
+    return this.uniqueStrings(
+      this.asArray(infDoc?.infNFe).flatMap((item: any) => [item?.chave, item?.chNFe])
+    );
+  }
+
+  private static extractMdfeReferences(mdfeNode: any): {
+    nfeKeys: string[];
+    cteKeys: string[];
+  } {
+    const municipios = this.asArray(mdfeNode?.infDoc?.infMunDescarga);
+    const nfeKeys: unknown[] = [];
+    const cteKeys: unknown[] = [];
+
+    for (const municipio of municipios as any[]) {
+      for (const item of this.asArray(municipio?.infNFe) as any[]) {
+        nfeKeys.push(item?.chNFe, item?.chave);
+      }
+      for (const item of this.asArray(municipio?.infCTe) as any[]) {
+        cteKeys.push(item?.chCTe, item?.chave);
+      }
+    }
+
+    return {
+      nfeKeys: this.uniqueStrings(nfeKeys),
+      cteKeys: this.uniqueStrings(cteKeys)
+    };
+  }
+
   public static parse(content: string): ParsedDocumentData {
     const trimmed = content.trim();
 
-    // 1. Se for um JSON direto
     if (trimmed.startsWith('{')) {
       try {
         const json = JSON.parse(trimmed);
@@ -117,6 +143,10 @@ export class XMLParserService {
           cnpjRecebedor: json.cnpjRecebedor,
           cnpjTomador: json.cnpjTomador,
           cnpjTransportador: json.cnpjTransportador,
+          modFrete: json.modFrete !== undefined ? String(json.modFrete) : undefined,
+          autXmlIds: this.uniqueStrings(json.autXmlIds || json.autXML || []),
+          referencedNfeKeys: this.uniqueStrings(json.referencedNfeKeys || []),
+          referencedCteKeys: this.uniqueStrings(json.referencedCteKeys || []),
           serie: json.serie !== undefined ? String(json.serie) : undefined,
           tpAmbSefaz: json.tpAmbSefaz,
           protocoloAceitacaoSefaz: json.protocoloAceitacaoSefaz,
@@ -128,7 +158,6 @@ export class XMLParserService {
       }
     }
 
-    // 2. Se for um XML Sefaz
     try {
       const parsedObj = this.parser.parse(trimmed);
       let tipoDocumento: TipoDocumento = 'CTE';
@@ -143,6 +172,10 @@ export class XMLParserService {
       let cnpjRecebedor: string | undefined;
       let cnpjTransportador: string | undefined;
       let cnpjTomador: string | undefined;
+      let modFrete: string | undefined;
+      let autXmlIds: string[] = [];
+      let referencedNfeKeys: string[] = [];
+      let referencedCteKeys: string[] = [];
       let serie: string | undefined;
       let ufOrigem: string | undefined;
       let ufDestino: string | undefined;
@@ -155,7 +188,6 @@ export class XMLParserService {
       let obsText = '';
       let obsContRaw: any;
 
-      // CTe Parser (cteProc = CTe + protCTe)
       if (parsedObj.CTe || parsedObj.cteProc) {
         recognizedDocument = true;
         tipoDocumento = 'CTE';
@@ -178,21 +210,19 @@ export class XMLParserService {
         tpAmbSefaz = cteNode.ide?.tpAmb ? Number(cteNode.ide.tpAmb) as 1 | 2 : undefined;
         protocoloAceitacaoSefaz = protNode?.nProt;
         cStatAutorizacaoSefaz = protNode?.cStat !== undefined ? String(protNode.cStat) : undefined;
+        referencedNfeKeys = this.extractCteReferencedNfeKeys(cteNode);
 
         tagsMap['vCarga'] = valorCarga;
         tagsMap['nCT'] = numeroDocumento;
         tagsMap['dhEmi'] = dataEmissao;
-        // Data de autorização Sefaz — alternativa a dhEmi como "campo base" do Prazo de Emissão
-        // (aba Regras de Negócio da Ficha do Segurado, ver services/averbacao.ts checkPrazos()).
         tagsMap['dhRecBto'] = protNode?.dhRecbto;
         tagsMap['CFOP'] = cteNode.ide?.CFOP;
         tagsMap['cUF'] = cteNode.ide?.cUF;
+        tagsMap['referencedNfeKeys'] = referencedNfeKeys;
         obsText = cteNode.compl?.xObs || '';
         obsContRaw = cteNode.compl?.ObsCont || cteNode.compl?.obsCont;
         tagsMap['xObs'] = obsText;
-      }
-      // NFe Parser (nfeProc = NFe + protNFe)
-      else if (parsedObj.NFe || parsedObj.nfeProc) {
+      } else if (parsedObj.NFe || parsedObj.nfeProc) {
         recognizedDocument = true;
         tipoDocumento = 'NFE';
         const nfeNode = parsedObj.NFe?.infNFe || parsedObj.nfeProc?.NFe?.infNFe || {};
@@ -203,6 +233,10 @@ export class XMLParserService {
         cnpjEmitente = nfeNode.emit?.CNPJ;
         cnpjDestinatario = nfeNode.dest?.CNPJ;
         cnpjTransportador = nfeNode.transp?.transporta?.CNPJ;
+        modFrete = nfeNode.transp?.modFrete !== undefined ? String(nfeNode.transp.modFrete) : undefined;
+        autXmlIds = this.uniqueStrings(
+          this.asArray(nfeNode.autXML).flatMap((item: any) => [item?.CNPJ, item?.CPF])
+        );
         dataEmissao = nfeNode.ide?.dhEmi || nfeNode.ide?.dEmi;
         serie = nfeNode.ide?.serie !== undefined ? String(nfeNode.ide.serie) : undefined;
         tpAmbSefaz = nfeNode.ide?.tpAmb ? Number(nfeNode.ide.tpAmb) as 1 | 2 : undefined;
@@ -214,12 +248,12 @@ export class XMLParserService {
         tagsMap['nNF'] = numeroDocumento;
         tagsMap['dhEmi'] = dataEmissao;
         tagsMap['dhRecBto'] = protNode?.dhRecbto;
+        tagsMap['modFrete'] = modFrete;
+        tagsMap['autXML'] = autXmlIds;
         obsText = nfeNode.infAdic?.infCpl || '';
         obsContRaw = nfeNode.infAdic?.obsCont;
         tagsMap['infCpl'] = obsText;
-      }
-      // NFSe Parser (padrão ADN/DPS)
-      else if (parsedObj.CompNfse || parsedObj.Nfse || parsedObj.DPS) {
+      } else if (parsedObj.CompNfse || parsedObj.Nfse || parsedObj.DPS) {
         recognizedDocument = true;
         tipoDocumento = 'NFSE';
         const nfseNode = parsedObj.CompNfse?.Nfse?.infNfse || parsedObj.Nfse?.infNfse || {};
@@ -228,19 +262,14 @@ export class XMLParserService {
         valorCarga = Number(nfseNode.valores?.vServicos || dpsNode.serv?.vServPrest?.vReceb || 0);
         cnpjEmitente = nfseNode.prestador?.CNPJ || dpsNode.prest?.CNPJ;
         cnpjDestinatario = nfseNode.tomador?.CNPJ || dpsNode.toma?.CNPJ;
-        dataEmissao =
-          nfseNode.dhEmi ||
-          nfseNode.dataEmissao ||
-          dpsNode.dhEmi;
+        dataEmissao = nfseNode.dhEmi || nfseNode.dataEmissao || dpsNode.dhEmi;
         tpAmbSefaz = (nfseNode.tpAmb || dpsNode.tpAmb) ? Number(nfseNode.tpAmb || dpsNode.tpAmb) as 1 | 2 : undefined;
 
         tagsMap['vServicos'] = valorCarga;
         tagsMap['numero'] = numeroDocumento;
         tagsMap['dhEmi'] = dataEmissao;
         obsText = nfseNode.outrasInformacoes || dpsNode.xInfComp || '';
-      }
-      // MDFe Parser (mdfeProc = MDFe + protMDFe)
-      else if (parsedObj.MDFe || parsedObj.mdfeProc) {
+      } else if (parsedObj.MDFe || parsedObj.mdfeProc) {
         recognizedDocument = true;
         tipoDocumento = 'MDFE';
         const mdfeNode = parsedObj.MDFe?.infMDFe || parsedObj.mdfeProc?.MDFe?.infMDFe || {};
@@ -256,6 +285,9 @@ export class XMLParserService {
         tpAmbSefaz = mdfeNode.ide?.tpAmb ? Number(mdfeNode.ide.tpAmb) as 1 | 2 : undefined;
         protocoloAceitacaoSefaz = protNode?.nProt;
         cStatAutorizacaoSefaz = protNode?.cStat !== undefined ? String(protNode.cStat) : undefined;
+        const references = this.extractMdfeReferences(mdfeNode);
+        referencedNfeKeys = references.nfeKeys;
+        referencedCteKeys = references.cteKeys;
 
         tagsMap['nMDF'] = numeroDocumento;
         tagsMap['dhEmi'] = dataEmissao;
@@ -263,8 +295,9 @@ export class XMLParserService {
         tagsMap['vCarga'] = valorCarga;
         tagsMap['UFIni'] = mdfeNode.ide?.UFIni;
         tagsMap['UFFim'] = mdfeNode.ide?.UFFim;
+        tagsMap['referencedNfeKeys'] = referencedNfeKeys;
+        tagsMap['referencedCteKeys'] = referencedCteKeys;
 
-        // Grupo <seg> — obrigatório no modal rodoviário (validado pelo Sefaz via rejeições 698/699)
         const segNode = mdfeNode.seg;
         if (segNode) {
           tagsMap['seg.nApol'] = segNode.nApol;
@@ -281,7 +314,6 @@ export class XMLParserService {
         throw new Error('Documento fiscal não reconhecido.');
       }
 
-      // Extrai variáveis de apólice embutidas no campo de observação (OBS) e no grupo obsCont
       const obsVars = this.extractObsVariables(obsText);
       const obsContVars = this.extractObsContVariables(obsContRaw);
       Object.assign(tagsMap, obsVars, obsContVars);
@@ -301,6 +333,10 @@ export class XMLParserService {
         cnpjRecebedor,
         cnpjTransportador,
         cnpjTomador,
+        modFrete,
+        autXmlIds,
+        referencedNfeKeys,
+        referencedCteKeys,
         serie,
         ufOrigem,
         ufDestino,
@@ -314,25 +350,10 @@ export class XMLParserService {
     }
   }
 
-  /**
-   * Motor de Cancelamento (pacote de 23/09, compartilhado pelo usuário) — lê um EVENTO DE
-   * CANCELAMENTO real do Sefaz (schema totalmente diferente do documento original: é um
-   * `procEventoCTe`/`procEventoNFe`/`procEventoMDFe`, não um `cteProc`/`nfeProc`/`mdfeProc`).
-   * Usado por `CancelamentoService` para validar um pedido de cancelamento antes de aceitar —
-   * decisão do usuário: cancelamento exige o evento real do Sefaz (`tpEvento` 110111), não um
-   * simples registro em texto.
-   *
-   * Cobre os três tipos de documento (CT-e/NF-e/MDF-e) — a estrutura de `detEvento` muda por
-   * tipo (`evCancCTe`/`evCancNFe`/`evCancMDFe`), mas os campos que importam (chave do documento
-   * cancelado, tipo de evento, protocolo, justificativa) seguem o mesmo padrão nos três.
-   */
   public static parseEventoCancelamento(content: string): ParsedCancelamentoData {
     const trimmed = content.trim();
     try {
       const parsedObj = this.parser.parse(trimmed);
-
-      // Localiza o nó <evento>/<infEvento> ou <eventoCTe>/<infEvento>, cobrindo as variações de
-      // nome usadas nos três tipos de documento e em envelopes com/sem o <procEvento...> externo.
       const procEvento =
         parsedObj.procEventoCTe || parsedObj.procEventoNFe || parsedObj.procEventoMDFe || parsedObj;
       const eventoNode = procEvento.evento || procEvento.eventoCTe || procEvento.eventoNFe || procEvento.eventoMDFe;
@@ -343,25 +364,15 @@ export class XMLParserService {
       }
 
       const tipoEvento = String(infEvento.tpEvento ?? '');
-
       const chaveDocumentoCancelado: string | undefined =
         infEvento.chCTe || infEvento.chNFe || infEvento.chMDFe || infEvento['@_chDoc'];
-
-      // detEvento muda de nome por tipo de documento (evCancCTe/evCancNFe/evCancMDFe) — tenta os
-      // três, mais um fallback genérico para XMLs que não seguem exatamente o padrão nomeado.
       const detEvento = infEvento.detEvento;
       const detEspecifico =
         detEvento?.evCancCTe || detEvento?.evCancNFe || detEvento?.evCancMDFe || detEvento;
-
       const justificativa: string | undefined = detEspecifico?.xJust;
-
-      // O protocolo "oficial" do cancelamento vem do <retEvento>/<infEvento>/<nProt> (resposta do
-      // Sefaz), não do <evento> (que é só o pedido) — mas aceita o nProt do próprio detEvento como
-      // fallback, para XMLs que só trazem o evento de ida sem a resposta anexada.
       const retEventoNode = procEvento.retEvento || procEvento.retEventoCTe || procEvento.retEventoNFe || procEvento.retEventoMDFe;
       const protocoloEvento: string | undefined =
         retEventoNode?.infEvento?.nProt || detEspecifico?.nProt || detEspecifico?.nProtCTe;
-
       const dataEvento: string | undefined = infEvento.dhEvento;
 
       if (!chaveDocumentoCancelado) {
