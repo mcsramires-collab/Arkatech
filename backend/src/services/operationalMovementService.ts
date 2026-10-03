@@ -74,7 +74,7 @@ function fiscalDocumentFor(averbacaoId: string, rawXmlId: string) {
 
 function statusLabel(status: string) {
   if (status === 'SUCESSO') return 'AVERBADO';
-  if (status === 'PENDENTE_APROVACAO') return 'PENDENTE';
+  if (status === 'PENDENTE_APROVACAO' || status === 'PENDENTE_ENVIO') return 'PENDENTE';
   if (status === 'CANCELADO' || status === 'CANCELADO_NAO_AVERBADO') return 'CANCELADO';
   return 'RECUSADO';
 }

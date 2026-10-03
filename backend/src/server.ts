@@ -15,6 +15,7 @@ import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
 import tenantIntegrityRoutes from './routes/tenantIntegrity';
 import internalRoutes from './routes/internal';
+import insurerDispatchRoutes from './routes/insurerDispatch';
 import connectorRoutes from './routes/connector';
 import tmsRoutes from './routes/tms';
 import whatsappIntegrationRoutes from './routes/whatsappIntegration';
@@ -71,6 +72,7 @@ app.use(
 app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
 // /internal (CRUD de InternalUser/RbacProfile etc.) segue só com a chave interna por enquanto —
 // fora do escopo desta fase (ver Backlog).
+app.use('/api/v1/internal/insurer-dispatches', internalApiKeyMiddleware, insurerDispatchRoutes);
 app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
 // Regra de solicitação multi-seguradora do pacote de integridade intercepta apenas o POST
 // específico; o restante segue normalmente para o router completo do Portal do Segurado.

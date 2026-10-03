@@ -52,6 +52,10 @@ describe('OperationalMovementService', () => {
         status: 'AVERBADO'
       });
       expect(result.rows[0]?.tenant_id).not.toBe('tenant-b');
+      (dbStore.averbacoes[0] as any).status = 'PENDENTE_ENVIO';
+      const pending = OperationalMovementService.listForInsurer('insurer-a', {status:'PENDENTE'});
+      expect(pending.summary.pendentes).toBe(1);
+      expect(pending.summary.recusadas).toBe(0);
     });
   });
 });
