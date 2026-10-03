@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
+import portalIdentityRoutes from './routes/portalIdentity';
+import tenantIdentityRoutes from './routes/tenantIdentity';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
 import adminOperationalRoutes from './routes/adminOperational';
@@ -41,6 +43,7 @@ app.get('/health', (req, res) => {
 });
 
 // Rotas da Aplicação
+app.use('/api/v1/auth', portalIdentityRoutes);
 app.use('/api/v1/auth', authRoutes);
 // Antes de qualquer averbação, materializa migrações cujo início programado já chegou e cujo
 // onboarding possui apólices ativas de destino para todos os ramos selecionados.
@@ -71,6 +74,7 @@ app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
 app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
 // Regra de solicitação multi-seguradora do pacote de integridade intercepta apenas o POST
 // específico; o restante segue normalmente para o router completo do Portal do Segurado.
+app.use('/api/v1/tenant', tenantIdentityRoutes);
 app.use('/api/v1/tenant', tenantIntegrityRoutes);
 app.use('/api/v1/tenant', tenantRoutes);
 // Agente local: autenticação própria por device token, independente do login do portal.

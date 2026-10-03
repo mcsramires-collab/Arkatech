@@ -126,6 +126,10 @@ describe('Backend integrity HTTP contracts', () => {
       ] as any;
       dbStore.businessRuleRequests = [];
 
+      dbStore.tenantUsers = [{
+        id: 'tenant-user-1', tenant_id: tenantId, nome: 'Usuario Tenant', email: 'integrity@example.com',
+        password_hash: 'unused', status: 'ATIVO', created_at: timestamp
+      }];
       const tenantToken = jwt.sign(
         {
           tenant_id: tenantId,
