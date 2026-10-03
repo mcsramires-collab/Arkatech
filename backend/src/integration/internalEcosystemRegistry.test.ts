@@ -35,7 +35,7 @@ describe('Internal ecosystem registry HTTP contracts', () => {
           headers,
           body: JSON.stringify({
             entity_type: 'CORRETORA',
-            cnpj: '22222222000192',
+            cnpj: '11222333000181',
             razao_social: 'CORRETORA LAB ECOSSISTEMA',
             nome_fantasia: 'CORRETORA LAB'
           })
@@ -52,7 +52,7 @@ describe('Internal ecosystem registry HTTP contracts', () => {
           headers,
           body: JSON.stringify({
             entity_type: 'ASSESSORIA',
-            cnpj: '33333333000193',
+            cnpj: '11444777000161',
             razao_social: 'ASSESSORIA LAB ECOSSISTEMA'
           })
         });
@@ -81,7 +81,7 @@ describe('Internal ecosystem registry HTTP contracts', () => {
           headers,
           body: JSON.stringify({
             entity_type: 'ASSESSORIA',
-            cnpj: '22222222000192',
+            cnpj: '11222333000181',
             razao_social: 'DUPLICADA'
           })
         });
