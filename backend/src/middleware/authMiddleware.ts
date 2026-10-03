@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { ResponseEngine } from '../services/responseEngine';
 import { getJwtSecret } from '../utils/jwtSecret';
 import { dbStore } from '../services/dbStore';
+import { PortalIdentityService } from '../services/portalIdentityService';
 
 export interface AuthenticatedRequest extends Request {
   tenant?: {
@@ -36,6 +37,22 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
 
   try {
     const decoded = jwt.verify(token, getJwtSecret()) as any;
+
+    // Tokens pessoais do Portal do Segurado deixam de ser válidos imediatamente quando o
+    // TenantUser é inativado/removido ou quando uma redefinição de senha é concluída. Tokens
+    // máquina-a-máquina de /auth/token não têm tenant_user_id e continuam pelo fluxo legado.
+    if (decoded.tenant_user_id) {
+      const user = dbStore.tenantUsers.find(
+        (item) => item.id === decoded.tenant_user_id && item.tenant_id === decoded.tenant_id
+      );
+      if (!user || user.status !== 'ATIVO') {
+        throw new Error('usuário do portal inexistente ou inativo');
+      }
+      if (PortalIdentityService.isPortalSessionStale(user.id, decoded.iat)) {
+        throw new Error('sessão anterior à troca de senha');
+      }
+    }
+
     req.tenant = {
       tenant_id: decoded.tenant_id,
       cnpj: decoded.cnpj,
@@ -52,7 +69,7 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
     return res.status(401).json({
       status: 'erro',
       codigo: errFormat.codigo,
-      mensagem: 'Token de autenticação inválido ou expirado.'
+      mensagem: 'Token de autenticação inválido, expirado ou revogado. Faça login novamente.'
     });
   }
 }

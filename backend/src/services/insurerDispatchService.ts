@@ -345,7 +345,9 @@ export class InsurerDispatchService {
           const body = parseJsonSafe(text);
           item.last_http_status = response.status;
 
-          if (response.ok && !isRejectedBody(body)) {
+          const confirmedStatus = body.accepted === true || ['sucesso', 'success', 'confirmed', 'accepted'].includes(String(body.status || '').toLowerCase());
+          const hasExternalProof = [body.numero_averbacao, body.external_reference, body.protocolo].some(value => typeof value === 'string' && value.trim().length > 0);
+          if (response.ok && !isRejectedBody(body) && confirmedStatus && hasExternalProof) {
             const externalNumber = body.numero_averbacao;
             const externalReference = body.external_reference || body.protocolo || externalNumber;
             item.status = 'CONFIRMED';

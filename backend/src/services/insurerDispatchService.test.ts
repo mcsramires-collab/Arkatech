@@ -182,4 +182,22 @@ describe('InsurerDispatchService', () => {
       expect(InsurerDispatchService.list('RETRY')[0]?.next_attempt_at).toBeTruthy();
     });
   });
+  it.each(['{}', '', '<html>proxy</html>', '{"status":"sucesso"}'])('não confirma HTTP 200 sem evidência externa: %s', async (body) => {
+    process.env.INSURER_ADAPTER_URL = 'https://adapter.invalid/averbar';
+    process.env.INSURER_ADAPTER_TOKEN = 'secret';
+    await dbStore.runTestLabEphemeral(async () => {
+      const {tenant,policy,averbacao} = fixture();
+      (averbacao as any).status = 'PENDENTE_ENVIO';
+      dbStore.tenants = [tenant]; dbStore.policies = [policy]; dbStore.averbacoes = [averbacao];
+      dbStore.rawXmlStore = [{id:averbacao.raw_xml_id,tenant_id:tenant.id,content_xml:'<CTe/>',hash_sha256:'hash',encrypted_aes256:false,created_at:new Date().toISOString()}];
+      dbStore.fiscalDocuments = [];
+      global.fetch = jest.fn(async () => ({ok:true,status:200,text:async()=>body} as any)) as typeof fetch;
+      InsurerDispatchService.enqueue({tenant,policy,averbacao});
+      const result = await InsurerDispatchService.processDue();
+      expect(result.confirmed).toBe(0);
+      expect(result.retried).toBe(1);
+      expect((averbacao as any).status).toBe('PENDENTE_ENVIO');
+    });
+  });
+
 });
