@@ -4,9 +4,11 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import averbacaoRoutes from './routes/averbacao';
 import adminRoutes from './routes/admin';
+import adminIntegrityRoutes from './routes/adminIntegrity';
 import onboardingMigrationRoutes from './routes/onboardingMigration';
 import brokerRoutes from './routes/broker';
 import tenantRoutes from './routes/tenant';
+import tenantIntegrityRoutes from './routes/tenantIntegrity';
 import internalRoutes from './routes/internal';
 import connectorRoutes from './routes/connector';
 import tmsRoutes from './routes/tms';
@@ -48,6 +50,9 @@ app.use('/api/v1/averbacoes', onboardingMigrationDueMiddleware, averbacaoRoutes)
 // racional completo de por que a chave interna ainda é aceita (ponte até a Fase 4 terminar de
 // migrar admin.ts para nunca mais aceitar insurer_id/broker_id livres).
 app.use('/api/v1/admin/onboarding', backofficeOrInternalKeyMiddleware, onboardingMigrationRoutes);
+// Integridade entra antes do router legado para evoluir contratos específicos nos mesmos paths
+// sem duplicar chamadas. As demais mutações seguem pelo reconciliador de onboarding do main.
+app.use('/api/v1/admin', backofficeOrInternalKeyMiddleware, adminIntegrityRoutes);
 app.use(
   '/api/v1/admin',
   backofficeOrInternalKeyMiddleware,
@@ -58,8 +63,9 @@ app.use('/api/v1/broker', backofficeOrInternalKeyMiddleware, brokerRoutes);
 // /internal (CRUD de InternalUser/RbacProfile etc.) segue só com a chave interna por enquanto —
 // fora do escopo desta fase (ver Backlog).
 app.use('/api/v1/internal', internalApiKeyMiddleware, internalRoutes);
-// Portal do Transportador — segue sem a chave interna (é o público final), mas ainda
-// sem autenticação por usuário real; ver seção de gaps no doc de estado técnico.
+// Regra de solicitação multi-seguradora do pacote de integridade intercepta apenas o POST
+// específico; o restante segue normalmente para o router completo do Portal do Segurado.
+app.use('/api/v1/tenant', tenantIntegrityRoutes);
 app.use('/api/v1/tenant', tenantRoutes);
 // Agente local: autenticação própria por device token, independente do login do portal.
 app.use('/api/v1/connector', connectorRoutes);
