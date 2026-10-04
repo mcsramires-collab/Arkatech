@@ -70,7 +70,6 @@ router.get('/activation-status', (req, res) => {
   return res.json({
     status: 'sucesso',
     conta_ativada: Boolean(tenant.conta_ativada),
-    token_pendente: pendingToken ? pendingToken.token : null,
     termo_versao: pendingToken?.termo_versao
   });
 });
