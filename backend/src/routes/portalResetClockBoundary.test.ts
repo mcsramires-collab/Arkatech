@@ -214,6 +214,64 @@ describe('portal reset millisecond / JWT second boundary (isolated diagnostic)',
     expect(await protectedStatus(current.body.empresas[0].access_token)).toBe(200);
   });
 
+  async function changeDuringVerification(change: () => void) {
+    const compare = bcrypt.compare.bind(bcrypt);
+    jest.spyOn(bcrypt, 'compare').mockImplementationOnce((async (password: string, hash: string) => {
+      const valid = await compare(password, hash);
+      change();
+      return valid;
+    }) as any);
+    return post('/auth/portal-login', { email: user.email, senha: newPassword });
+  }
+
+  it('uses current operational authorization when admin is downgraded during verification', async () => {
+    const result = await changeDuringVerification(() => {
+      user.is_admin_da_conta = false;
+      user.nome = 'Current operational user';
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.empresas[0].papel).toBe('Operacional');
+    const claims = jwt.verify(result.body.empresas[0].access_token, getJwtSecret()) as jwt.JwtPayload;
+    expect(claims.is_admin_da_conta).toBe(false);
+    expect(claims.tenant_user_nome).toBe('Current operational user');
+    expect(result.body.usuario.nome).toBe('Current operational user');
+    expect(await protectedStatus(result.body.empresas[0].access_token)).toBe(200);
+  });
+
+  it('uses the current account admin for an unchanged valid credential', async () => {
+    const result = await changeDuringVerification(() => { user.nome = 'Current administrator'; });
+    expect(result.status).toBe(200);
+    expect(result.body.empresas[0].papel).toBe('Admin');
+    const claims = jwt.verify(result.body.empresas[0].access_token, getJwtSecret()) as jwt.JwtPayload;
+    expect(claims.is_admin_da_conta).toBe(true);
+    expect(claims.tenant_user_nome).toBe('Current administrator');
+    expect(result.body.usuario.nome).toBe('Current administrator');
+    expect(await protectedStatus(result.body.empresas[0].access_token)).toBe(200);
+  });
+
+  it('uses a replacement current record when authorization changes during verification', async () => {
+    const result = await changeDuringVerification(() => {
+      dbStore.tenantUsers = [{ ...user, is_admin_da_conta: false, nome: 'Replacement operational user' }];
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.empresas[0].papel).toBe('Operacional');
+    const claims = jwt.verify(result.body.empresas[0].access_token, getJwtSecret()) as jwt.JwtPayload;
+    expect(claims.is_admin_da_conta).toBe(false);
+    expect(claims.tenant_user_nome).toBe('Replacement operational user');
+  });
+
+  it.each(['inactive', 'tenant', 'hash', 'email', 'removed'])('refuses a %s membership change during verification', async change => {
+    const result = await changeDuringVerification(() => {
+      if (change === 'inactive') user.status = 'INATIVO';
+      if (change === 'tenant') user.tenant_id = 'other-synthetic-tenant';
+      if (change === 'hash') user.password_hash = 'synthetic-replaced-hash';
+      if (change === 'email') user.email = 'replacement@example.invalid';
+      if (change === 'removed') dbStore.tenantUsers = [];
+    });
+    expect(result.status).toBe(401);
+    expect(result.body).not.toHaveProperty('empresas');
+  });
+
   it('revokes all multi-company memberships and accepts new versions after mailbox reset', async () => {
     const otherUser = { ...user, id: crypto.randomUUID(), tenant_id: 'other-synthetic-tenant' };
     dbStore.tenantUsers.push(otherUser);

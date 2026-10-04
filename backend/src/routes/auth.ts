@@ -142,12 +142,14 @@ router.post('/portal-login', async (req: Request, res: Response) => {
     }
   }
 
-  // Não emitir uma sessão se a credencial foi trocada enquanto verificávamos outros vínculos.
-  const usuariosAutenticados = credenciaisVerificadas.filter(snapshot =>
-    dbStore.tenantUsers.some(current => current.id === snapshot.id && current.tenant_id === snapshot.tenant_id &&
+  // A credencial precisa continuar válida; papel e dados de autorização vêm do cadastro atual,
+  // não do snapshot anterior aos awaits. A emissão abaixo é síncrona após esta revalidação.
+  const usuariosAutenticados = credenciaisVerificadas.flatMap(snapshot => {
+    const current = dbStore.tenantUsers.find(current => current.id === snapshot.id && current.tenant_id === snapshot.tenant_id &&
       current.status === 'ATIVO' && current.password_hash === snapshot.password_hash &&
-      current.email.trim().toLowerCase() === emailNormalizado)
-  );
+      current.email.trim().toLowerCase() === emailNormalizado);
+    return current ? [current] : [];
+  });
   const usuarioAutenticado = usuariosAutenticados[0];
   if (!usuarioAutenticado) {
     return credenciaisInvalidas();
