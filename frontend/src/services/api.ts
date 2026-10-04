@@ -193,10 +193,6 @@ export class ApiClient {
     return this.request(`/api/v1/tenant/activation-status?tenant_id=${tenantId}`);
   }
 
-  static acceptActivation(token: string) {
-    return this.request(`/api/v1/tenant/activation/${token}/aceitar`, { method: 'POST' });
-  }
-
   static getTenantPolicies(tenantId: string) {
     return this.request(`/api/v1/tenant/policies?tenant_id=${tenantId}`);
   }
