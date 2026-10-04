@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbStore } from '../services/dbStore';
 import { ResponseEngine } from '../services/responseEngine';
 import { getJwtSecret } from '../utils/jwtSecret';
+import { getPortalSessionVersion } from '../utils/portalSessionVersion';
 import { hashClientSecret, verifyClientSecret } from '../utils/clientCredentials';
 import { backofficeAuthMiddleware, BackofficeAuthenticatedRequest } from '../middleware/authMiddleware';
 import { ensureDefaultBackofficeProfile } from '../services/backofficeProfileService';
@@ -130,14 +131,23 @@ router.post('/portal-login', async (req: Request, res: Response) => {
 
   // E-mail igual não prova acesso a outra empresa: cada vínculo tem sua própria credencial.
   // Emite tokens apenas para os vínculos cuja senha foi efetivamente verificada.
-  const usuariosAutenticados: (typeof candidatos)[number][] = [];
+  const credenciaisVerificadas: (typeof candidatos)[number][] = [];
   for (const candidato of candidatos) {
+    // A versão do JWT deve usar exatamente a credencial verificada, mesmo se houver reset
+    // durante o await de bcrypt. O middleware recusará esse snapshot se a credencial mudou.
+    const snapshot = { ...candidato };
     // eslint-disable-next-line no-await-in-loop
-    if (await bcrypt.compare(senha, candidato.password_hash)) {
-      usuariosAutenticados.push(candidato);
+    if (await bcrypt.compare(senha, snapshot.password_hash)) {
+      credenciaisVerificadas.push(snapshot);
     }
   }
 
+  // Não emitir uma sessão se a credencial foi trocada enquanto verificávamos outros vínculos.
+  const usuariosAutenticados = credenciaisVerificadas.filter(snapshot =>
+    dbStore.tenantUsers.some(current => current.id === snapshot.id && current.tenant_id === snapshot.tenant_id &&
+      current.status === 'ATIVO' && current.password_hash === snapshot.password_hash &&
+      current.email.trim().toLowerCase() === emailNormalizado)
+  );
   const usuarioAutenticado = usuariosAutenticados[0];
   if (!usuarioAutenticado) {
     return credenciaisInvalidas();
@@ -169,6 +179,7 @@ router.post('/portal-login', async (req: Request, res: Response) => {
         role: tenant.role,
         tenant_user_id: u.id,
         tenant_user_nome: u.nome,
+        portal_session_version: getPortalSessionVersion(u),
         is_admin_da_conta: Boolean(u.is_admin_da_conta)
       };
       const token = jwt.sign(payload, jwtSecret, { expiresIn: expiresInSeconds });

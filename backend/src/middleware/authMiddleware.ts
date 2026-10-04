@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { ResponseEngine } from '../services/responseEngine';
 import { getJwtSecret } from '../utils/jwtSecret';
+import { getPortalSessionVersion } from '../utils/portalSessionVersion';
 import { dbStore } from '../services/dbStore';
 import { PortalIdentityService } from '../services/portalIdentityService';
 
@@ -48,7 +49,13 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
       if (!user || user.status !== 'ATIVO') {
         throw new Error('usuário do portal inexistente ou inativo');
       }
-      if (PortalIdentityService.isPortalSessionStale(user.id, decoded.iat)) {
+      if (decoded.portal_session_version !== undefined) {
+        if (decoded.portal_session_version !== getPortalSessionVersion(user)) {
+          throw new Error('sessão anterior à troca de credencial');
+        }
+      } else if (PortalIdentityService.isPortalSessionStale(user.id, decoded.iat)) {
+        // JWTs legados seguem o corte conservador em milissegundos. Não arredondar:
+        // isso poderia revalidar sessões emitidas antes do reset no mesmo segundo.
         throw new Error('sessão anterior à troca de senha');
       }
     }

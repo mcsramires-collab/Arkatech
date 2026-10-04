@@ -123,9 +123,24 @@ class PortalIdentityServiceImpl {
 
   private prune(): void {
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    // Guarda o último corte por usuário ainda cadastrado para que limpar o histórico
+    // não revalide um JWT legado de longa duração anterior à troca de senha.
+    const currentUserIds = new Set(dbStore.tenantUsers.map(user => user.id));
+    const latestReset = new Map<string, PortalAccessTokenRecord>();
+    for (const record of this.records) {
+      if (record.purpose !== 'PASSWORD_RESET' || !record.used_at) continue;
+      for (const userId of record.target_user_ids) {
+        if (!currentUserIds.has(userId)) continue;
+        const previous = latestReset.get(userId);
+        if (!previous || new Date(record.used_at).getTime() > new Date(previous.used_at!).getTime()) {
+          latestReset.set(userId, record);
+        }
+      }
+    }
+    const retainedIds = new Set([...latestReset.values()].map(record => record.id));
     this.records = this.records.filter((record) => {
       const terminalAt = record.used_at || record.invalidated_at || record.expires_at;
-      return new Date(terminalAt).getTime() >= cutoff;
+      return retainedIds.has(record.id) || new Date(terminalAt).getTime() >= cutoff;
     });
   }
 
@@ -242,14 +257,14 @@ class PortalIdentityServiceImpl {
 
   /** Revoga JWTs pessoais emitidos antes de uma troca de senha já concluída. */
   isPortalSessionStale(userId: string, issuedAtSeconds: number | undefined): boolean {
-    if (!issuedAtSeconds) return false;
-    const issuedAtMs = issuedAtSeconds * 1000;
+    const issuedAtMs = typeof issuedAtSeconds === 'number' && Number.isFinite(issuedAtSeconds) && issuedAtSeconds > 0
+      ? issuedAtSeconds * 1000 : undefined;
     return this.records.some(
       (record) =>
         record.purpose === 'PASSWORD_RESET' &&
         record.used_at &&
         record.target_user_ids.includes(userId) &&
-        new Date(record.used_at).getTime() > issuedAtMs
+        (issuedAtMs === undefined || new Date(record.used_at).getTime() >= issuedAtMs)
     );
   }
 
