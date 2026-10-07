@@ -9,6 +9,7 @@ import { requirePermission } from '../middleware/rbacMiddleware';
 import { policyPertenceAoAtor, tenantPertenceAoAtor } from './adminHelpers';
 import { criarNotificacaoSeRetroativa } from './partnerNotifications';
 import { CancelamentoService } from '../services/cancelamento';
+import { parseSuspensionDate } from '../utils/suspensionDate';
 
 /**
  * Fase 0 a 4 do pacote de 21/09 (compartilhado pelo usuário — validação técnica + implementação
@@ -149,12 +150,26 @@ router.post('/policies/:id/suspensao', requirePermission('apolices', 'editar'), 
   }
   if (!policyPertenceAoAtor(req, res, id)) return;
 
-  const { desde, ate } = req.body;
-  if (!desde) {
+  const { desde, ate } = req.body ?? {};
+  if (desde === undefined || desde === null || desde === '') {
     return res.status(400).json({ status: 'erro', mensagem: 'desde é obrigatório (data de início da suspensão).' });
   }
+  const inicio = parseSuspensionDate(desde);
+  if (inicio === null) {
+    return res.status(400).json({ status: 'erro', mensagem: 'desde deve ser uma data válida (YYYY-MM-DD) ou timestamp ISO com fuso horário.' });
+  }
+  // Preserve optional/empty end dates as indefinite; false, zero and other types
+  // are invalid rather than silently removing an existing suspension end.
+  const semFim = ate === undefined || ate === null || ate === '';
+  const fim = semFim ? null : parseSuspensionDate(ate);
+  if (!semFim && fim === null) {
+    return res.status(400).json({ status: 'erro', mensagem: 'ate deve ser uma data válida (YYYY-MM-DD) ou timestamp ISO com fuso horário.' });
+  }
+  if (fim !== null && fim < inicio) {
+    return res.status(400).json({ status: 'erro', mensagem: 'ate deve ser igual ou posterior a desde.' });
+  }
   policy.suspensa_desde = desde;
-  policy.suspensa_ate = ate || undefined;
+  policy.suspensa_ate = semFim ? undefined : ate;
   dbStore.persist();
   return res.json({ status: 'sucesso', policy });
 });
