@@ -19,6 +19,7 @@ import fiscalSyncRouter from './fiscalSync';
 import fiscalEventsRouter from './fiscalEvents';
 import { generateClientSecret, hashClientSecret } from '../utils/clientCredentials';
 import notificationsRouter from './notifications';
+import { tenantDashboardStats, validDashboardMonth } from '../services/tenantDashboardService';
 
 const router = Router();
 router.use('/fiscal-documents', fiscalDocumentsRouter);
@@ -887,114 +888,22 @@ router.put(
   }
 );
 
-// --- Estatísticas do Dashboard (Início do Portal) — agregados simples sobre os dados reais do
-// próprio tenant; nada aqui é mockado, mas propositalmente não inclui nada que exija consultas
-// caras (ex: sem paginação/filtro — o volume de dados de demonstração é pequeno).
-// Comparação percentual mês atual vs mês anterior (mesmo padrão de "up"/"down" já usado em
-// GET /admin/insurer-dashboard-stats, só que ali devolvia as contagens cruas — aqui devolvemos
-// o percentual pronto, no formato que o frontend do Portal do Segurado já espera desde que
-// `MetricComparison`/`ComparisonIndicator` foram introduzidos no widget "Resumo de Métricas"
-// (src/routes/index.tsx do arckatech-cargo-portal). Achado da auditoria de 27/08: o frontend já
-// lia `stats.comparacoes.*`, mas esta rota nunca devolvia esse campo — `undefined.averbacoes`
-// quebrava a tela assim que o usuário habilitasse esse widget numa sessão real (não-demo).
-function comparacaoPercentual(atual: number, anterior: number): { value: number; direction: 'up' | 'down' } {
-  if (anterior === 0) {
-    return atual === 0 ? { value: 0, direction: 'up' } : { value: 100, direction: 'up' };
-  }
-  const variacao = ((atual - anterior) / anterior) * 100;
-  return { value: Math.round(Math.abs(variacao)), direction: variacao >= 0 ? 'up' : 'down' };
-}
-
+// Monthly metrics use persisted records in the business timezone. Pending queues remain current.
 router.get('/dashboard-stats', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
+  const gate = checkActivated(tenantId);
+  if (!gate.ok) return res.status(gate.code ?? 400).json(gate.body);
 
-  const averbacoesTenant = dbStore.averbacoes.filter((a) => a.tenant_id === tenantId);
-  const totalAverbacoes = averbacoesTenant.filter((a) => a.status === 'SUCESSO').length;
-  const totalRecusadas = averbacoesTenant.filter((a) => a.status === 'ERRO').length;
-  const totalPendentes = dbStore.recoverySessions.filter(
-    (r) => r.tenant_id === tenantId && !r.utilizada && new Date(r.expira_em) > new Date()
-  ).length;
+  const month = req.query.mes;
+  if (month !== undefined && !validDashboardMonth(month)) {
+    return res.status(400).json({
+      status: 'erro',
+      codigo: 'INVALID_DASHBOARD_MONTH',
+      mensagem: 'Informe o mês no formato YYYY-MM.'
+    });
+  }
 
-  const valorTotalAverbado = averbacoesTenant
-    .filter((a) => a.status === 'SUCESSO')
-    .reduce((sum, a) => sum + (a.valor_considerado_averbacao || 0), 0);
-
-  const solicitacoesRegrasPendentes = dbStore.businessRuleRequests.filter(
-    (r) => r.tenant_id === tenantId && r.status === 'PENDENTE'
-  ).length;
-
-  // Achado da auditoria de 27/08 (widgets da Home): o widget "Últimas Averbações" do frontend
-  // usava dashboard-mock.ts local mesmo em sessão real, apesar de "ultimas_averbacoes" aqui já
-  // existir. Ao reconectá-lo aos dados reais, a visão "expandida" do widget pede mais colunas do
-  // que o modelo de dados hoje extrai do XML — série, CNPJs (remetente/destinatário/tomador) e
-  // ramo (via apólice) já existem e foram incluídos abaixo. CNPJ emissor, tipo do produto, data de
-  // embarque e o detalhamento por cobertura NÃO são campos extraídos do XML hoje (só o valor total
-  // já somado, em valor_considerado_averbacao) — ficam de fora até existir extração real desses
-  // dados; o frontend simplesmente não mostra essas colunas na versão real.
-  // Achado do usuário em 29/08: documentos recusados (status='ERRO') apareciam misturados com os
-  // averbados nesta lista — "Últimas Averbações" deve mostrar só o que de fato gerou um número
-  // de averbação (status='SUCESSO'). Recusas continuam visíveis nos lugares certos (widget
-  // "Documentos Recusados" da Home, tela dedicada e total_recusadas acima), nunca aqui.
-  const ultimasAverbacoes = averbacoesTenant
-    .filter((a) => a.status === 'SUCESSO')
-    .slice(0, 5)
-    .map((a) => {
-    const policy = dbStore.policies.find((p) => p.id === a.policy_id);
-    return {
-      id: a.id,
-      numero_averbacao: a.numero_averbacao,
-      status: a.status,
-      tipo_documento: a.tipo_documento,
-      chave_documento: a.chave_documento,
-      valor_considerado_averbacao: a.valor_considerado_averbacao,
-      created_at: a.created_at,
-      numero_documento: a.numero_documento,
-      serie_documento: a.serie_documento,
-      cnpj_remetente: a.cnpj_remetente,
-      cnpj_destinatario: a.cnpj_destinatario,
-      cnpj_tomador: a.cnpj_tomador,
-      ramo: policy?.ramo
-    };
-  });
-
-  const agora = new Date();
-  const inicioMesAtual = new Date(agora.getFullYear(), agora.getMonth(), 1);
-  const inicioMesAnterior = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
-
-  const noMesAtual = (a: { created_at: string }) => new Date(a.created_at) >= inicioMesAtual;
-  const noMesAnterior = (a: { created_at: string }) =>
-    new Date(a.created_at) >= inicioMesAnterior && new Date(a.created_at) < inicioMesAtual;
-
-  const averbacoesMesAtual = averbacoesTenant.filter((a) => a.status === 'SUCESSO' && noMesAtual(a));
-  const averbacoesMesAnterior = averbacoesTenant.filter((a) => a.status === 'SUCESSO' && noMesAnterior(a));
-  const recusadasMesAtual = averbacoesTenant.filter((a) => a.status === 'ERRO' && noMesAtual(a));
-  const recusadasMesAnterior = averbacoesTenant.filter((a) => a.status === 'ERRO' && noMesAnterior(a));
-
-  const somaValor = (lista: typeof averbacoesTenant) =>
-    lista.reduce((sum, a) => sum + (a.valor_considerado_averbacao || 0), 0);
-
-  const comparacoes = {
-    averbacoes: comparacaoPercentual(averbacoesMesAtual.length, averbacoesMesAnterior.length),
-    recusadas: comparacaoPercentual(recusadasMesAtual.length, recusadasMesAnterior.length),
-    valor_total_averbado: comparacaoPercentual(
-      somaValor(averbacoesMesAtual),
-      somaValor(averbacoesMesAnterior)
-    )
-  };
-
-  return res.json({
-    status: 'sucesso',
-    stats: {
-      total_averbacoes: totalAverbacoes,
-      total_recusadas: totalRecusadas,
-      total_pendentes_recuperacao: totalPendentes,
-      valor_total_averbado: valorTotalAverbado,
-      solicitacoes_regras_pendentes: solicitacoesRegrasPendentes,
-      comparacoes,
-      alertas: [],
-      ultimas_averbacoes: ultimasAverbacoes
-    }
-  });
+  return res.json({ status: 'sucesso', stats: tenantDashboardStats(tenantId, month) });
 });
 
 export default router;
