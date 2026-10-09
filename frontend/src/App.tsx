@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { ApiClient } from './services/api';
 import { TestLabCatalog } from './components/TestLabCatalog';
+import { PendingActivationNotice } from './components/PendingActivationNotice';
 import { Tenant, Policy, PolicyRule, DocumentRule, ResponseTemplate, BatchTestRun, Insurer, Broker, TipoDocumento, InsurerCoverage } from './types';
 
 export function App() {
@@ -416,12 +417,6 @@ export function App() {
       setPortalAverbacoes([]);
       setPortalPendencias([]);
     }
-  };
-
-  const handleAcceptActivation = async () => {
-    if (!portalActivation?.token_pendente) return;
-    await ApiClient.acceptActivation(portalActivation.token_pendente);
-    handleLoadPortal();
   };
 
   const handleCorrigirPendencia = async (token: string, variaveisFaltantes: string[]) => {
@@ -2021,13 +2016,7 @@ export function App() {
               </div>
 
               {portalActivation && !portalActivation.conta_ativada && (
-                <div style={{ padding: '16px', border: '1px solid var(--accent-amber, #d9a441)', borderRadius: 'var(--radius-sm)', marginBottom: '20px' }}>
-                  <p style={{ marginBottom: '12px' }}>
-                    <AlertTriangle size={16} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
-                    Sua conta ainda não foi ativada. Para acessar suas apólices e averbações, aceite o Termo de Uso (versão {portalActivation.termo_versao}).
-                  </p>
-                  <button className="btn btn-primary" onClick={handleAcceptActivation}>Li e aceito o Termo de Uso — Ativar Conta</button>
-                </div>
+                <PendingActivationNotice termoVersao={portalActivation.termo_versao} />
               )}
 
               {portalActivation?.conta_ativada && (

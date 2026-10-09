@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node --test tests/activation-notice.test.mjs",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
