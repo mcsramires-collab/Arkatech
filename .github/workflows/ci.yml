@@ -81,6 +81,7 @@ jobs:
 
   test-lab-browser-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: frontend-test
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +98,7 @@ jobs:
       - name: Install backend for real browser journeys
         run: cd backend && npm ci
       - name: Install Chromium
+        timeout-minutes: 5
         run: |
           cd frontend
           npx playwright install --with-deps chromium
