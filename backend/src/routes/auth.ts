@@ -93,9 +93,10 @@ router.post('/token', async (req: Request, res: Response) => {
  *
  * Um mesmo e-mail pode existir em mais de um TenantUser (uma linha por empresa em que a
  * pessoa é usuária) — é assim que representamos "meu usuário tem acesso a mais de uma
- * transportadora/embarcadora". Por isso o login retorna uma LISTA de empresas, cada uma já
- * com seu próprio JWT pronto (o Portal troca de "empresa ativa" só trocando qual token usa,
- * sem precisar logar de novo). Isso é intencionalmente diferente do painel da seguradora/
+ * transportadora/embarcadora". Por isso o login retorna uma LISTA de empresas cujas credenciais
+ * foram confirmadas individualmente, cada uma com seu próprio JWT (o Portal troca de
+ * "empresa ativa" só trocando qual token usa, sem precisar logar de novo).
+ * Isso é intencionalmente diferente do painel da seguradora/
  * corretora (Portal da Seguradora, x-internal-api-key) — lá sim uma única conta enxerga
  * várias empresas *de clientes diferentes*; aqui é a mesma pessoa vinculada a mais de uma
  * empresa dela mesma (ex: mesmo grupo econômico com CNPJs distintos).
@@ -127,18 +128,17 @@ router.post('/portal-login', async (req: Request, res: Response) => {
     return credenciaisInvalidas();
   }
 
-  // A senha é validada contra QUALQUER uma das linhas com esse e-mail — na prática, o mesmo
-  // convite costuma usar a mesma senha em todas as empresas da pessoa, mas o sistema não
-  // impõe isso estruturalmente (cada TenantUser guarda seu próprio password_hash).
-  let usuarioAutenticado: (typeof candidatos)[number] | undefined;
+  // E-mail igual não prova acesso a outra empresa: cada vínculo tem sua própria credencial.
+  // Emite tokens apenas para os vínculos cuja senha foi efetivamente verificada.
+  const usuariosAutenticados: (typeof candidatos)[number][] = [];
   for (const candidato of candidatos) {
     // eslint-disable-next-line no-await-in-loop
     if (await bcrypt.compare(senha, candidato.password_hash)) {
-      usuarioAutenticado = candidato;
-      break;
+      usuariosAutenticados.push(candidato);
     }
   }
 
+  const usuarioAutenticado = usuariosAutenticados[0];
   if (!usuarioAutenticado) {
     return credenciaisInvalidas();
   }
@@ -154,8 +154,7 @@ router.post('/portal-login', async (req: Request, res: Response) => {
     });
   }
 
-  const empresas = dbStore.tenantUsers
-    .filter((u) => u.email.trim().toLowerCase() === emailNormalizado && u.status === 'ATIVO')
+  const empresas = usuariosAutenticados
     .map((u) => {
       const tenant = dbStore.tenants.find((t) => t.id === u.tenant_id);
       if (!tenant) return null;
