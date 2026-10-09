@@ -9,6 +9,7 @@ import { DocumentIngestionService } from '../services/ingestion/documentIngestio
 import { MultiFormatFiscalParser } from '../services/ingestion/multiFormatFiscalParser';
 import { ResponseEngine } from '../services/responseEngine';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
+import { requireAccountAdmin } from '../middleware/accountAdminMiddleware';
 import { checkActivated } from '../services/accountActivation';
 import { CancelamentoService } from '../services/cancelamento';
 import { SupportService } from '../services/supportService';
@@ -592,7 +593,7 @@ function gerarSenhaTemporaria(): string {
   return crypto.randomBytes(9).toString('base64url');
 }
 
-router.post('/users', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/users', authMiddleware, requireAccountAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const { nome, email, rbac_profile_id, is_admin_da_conta } = req.body;
 
@@ -621,7 +622,7 @@ router.post('/users', authMiddleware, async (req: AuthenticatedRequest, res: Res
   return res.json({ status: 'sucesso', user: userSemSenha, senha_temporaria: senhaTemporaria });
 });
 
-router.put('/users/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+router.put('/users/:id', authMiddleware, requireAccountAdmin, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const { id } = req.params;
   const user = dbStore.tenantUsers.find((u) => u.id === id && u.tenant_id === tenantId);
@@ -641,7 +642,7 @@ router.put('/users/:id', authMiddleware, (req: AuthenticatedRequest, res: Respon
   return res.json({ status: 'sucesso', user: userSemSenha });
 });
 
-router.delete('/users/:id', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+router.delete('/users/:id', authMiddleware, requireAccountAdmin, (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenant_id;
   const { id } = req.params;
   const exists = dbStore.tenantUsers.some((u) => u.id === id && u.tenant_id === tenantId);

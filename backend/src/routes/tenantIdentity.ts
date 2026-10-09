@@ -1,8 +1,9 @@
-import { Router, Response } from 'express';
+import { Router } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/authMiddleware';
+import { requireAccountAdmin } from '../middleware/accountAdminMiddleware';
 import { dbStore } from '../services/dbStore';
 import { PortalIdentityService } from '../services/portalIdentityService';
 import { sendPortalUserInviteEmail } from '../services/portalIdentityEmailService';
@@ -10,25 +11,13 @@ import { TenantUser } from '../types';
 
 const router = Router();
 
-function requireAccountAdmin(req: AuthenticatedRequest, res: Response): boolean {
-  if (!req.tenant?.tenant_user_id || !req.tenant.is_admin_da_conta) {
-    res.status(403).json({
-      status: 'erro',
-      mensagem: 'Somente um administrador humano da conta pode convidar ou reenviar acesso de usuários.'
-    });
-    return false;
-  }
-  return true;
-}
-
 async function createUnavailablePasswordHash(): Promise<string> {
   // O valor nunca é enviado e nunca é conhecido por ninguém. O usuário só passa a ter uma
   // credencial utilizável quando consome o token de convite e define a própria senha.
   return bcrypt.hash(crypto.randomBytes(48).toString('base64url'), 10);
 }
 
-router.post('/users/invite', authMiddleware, async (req: AuthenticatedRequest, res) => {
-  if (!requireAccountAdmin(req, res)) return;
+router.post('/users/invite', authMiddleware, requireAccountAdmin, async (req: AuthenticatedRequest, res) => {
   const tenantId = req.tenant!.tenant_id;
   const nome = String(req.body?.nome || '').trim();
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -88,8 +77,7 @@ router.post('/users/invite', authMiddleware, async (req: AuthenticatedRequest, r
   });
 });
 
-router.post('/users/:id/resend-invite', authMiddleware, async (req: AuthenticatedRequest, res) => {
-  if (!requireAccountAdmin(req, res)) return;
+router.post('/users/:id/resend-invite', authMiddleware, requireAccountAdmin, async (req: AuthenticatedRequest, res) => {
   const tenantId = req.tenant!.tenant_id;
   const user = dbStore.tenantUsers.find(
     (item) => item.id === req.params.id && item.tenant_id === tenantId
